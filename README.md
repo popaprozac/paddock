@@ -49,7 +49,7 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name>` | Boots a VM in a window. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
-| `paddock bench <source> [--runs 1] [--timeout 300] [--ssh-timeout 60] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. |
+| `paddock bench <source> [--runs 1] [--timeout 300] [--ssh-timeout 60] [--restore] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. |
 
 VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned
@@ -68,6 +68,19 @@ Each run also prints clone to running, the total from cloning to a guest on the 
 lease and SSH checks see the guest from the outside without installing anything in it. The next
 spike replaces them with a guest agent answering over vsock, which the VM already has a device
 for.
+
+With `--restore`, bench first cold-boots one clone until SSH answers, pauses it and saves its
+memory and device state (printed as save, with the file size, and left out of the summary).
+Each run then clones that saved VM and replaces start and running with:
+
+| Step | What it covers |
+| --- | --- |
+| clone | As above, plus `clonefile(2)` of the saved state. The clone keeps the saved VM's machine identifier and MAC address, because the saved memory still holds them. |
+| restore | Building and validating the VM configuration, creating the VM and loading the saved state, until the VM is paused. |
+| resume | From the same moment as restore until Virtualization.framework reports the VM running. |
+| ssh | From the same moment as restore until the guest's SSH server sends its banner. The guest keeps the address it leased before it was saved. |
+
+Restored clones share one identity, so only one can run at a time.
 
 ## VM bundle format
 
