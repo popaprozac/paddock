@@ -50,6 +50,7 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock run <name>` | Boots a VM in a window. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--ssh-timeout 60] [--restore] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. |
+| `paddock serve <source>` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until SSH answers and saves its state; each warm VM is a fresh clone restored from that state. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
 
 VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned

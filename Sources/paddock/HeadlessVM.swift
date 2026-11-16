@@ -15,6 +15,8 @@ final class HeadlessVM: NSObject {
     private let machine: VZVirtualMachine
     /// Set once the guest shuts down or the VM stops with an error; the waits below throw it.
     private(set) var failure: PaddockError?
+    /// Called when `failure` is set, for a VM that nothing is waiting on.
+    var onFailure: ((PaddockError) -> Void)?
 
     init(bundle: VMBundle, config: VMConfig) throws {
         lock = try BundleLock(bundle: bundle)
@@ -112,10 +114,14 @@ final class HeadlessVM: NSObject {
 
 extension HeadlessVM: @preconcurrency VZVirtualMachineDelegate {
     func guestDidStop(_ virtualMachine: VZVirtualMachine) {
-        failure = PaddockError("the guest in '\(bundle.name)' shut down")
+        let error = PaddockError("the guest in '\(bundle.name)' shut down")
+        failure = error
+        onFailure?(error)
     }
 
     func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: any Error) {
-        failure = PaddockError("'\(bundle.name)' stopped: \(error.localizedDescription)")
+        let failure = PaddockError("'\(bundle.name)' stopped: \(error.localizedDescription)")
+        self.failure = failure
+        onFailure?(failure)
     }
 }

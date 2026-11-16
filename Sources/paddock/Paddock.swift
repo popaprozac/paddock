@@ -5,9 +5,9 @@ import Darwin
 struct Paddock: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "paddock",
-        abstract: "macOS sandboxes on Apple silicon: install, run, clone and benchmark VMs.",
+        abstract: "macOS sandboxes on Apple silicon: install, run, clone, benchmark and serve VMs.",
         version: "0.1.0",
-        subcommands: [Install.self, Run.self, Clone.self, Bench.self]
+        subcommands: [Install.self, Run.self, Clone.self, Bench.self, Serve.self]
     )
 }
 
