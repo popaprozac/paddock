@@ -40,6 +40,16 @@ struct Install: AsyncParsableCommand {
             throw PaddockError("VM '\(name)' already exists at \(bundle.url.path)")
         }
 
+        // Ctrl-C would otherwise leave a hidden, partly written multi-GB disk in the vms directory.
+        let interrupt = await MainActor.run {
+            onInterrupt {
+                print("\nInterrupted; removing the partial install.")
+                StagingArea.removeAllInProgress()
+                Darwin.exit(130)
+            }
+        }
+        defer { interrupt.cancel() }
+
         let imageURL = try await resolveRestoreImage(home: home)
         let image = try await RestoreImages.load(from: imageURL)
         let sizing = VMSizing.resolve(cpuCount: cpus, memorySize: memory << 30, limits: .forImage(image))
