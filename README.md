@@ -43,8 +43,17 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 1. Create the user account.
 2. Turn on Remote Login in System Settings, under General and then Sharing. `bench` uses it to
    time when SSH answers.
-3. Optionally turn on automatic login and stop the guest from sleeping, so clones come up ready.
-4. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
+3. Install the guest agent. Boot with the staged `guest` folder shared, then run its installer
+   in the guest's Terminal:
+
+   ```bash
+   paddock run golden --share .build/out/Products/Release/guest   # on the host
+   sudo bash "/Volumes/My Shared Files/install.sh"                # in the guest
+   ```
+
+   The installer prints `paddock-guestd is running` when the agent is up.
+4. Optionally turn on automatic login and stop the guest from sleeping, so clones come up ready.
+5. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
    shut down; doing it a second time forces the VM off.
 
 ## Commands

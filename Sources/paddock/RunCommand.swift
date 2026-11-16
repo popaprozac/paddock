@@ -9,19 +9,32 @@ struct Run: ParsableCommand {
         discussion: """
             Shut down from the Apple menu inside the VM when you are done. Closing the window or \
             pressing Ctrl-C asks the guest to shut down; doing it a second time forces the VM off.
+
+            --share mounts a host folder read-only in the guest at /Volumes/My Shared Files, \
+            for example the 'guest' folder build.sh stages with the guest agent's installer.
             """)
 
     @Argument(help: "VM to boot.")
     var name: String
 
+    @Option(help: "Host folder to mount read-only in the guest.")
+    var share: String?
+
     func validate() throws {
         try BundleName.validate(name)
+        if let share {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: share, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw ValidationError("--share needs an existing folder: \(share)")
+            }
+        }
     }
 
     /// Runs on the main thread before any run loop starts; see `Entry`.
     func run() throws {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
-        try MainActor.assumeIsolated { try VMWindow.show(bundle) }
+        let sharing = share.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+        try MainActor.assumeIsolated { try VMWindow.show(bundle, sharing: sharing) }
     }
 }
 
@@ -35,9 +48,9 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var interrupt: (any DispatchSourceSignal)?
     private var shutdownRequested = false
 
-    static func show(_ bundle: VMBundle) throws {
+    static func show(_ bundle: VMBundle, sharing: URL?) throws {
         let lock = try BundleLock(bundle: bundle)
-        let configuration = try VMConfiguration.make(bundle: bundle, config: try bundle.readConfig())
+        let configuration = try VMConfiguration.make(bundle: bundle, config: try bundle.readConfig(), sharing: sharing)
         let controller = VMWindow(bundle: bundle, lock: lock, machine: VZVirtualMachine(configuration: configuration))
 
         let app = NSApplication.shared

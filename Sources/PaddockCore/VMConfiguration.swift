@@ -6,7 +6,11 @@ import Virtualization
 /// Install, run and bench all use this, so the golden image and its clones boot on identical
 /// virtual hardware. Headless runs keep the graphics device and simply attach no view.
 public enum VMConfiguration {
-    public static func make(bundle: VMBundle, config: VMConfig) throws -> VZVirtualMachineConfiguration {
+    /// `sharing` mounts a host folder read-only in the guest at `/Volumes/My Shared Files`.
+    /// Only `run` uses it, to carry files such as the guest agent into the golden image.
+    public static func make(
+        bundle: VMBundle, config: VMConfig, sharing directory: URL? = nil
+    ) throws -> VZVirtualMachineConfiguration {
         let configuration = VZVirtualMachineConfiguration()
         configuration.platform = try platform(bundle: bundle, config: config)
         configuration.bootLoader = VZMacOSBootLoader()
@@ -43,6 +47,12 @@ public enum VMConfiguration {
 
         // The host reaches the future guest agent over vsock; the guest needs no network listener.
         configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
+
+        if let directory {
+            let share = VZVirtioFileSystemDeviceConfiguration(tag: VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag)
+            share.share = VZSingleDirectoryShare(directory: VZSharedDirectory(url: directory, readOnly: true))
+            configuration.directorySharingDevices = [share]
+        }
 
         do {
             try configuration.validate()
