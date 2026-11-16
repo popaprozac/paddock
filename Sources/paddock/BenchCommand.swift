@@ -8,14 +8,11 @@ struct Bench: AsyncParsableCommand {
         abstract: "Clone a VM, boot the clone headless and time each step.",
         discussion: """
             Each run times these steps, then stops and deletes the clone:
-
-              clone    APFS clone of the source with a fresh machine identifier and MAC
-              start    build the VM configuration and start it, until Virtualization.framework \
-            reports it running
+              clone    APFS clone with a fresh machine identifier and MAC address
+              start    until Virtualization.framework reports the VM running
               running  until the guest holds a DHCP lease on the NAT network
-              ssh      until the guest's SSH server answers; needs Remote Login on in the source
-
-            start, running and ssh all count from the moment the clone is asked to start.
+              ssh      until the guest's SSH server answers; needs Remote Login
+            start, running and ssh count from the moment the clone is asked to start.
             """)
 
     @Argument(help: "VM to clone and boot, usually the golden image.")
