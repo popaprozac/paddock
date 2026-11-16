@@ -1,6 +1,6 @@
 import ArgumentParser
+import CoreFoundation
 import Darwin
-import Dispatch
 
 struct Paddock: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -16,7 +16,9 @@ struct Paddock: AsyncParsableCommand {
 /// Synchronous commands run straight on the main thread. `run` depends on that: AppKit's event
 /// loop has to own the main thread, because started from inside a Swift task it would hold the
 /// serial main queue that Virtualization.framework callbacks and signal handlers are delivered
-/// on. Async commands run in a task while `dispatchMain()` services the main queue.
+/// on. Async commands run in a task while the main thread's run loop services the main queue.
+/// That has to be `CFRunLoopRun()`, as Swift's own async entry point uses: `dispatchMain()`
+/// drains the main queue on a worker thread, which fails main-actor isolation checks.
 @main
 enum Entry {
     @MainActor
@@ -50,6 +52,7 @@ enum Entry {
             }
             Paddock.exit()
         }
-        dispatchMain()
+        CFRunLoopRun()
+        Paddock.exit()
     }
 }
