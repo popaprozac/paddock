@@ -27,8 +27,16 @@ unsigned binary. Pass `debug` for a debug build. Run the tests with `swift test`
 
 The script also puts `paddock-guestd`, the agent that runs inside each guest, in a `guest`
 folder next to the binary, with its launchd job and `install.sh`. The agent listens only on
-vsock port 52525 and answers one line of JSON per connection; today the only request is
-`{"op":"health"}`, which returns its version.
+vsock port 52525. Each connection carries one request line of JSON and gets one or more answer
+lines back:
+
+| Request | Answer |
+| --- | --- |
+| `{"op":"health"}` | `{"version":"0.2.0"}` |
+| `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
+
+`run` uses a login shell (`zsh -l`) as the account with uid 501, the one created in Setup
+Assistant, in its home folder, with stdin closed. Output lines over 8 KB are split.
 
 ## Make a golden image and benchmark it
 

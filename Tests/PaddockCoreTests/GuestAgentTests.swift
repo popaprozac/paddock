@@ -51,6 +51,40 @@ import Testing
         }
     }
 
+    /// Runs `command` through `handle` over a real socket, the way the agent serves it, and
+    /// returns the answer lines.
+    func run(_ command: String?) throws -> [GuestAgent.Response] {
+        let path = "/tmp/paddock-test-\(UUID().uuidString.prefix(8)).sock"
+        let server = try LineServer(path: path, queue: DispatchQueue(label: "guest-agent-tests")) { line, responder in
+            GuestAgent.handle(line, runAs: nil, responder: responder)
+        }
+        defer { server.stop() }
+        let request = String(decoding: try JSONEncoder().encode(GuestAgent.Request(op: "run", command: command)), as: UTF8.self)
+        var answers: [GuestAgent.Response] = []
+        try LineClient.stream(request, to: path) { answers.append(try decode($0)); return true }
+        return answers
+    }
+
+    @Test func runStreamsOutputThenTheExitStatus() throws {
+        let answers = try run("echo one; echo two >&2; exit 3")
+        #expect(answers == [
+            GuestAgent.Response(output: "one"),
+            GuestAgent.Response(output: "two"),
+            GuestAgent.Response(exit: 3),
+        ])
+    }
+
+    @Test func runSplitsLongLines() throws {
+        let answers = try run("printf '%9000s' x")
+        let output = answers.compactMap(\.output)
+        #expect(output.map(\.count) == [GuestAgent.outputChunk, 9000 - GuestAgent.outputChunk])
+        #expect(answers.last == GuestAgent.Response(exit: 0))
+    }
+
+    @Test func runNeedsACommand() throws {
+        #expect(try run(nil) == [GuestAgent.Response(error: "run needs a command")])
+    }
+
     @Test func unreadableRequestsGetAnError() throws {
         #expect(try decode(GuestAgent.answer("not json")).error == "unreadable request")
         #expect(try decode(GuestAgent.answer(#"{"nothing":1}"#)).error == "unreadable request")
