@@ -11,7 +11,8 @@ usable. It has no Tart or Lume dependency.
 - An Apple silicon Mac running macOS 14 or later.
 - Swift 6 from Xcode or the Command Line Tools.
 - Disk space for one restore image (about 26 GB for macOS 27) plus the golden VM's disk. The disk
-  is sparse, so a fresh install takes about 30 GB of its nominal 80 GB.
+  is sparse, so a fresh install takes about 25 GB of its nominal 80 GB. Delete the cached image
+  in `~/.paddock/cache/ipsw` once installed if space is tight; `install` downloads it again.
 
 ## Build
 
@@ -83,6 +84,14 @@ for.
 - macOS allows at most two macOS VMs running at once on one host.
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
 - Networking is NAT only.
+- Every clone has a new MAC address, so every boot takes a new lease from macOS's DHCP server,
+  which keeps leases for a day. The NAT network has about 250 addresses, so a few hundred clone
+  boots in one day exhaust it and new guests get no address. Shorten the lease time if you
+  benchmark heavily:
+
+  ```bash
+  sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default.plist bootpd -dict DHCPLeaseTimeSecs -int 600
+  ```
 - Apple's macOS license permits macOS VMs for development and testing.
 
 ## License
