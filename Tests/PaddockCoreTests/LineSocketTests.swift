@@ -1,6 +1,7 @@
 import Darwin
 import Dispatch
 import Foundation
+import os
 import Testing
 @testable import PaddockCore
 
@@ -72,6 +73,36 @@ import Testing
         server.stop()
         #expect(!FileManager.default.fileExists(atPath: path))
         #expect(throws: PaddockError.self) { try LineClient.send("x", to: path) }
+    }
+
+    /// The guest agent hands LineServer a vsock socket; a loopback TCP socket stands in for it.
+    @Test func servesAnyListeningSocket() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let listening = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, length) == 0 && listen(fd, 4) == 0 && getsockname(fd, $0, &length) == 0
+            }
+        }
+        try #require(listening)
+        let stopped = OSAllocatedUnfairLock(initialState: false)
+        let server = LineServer(listening: fd, queue: queue, handle: { line, reply in reply("tcp \(line)") },
+                                onStop: { stopped.withLock { $0 = true } })
+
+        let client = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(client) }
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, length) == 0 }
+        }
+        try #require(connected)
+        UnixSocket.writeLine("hi", to: client)
+        #expect(UnixSocket.readLine(client) == "tcp hi")
+
+        server.stop()
+        #expect(stopped.withLock { $0 })
     }
 
     @Test func clientFailsWithoutAServer() {

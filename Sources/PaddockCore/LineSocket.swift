@@ -2,21 +2,56 @@ import Darwin
 import Dispatch
 import Foundation
 
-/// A Unix domain socket server that reads one request line per connection, answers with one
-/// line and closes the connection.
+/// A server that reads one request line per connection on a listening socket, answers with
+/// one line and closes the connection.
 ///
-/// The socket file gets mode 0600, so only its owner can connect. Starting a second server on
-/// the same path fails while the first is listening; a socket file left behind by a process
-/// that died is replaced.
+/// `paddock serve` listens on a Unix socket; the guest agent listens on vsock.
 public final class LineServer: @unchecked Sendable {
     public typealias Reply = @Sendable (String) -> Void
 
-    private let path: String
     private let source: any DispatchSourceRead
+    private let onStop: @Sendable () -> Void
 
-    /// Calls `handle` on `queue` with each request line. `handle` must call its reply exactly
-    /// once, from any thread, and may do so later.
+    /// Serves `fd`, a socket that is already listening. The server owns it from here and
+    /// closes it when stopped, then runs `onStop`. Calls `handle` on `queue` with each request
+    /// line; `handle` must call its reply exactly once, from any thread, and may do so later.
     public init(
+        listening fd: Int32,
+        queue: DispatchQueue,
+        handle: @escaping @Sendable (String, @escaping Reply) -> Void,
+        onStop: @escaping @Sendable () -> Void = {}
+    ) {
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        source.setEventHandler {
+            let client = accept(fd, nil, nil)
+            guard client >= 0 else { return }
+            UnixSocket.configure(client, readTimeout: 5)
+            // Reading blocks until the client sends its line, so keep it off `queue`.
+            DispatchQueue.global().async {
+                guard let line = UnixSocket.readLine(client) else {
+                    close(client)
+                    return
+                }
+                queue.async {
+                    handle(line) { answer in
+                        UnixSocket.writeLine(answer, to: client)
+                        close(client)
+                    }
+                }
+            }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        self.source = source
+        self.onStop = onStop
+    }
+
+    /// Listens on a Unix socket at `path`.
+    ///
+    /// The socket file gets mode 0600, so only its owner can connect. Starting a second server
+    /// on the same path fails while the first is listening; a socket file left behind by a
+    /// process that died is replaced. Stopping the server removes the file.
+    public convenience init(
         path: String,
         queue: DispatchQueue,
         handle: @escaping @Sendable (String, @escaping Reply) -> Void
@@ -40,37 +75,14 @@ public final class LineServer: @unchecked Sendable {
             unlink(path)
             throw error
         }
-
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        source.setEventHandler {
-            let client = accept(fd, nil, nil)
-            guard client >= 0 else { return }
-            UnixSocket.configure(client, readTimeout: 5)
-            // Reading blocks until the client sends its line, so keep it off `queue`.
-            DispatchQueue.global().async {
-                guard let line = UnixSocket.readLine(client) else {
-                    close(client)
-                    return
-                }
-                queue.async {
-                    handle(line) { answer in
-                        UnixSocket.writeLine(answer, to: client)
-                        close(client)
-                    }
-                }
-            }
-        }
-        source.setCancelHandler { close(fd) }
-        source.resume()
-        self.path = path
-        self.source = source
+        self.init(listening: fd, queue: queue, handle: handle, onStop: { unlink(path) })
     }
 
-    /// Stops accepting connections and removes the socket file.
+    /// Stops accepting connections, closes the socket and runs `onStop`.
     public func stop() {
         guard !source.isCancelled else { return }
         source.cancel()
-        unlink(path)
+        onStop()
     }
 
     deinit {
