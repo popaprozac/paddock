@@ -9,7 +9,10 @@ struct Serve: AsyncParsableCommand {
             serve clones the source into one slot with its own machine identifier and MAC
             address, boots it until SSH answers and saves its state. It then restores a fresh
             clone of that saved state and keeps it running. If the warm VM stops, serve
-            restores another. Press Ctrl-C to stop it and delete the slot's VMs.
+            restores another. 'paddock acquire' takes the warm VM and 'paddock release'
+            hands it back to be wiped and replaced; they reach serve through a socket in
+            the paddock home that only you can open. Press Ctrl-C to stop serve and delete
+            the slot's VMs.
             """)
 
     @Argument(help: "VM to clone, usually the golden image. Needs Remote Login turned on.")
@@ -38,6 +41,11 @@ final class WarmPool {
     private var saved: VMBundle?    // the slot's paused VM, cloned for every refill
     private var current: VMBundle?  // the clone that is booting, restoring or warm
     private var vm: HeadlessVM?
+    private var warmAddress: String?  // set once the current VM answers SSH
+    private var assigned = false      // the current VM has been handed out
+    private var waiting: [LineServer.Reply] = []  // acquires that came in before a VM was warm
+    private var emptyReason: String?  // why the slot holds no VM, after a refill failed
+    private var server: LineServer?
     private var interrupt: (any DispatchSourceSignal)?
     private var stopping = false
 
@@ -54,12 +62,18 @@ final class WarmPool {
     /// Prepares the slot, fills it and serves until Ctrl-C, which exits the process.
     private func run(source name: String) async throws {
         let source = try home.bundle(named: name)
+        // Listen before booting anything: a second serve fails here, and an acquire made
+        // during startup waits for the first warm VM.
+        server = try LineServer(path: home.socketURL.path, queue: .main) { [weak self] line, reply in
+            MainActor.assumeIsolated { self?.handle(line, reply) }
+        }
         interrupt = onInterrupt { [weak self] in self?.shutDown() }
         do {
             print("Preparing slot 1 from '\(source.name)': boot a clone once and save its state")
             try await saveBootedClone(of: source)
             try await refill()
         } catch {
+            server?.stop()
             await discardCurrent()
             removeSaved()
             throw error
@@ -103,8 +117,46 @@ final class WarmPool {
         try await vm.restore()
         try await vm.resume()
         let ip = try await waitUntilReady(vm)
-        vm.onFailure = { [weak self] error in self?.replace(after: error) }
+        vm.onFailure = { [weak self] error in
+            print("Slot 1: \(error.message); restoring a fresh clone")
+            self?.replaceCurrent()
+        }
+        warmAddress = ip
         print("Slot 1 warm: '\(bundle.name)' at \(ip), restored in \(DurationFormat.short(ContinuousClock.now - started))")
+        handOut()
+    }
+
+    private func handle(_ line: String, _ reply: @escaping LineServer.Reply) {
+        let request = try? JSONDecoder().decode(ServeRequest.self, from: Data(line.utf8))
+        switch request?.op {
+        case "acquire":
+            if let emptyReason {
+                return reply(ServeResponse(error: "slot 1 is empty: \(emptyReason)").line)
+            }
+            waiting.append(reply)
+            handOut()
+        case "release":
+            release(request?.vm, reply)
+        default:
+            reply(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
+        }
+    }
+
+    /// Gives the warm VM to the acquire that has waited longest, once there are both.
+    private func handOut() {
+        guard !assigned, let warmAddress, let current, !waiting.isEmpty else { return }
+        assigned = true
+        print("Slot 1 assigned: '\(current.name)' at \(warmAddress)")
+        waiting.removeFirst()(ServeResponse(vm: current.name, ip: warmAddress).line)
+    }
+
+    private func release(_ name: String?, _ reply: LineServer.Reply) {
+        guard assigned, let current, name == current.name else {
+            return reply(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
+        }
+        reply(ServeResponse(vm: current.name).line)
+        print("Slot 1 released: '\(current.name)'; wiping it and restoring a fresh clone")
+        replaceCurrent()
     }
 
     /// Waits for the guest's lease and SSH banner and returns its address. A restored guest
@@ -119,18 +171,28 @@ final class WarmPool {
         return ip
     }
 
-    /// The warm VM stopped on its own: throw it away and restore another.
-    private func replace(after error: PaddockError) {
-        print("Slot 1: \(error.message); restoring a fresh clone")
+    /// Throws the current VM away, with everything its user did, and restores a fresh clone.
+    private func replaceCurrent() {
+        warmAddress = nil
+        assigned = false
         Task {
             await discardCurrent()
             do {
                 try await refill()
             } catch {
                 await discardCurrent()
+                emptyReason = error.localizedDescription
                 print("Slot 1 is empty: \(error.localizedDescription)")
+                answerWaiting(with: "slot 1 is empty: \(error.localizedDescription)")
             }
         }
+    }
+
+    private func answerWaiting(with error: String) {
+        for reply in waiting {
+            reply(ServeResponse(error: error).line)
+        }
+        waiting.removeAll()
     }
 
     /// Forces the current VM off and deletes its clone.
@@ -154,6 +216,8 @@ final class WarmPool {
         guard !stopping else { Darwin.exit(130) }
         stopping = true
         print("\nStopping; deleting slot 1's VMs. Press Ctrl-C again to quit now.")
+        server?.stop()
+        answerWaiting(with: "paddock serve stopped")
         Task {
             await discardCurrent()
             removeSaved()

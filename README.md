@@ -51,6 +51,12 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--ssh-timeout 60] [--restore] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. |
 | `paddock serve <source>` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until SSH answers and saves its state; each warm VM is a fresh clone restored from that state. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
+| `paddock acquire` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. |
+| `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
+
+`acquire` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
+owner can open. Each connection carries one line of JSON each way. Only one `serve` can listen
+at a time.
 
 VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned
@@ -107,6 +113,9 @@ Restored clones share one identity, so only one can run at a time.
   ```bash
   sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default.plist bootpd -dict DHCPLeaseTimeSecs -int 600
   ```
+- `serve` has one slot with one identity, so every VM it hands out has the same MAC address, IP
+  address and SSH host key. Each starts with its clock behind by the time since `serve` saved
+  the slot's state.
 - Apple's macOS license permits macOS VMs for development and testing.
 
 ## License

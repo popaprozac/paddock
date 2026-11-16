@@ -26,6 +26,11 @@ public struct PaddockHome: Sendable {
         root.appendingPathComponent("vms", isDirectory: true)
     }
 
+    /// Where `paddock serve` listens for `acquire` and `release`.
+    public var socketURL: URL {
+        root.appendingPathComponent("serve.sock")
+    }
+
     public var ipswCacheDirectory: URL {
         root.appendingPathComponent("cache/ipsw", isDirectory: true)
     }
