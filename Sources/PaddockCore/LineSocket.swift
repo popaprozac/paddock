@@ -1,24 +1,23 @@
 import Darwin
 import Dispatch
 import Foundation
+import os
 
-/// A server that reads one request line per connection on a listening socket, answers with
-/// one line and closes the connection.
+/// A server that reads one request line per connection on a listening socket and answers with
+/// one or more lines through a `Responder`, which closes the connection when it finishes.
 ///
 /// `paddock serve` listens on a Unix socket; the guest agent listens on vsock.
 public final class LineServer: @unchecked Sendable {
-    public typealias Reply = @Sendable (String) -> Void
-
     private let source: any DispatchSourceRead
     private let onStop: @Sendable () -> Void
 
     /// Serves `fd`, a socket that is already listening. The server owns it from here and
     /// closes it when stopped, then runs `onStop`. Calls `handle` on `queue` with each request
-    /// line; `handle` must call its reply exactly once, from any thread, and may do so later.
+    /// line and the responder for that connection, which it may use from any thread, later.
     public init(
         listening fd: Int32,
         queue: DispatchQueue,
-        handle: @escaping @Sendable (String, @escaping Reply) -> Void,
+        handle: @escaping @Sendable (String, Responder) -> Void,
         onStop: @escaping @Sendable () -> Void = {}
     ) {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
@@ -33,10 +32,7 @@ public final class LineServer: @unchecked Sendable {
                     return
                 }
                 queue.async {
-                    handle(line) { answer in
-                        UnixSocket.writeLine(answer, to: client)
-                        close(client)
-                    }
+                    handle(line, Responder(fd: client))
                 }
             }
         }
@@ -54,7 +50,7 @@ public final class LineServer: @unchecked Sendable {
     public convenience init(
         path: String,
         queue: DispatchQueue,
-        handle: @escaping @Sendable (String, @escaping Reply) -> Void
+        handle: @escaping @Sendable (String, Responder) -> Void
     ) throws {
         var address = try UnixSocket.address(path)
         if UnixSocket.isListening(path) {
@@ -90,16 +86,64 @@ public final class LineServer: @unchecked Sendable {
     }
 }
 
+/// One connection's way back to its client: any number of lines, then `finish`.
+public final class Responder: @unchecked Sendable {
+    private let fd: Int32
+    private let finished = OSAllocatedUnfairLock(initialState: false)
+
+    init(fd: Int32) {
+        self.fd = fd
+    }
+
+    /// Sends one line. Does nothing once finished.
+    public func send(_ line: String) {
+        finished.withLock { finished in
+            if !finished {
+                UnixSocket.writeLine(line, to: fd)
+            }
+        }
+    }
+
+    /// Sends a last line, if given, and closes the connection. Later calls do nothing.
+    public func finish(_ line: String? = nil) {
+        finished.withLock { finished in
+            guard !finished else { return }
+            if let line {
+                UnixSocket.writeLine(line, to: fd)
+            }
+            close(fd)
+            finished = true
+        }
+    }
+
+    /// A handler that drops its responder without finishing still closes the connection.
+    deinit {
+        finish()
+    }
+}
+
 public enum LineClient {
-    /// Sends `line` to the server at `path` and waits, without a time limit, for its answer.
+    /// Sends `line` to the server at `path` and waits, without a time limit, for the first line
+    /// of its answer.
     public static func send(_ line: String, to path: String) throws -> String {
-        let fd = try UnixSocket.connect(path)
-        defer { close(fd) }
-        UnixSocket.writeLine(line, to: fd)
-        guard let answer = UnixSocket.readLine(fd) else {
+        var answer: String?
+        try stream(line, to: path) { line in
+            answer = line
+            return false
+        }
+        guard let answer else {
             throw PaddockError("the server at \(path) closed the connection without answering")
         }
         return answer
+    }
+
+    /// Sends `line` and passes each line of the answer to `onLine` until the server closes the
+    /// connection or `onLine` returns false.
+    public static func stream(_ line: String, to path: String, onLine: (String) throws -> Bool) throws {
+        let fd = try UnixSocket.connect(path)
+        defer { close(fd) }
+        UnixSocket.writeLine(line, to: fd)
+        while let answer = UnixSocket.readLine(fd), try onLine(answer) {}
     }
 }
 

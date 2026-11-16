@@ -7,8 +7,8 @@ import PaddockCore
 setvbuf(stdout, nil, _IOLBF, 0)
 do {
     let fd = try GuestAgent.listen(port: GuestAgent.port)
-    let server = LineServer(listening: fd, queue: .main) { line, reply in
-        reply(GuestAgent.answer(line))
+    let server = LineServer(listening: fd, queue: .main) { line, responder in
+        responder.finish(GuestAgent.answer(line))
     }
     print("paddock-guestd \(GuestAgent.version) listening on vsock port \(GuestAgent.port)")
     withExtendedLifetime(server) { dispatchMain() }

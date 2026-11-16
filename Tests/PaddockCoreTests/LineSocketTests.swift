@@ -16,7 +16,7 @@ import Testing
 
     @Test func answersEachRequest() throws {
         let path = socketPath()
-        let server = try LineServer(path: path, queue: queue) { line, reply in reply("echo \(line)") }
+        let server = try LineServer(path: path, queue: queue) { line, responder in responder.finish("echo \(line)") }
         #expect(try LineClient.send("hello", to: path) == "echo hello")
         #expect(try LineClient.send("again", to: path) == "echo again")
         withExtendedLifetime(server) {}
@@ -24,16 +24,40 @@ import Testing
 
     @Test func canAnswerLater() throws {
         let path = socketPath()
-        let server = try LineServer(path: path, queue: queue) { line, reply in
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { reply("late \(line)") }
+        let server = try LineServer(path: path, queue: queue) { line, responder in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { responder.finish("late \(line)") }
         }
         #expect(try LineClient.send("x", to: path) == "late x")
         withExtendedLifetime(server) {}
     }
 
+    @Test func streamsManyLinesThenCloses() throws {
+        let path = socketPath()
+        let server = try LineServer(path: path, queue: queue) { line, responder in
+            DispatchQueue.global().async {
+                for index in 1...3 {
+                    responder.send("\(line) \(index)")
+                }
+                responder.finish("done")
+                responder.send("ignored after finish")
+            }
+        }
+        var lines: [String] = []
+        try LineClient.stream("go", to: path) { lines.append($0); return true }
+        #expect(lines == ["go 1", "go 2", "go 3", "done"])
+        withExtendedLifetime(server) {}
+    }
+
+    @Test func droppingTheResponderClosesTheConnection() throws {
+        let path = socketPath()
+        let server = try LineServer(path: path, queue: queue) { _, _ in }
+        #expect(throws: PaddockError.self) { try LineClient.send("x", to: path) }
+        withExtendedLifetime(server) {}
+    }
+
     @Test func onlyTheOwnerCanConnect() throws {
         let path = socketPath()
-        let server = try LineServer(path: path, queue: queue) { _, reply in reply("") }
+        let server = try LineServer(path: path, queue: queue) { _, responder in responder.finish("") }
         let attributes = try FileManager.default.attributesOfItem(atPath: path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
         withExtendedLifetime(server) {}
@@ -41,9 +65,9 @@ import Testing
 
     @Test func refusesASecondServerOnTheSamePath() throws {
         let path = socketPath()
-        let first = try LineServer(path: path, queue: queue) { _, reply in reply("first") }
+        let first = try LineServer(path: path, queue: queue) { _, responder in responder.finish("first") }
         #expect(throws: PaddockError.self) {
-            try LineServer(path: path, queue: queue) { _, reply in reply("second") }
+            try LineServer(path: path, queue: queue) { _, responder in responder.finish("second") }
         }
         #expect(try LineClient.send("x", to: path) == "first")
         withExtendedLifetime(first) {}
@@ -62,14 +86,14 @@ import Testing
         close(stale)
         #expect(FileManager.default.fileExists(atPath: path))
 
-        let server = try LineServer(path: path, queue: queue) { _, reply in reply("fresh") }
+        let server = try LineServer(path: path, queue: queue) { _, responder in responder.finish("fresh") }
         #expect(try LineClient.send("x", to: path) == "fresh")
         withExtendedLifetime(server) {}
     }
 
     @Test func stoppingRemovesTheSocket() throws {
         let path = socketPath()
-        let server = try LineServer(path: path, queue: queue) { _, reply in reply("") }
+        let server = try LineServer(path: path, queue: queue) { _, responder in responder.finish("") }
         server.stop()
         #expect(!FileManager.default.fileExists(atPath: path))
         #expect(throws: PaddockError.self) { try LineClient.send("x", to: path) }
@@ -89,7 +113,7 @@ import Testing
         }
         try #require(listening)
         let stopped = OSAllocatedUnfairLock(initialState: false)
-        let server = LineServer(listening: fd, queue: queue, handle: { line, reply in reply("tcp \(line)") },
+        let server = LineServer(listening: fd, queue: queue, handle: { line, responder in responder.finish("tcp \(line)") },
                                 onStop: { stopped.withLock { $0 = true } })
 
         let client = socket(AF_INET, SOCK_STREAM, 0)

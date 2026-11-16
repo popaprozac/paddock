@@ -42,7 +42,7 @@ final class WarmPool {
     private var vm: HeadlessVM?
     private var warmAddress: String?  // set once the current VM's agent answers
     private var assigned = false      // the current VM has been handed out
-    private var waiting: [LineServer.Reply] = []  // acquires that came in before a VM was warm
+    private var waiting: [Responder] = []  // acquires that came in before a VM was warm
     private var emptyReason: String?  // why the slot holds no VM, after a refill failed
     private var server: LineServer?
     private var interrupt: (any DispatchSourceSignal)?
@@ -63,8 +63,8 @@ final class WarmPool {
         let source = try home.bundle(named: name)
         // Listen before booting anything: a second serve fails here, and an acquire made
         // during startup waits for the first warm VM.
-        server = try LineServer(path: home.socketURL.path, queue: .main) { [weak self] line, reply in
-            MainActor.assumeIsolated { self?.handle(line, reply) }
+        server = try LineServer(path: home.socketURL.path, queue: .main) { [weak self] line, responder in
+            MainActor.assumeIsolated { self?.handle(line, responder) }
         }
         interrupt = onInterrupt { [weak self] in self?.shutDown() }
         do {
@@ -125,19 +125,19 @@ final class WarmPool {
         handOut()
     }
 
-    private func handle(_ line: String, _ reply: @escaping LineServer.Reply) {
+    private func handle(_ line: String, _ responder: Responder) {
         let request = try? JSONDecoder().decode(ServeRequest.self, from: Data(line.utf8))
         switch request?.op {
         case "acquire":
             if let emptyReason {
-                return reply(ServeResponse(error: "slot 1 is empty: \(emptyReason)").line)
+                return responder.finish(ServeResponse(error: "slot 1 is empty: \(emptyReason)").line)
             }
-            waiting.append(reply)
+            waiting.append(responder)
             handOut()
         case "release":
-            release(request?.vm, reply)
+            release(request?.vm, responder)
         default:
-            reply(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
+            responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
     }
 
@@ -146,14 +146,14 @@ final class WarmPool {
         guard !assigned, let warmAddress, let current, !waiting.isEmpty else { return }
         assigned = true
         print("Slot 1 assigned: '\(current.name)' at \(warmAddress)")
-        waiting.removeFirst()(ServeResponse(vm: current.name, ip: warmAddress).line)
+        waiting.removeFirst().finish(ServeResponse(vm: current.name, ip: warmAddress).line)
     }
 
-    private func release(_ name: String?, _ reply: LineServer.Reply) {
+    private func release(_ name: String?, _ responder: Responder) {
         guard assigned, let current, name == current.name else {
-            return reply(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
+            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
         }
-        reply(ServeResponse(vm: current.name).line)
+        responder.finish(ServeResponse(vm: current.name).line)
         print("Slot 1 released: '\(current.name)'; wiping it and restoring a fresh clone")
         replaceCurrent()
     }
@@ -189,8 +189,8 @@ final class WarmPool {
     }
 
     private func answerWaiting(with error: String) {
-        for reply in waiting {
-            reply(ServeResponse(error: error).line)
+        for responder in waiting {
+            responder.finish(ServeResponse(error: error).line)
         }
         waiting.removeAll()
     }
