@@ -7,7 +7,7 @@ struct Paddock: AsyncParsableCommand {
         commandName: "paddock",
         abstract: "macOS sandboxes on Apple silicon: install, run, clone and benchmark VMs.",
         version: "0.1.0",
-        subcommands: [Install.self, Run.self, Clone.self]
+        subcommands: [Install.self, Run.self, Clone.self, Bench.self]
     )
 
     /// ArgumentParser's async entry point, plus line-buffered stdout so status lines and progress
