@@ -6,6 +6,6 @@ struct Paddock: AsyncParsableCommand {
         commandName: "paddock",
         abstract: "macOS sandboxes on Apple silicon: install, run, clone and benchmark VMs.",
         version: "0.1.0",
-        subcommands: []
+        subcommands: [Install.self]
     )
 }
