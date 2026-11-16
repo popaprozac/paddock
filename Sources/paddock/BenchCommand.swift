@@ -1,7 +1,6 @@
 import ArgumentParser
 import Foundation
 import PaddockCore
-import Virtualization
 
 struct Bench: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -75,9 +74,7 @@ final class BenchRunner: NSObject {
     private let home = PaddockHome.fromEnvironment()
     private var clone: VMBundle?
     private var saved: VMBundle?  // with --restore, the paused VM every run is cloned from
-    private var lock: BundleLock?
-    private var machine: VZVirtualMachine?
-    private var machineFailure: PaddockError?
+    private var vm: HeadlessVM?
     private var interrupt: (any DispatchSourceSignal)?
     private var aborting = false
 
@@ -129,7 +126,6 @@ final class BenchRunner: NSObject {
     private func runOnce(source: VMBundle) async throws -> Sample {
         let bundle = try home.bundle(named: "\(source.name.prefix(40))-bench-\(Self.shortID())")
         clone = bundle
-        machineFailure = nil
         do {
             let sample = try await measure(source: source, into: bundle, restoring: settings.restore)
             await tearDown()
@@ -145,19 +141,13 @@ final class BenchRunner: NSObject {
     private func saveBootedClone(of source: VMBundle) async throws -> VMBundle {
         let bundle = try home.bundle(named: "\(source.name.prefix(40))-saved-\(Self.shortID())")
         clone = bundle
-        machineFailure = nil
         do {
             let sample = try await measure(source: source, into: bundle, restoring: false)
-            guard sample.ssh != nil, let machine else {
+            guard sample.ssh != nil, let vm else {
                 throw PaddockError("the clone never answered SSH, so there is no ready state to save")
             }
             let saveStarted = ContinuousClock.now
-            try await perform("pause the clone") { machine.pause(completionHandler: $0) }
-            try await perform("save the clone's state") { done in
-                machine.saveMachineStateTo(url: bundle.savedStateURL) { error in
-                    done(error.map { .failure($0) } ?? .success(()))
-                }
-            }
+            try await vm.pauseAndSave()
             let attributes = try? FileManager.default.attributesOfItem(atPath: bundle.savedStateURL.path)
             let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
             report("save", ContinuousClock.now - saveStarted, "paused and wrote \(ByteFormat.gigabytes(size)) of state")
@@ -177,23 +167,17 @@ final class BenchRunner: NSObject {
         let cloneTime = ContinuousClock.now - cloneStarted
         report("clone", cloneTime, "APFS clone '\(bundle.name)', MAC \(config.macAddress)")
 
-        lock = try BundleLock(bundle: bundle)
         let bootStarted = ContinuousClock.now
-        let machine = VZVirtualMachine(configuration: try VMConfiguration.make(bundle: bundle, config: config))
-        machine.delegate = self
-        self.machine = machine
+        let vm = try HeadlessVM(bundle: bundle, config: config)
+        self.vm = vm
         var restoreTime: Duration?
         if restoring {
-            try await perform("restore the saved state") { done in
-                machine.restoreMachineStateFrom(url: bundle.savedStateURL) { error in
-                    done(error.map { .failure($0) } ?? .success(()))
-                }
-            }
+            try await vm.restore()
             restoreTime = ContinuousClock.now - bootStarted
             report("restore", restoreTime, "saved state loaded, VM paused")
-            try await perform("resume the clone") { machine.resume(completionHandler: $0) }
+            try await vm.resume()
         } else {
-            try await perform("start the clone") { machine.start(completionHandler: $0) }
+            try await vm.start()
         }
         var sample = Sample(clone: cloneTime, restore: restoreTime, start: ContinuousClock.now - bootStarted)
         if restoring {
@@ -211,9 +195,7 @@ final class BenchRunner: NSObject {
             }
             ip = leased
         } else {
-            guard let leased = try await poll(every: .milliseconds(100), for: .seconds(settings.leaseTimeout), {
-                DHCPLeases.ipAddress(for: macAddress)
-            }) else {
+            guard let leased = try await vm.leasedAddress(within: .seconds(settings.leaseTimeout)) else {
                 report("running", nil, "no DHCP lease within \(settings.leaseTimeout) s")
                 return sample
             }
@@ -222,9 +204,7 @@ final class BenchRunner: NSObject {
             report("running", sample.running, "guest leased \(ip)")
         }
 
-        if try await poll(every: .milliseconds(250), for: .seconds(settings.sshTimeout), {
-            SSHProbe.banner(host: ip, timeout: .seconds(1))
-        }) != nil {
+        if try await vm.sshAnswers(at: ip, within: .seconds(settings.sshTimeout)) {
             sample.ssh = ContinuousClock.now - bootStarted
             report("ssh", sample.ssh, "sshd answered")
         } else {
@@ -237,44 +217,10 @@ final class BenchRunner: NSObject {
         return sample
     }
 
-    /// Runs `probe` off the main actor until it returns a value, the VM stops, or time runs out.
-    private func poll<T: Sendable>(
-        every interval: Duration,
-        for timeout: Duration,
-        _ probe: @escaping @Sendable () -> T?
-    ) async throws -> T? {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
-            if let machineFailure { throw machineFailure }
-            if let value = await Task.detached(operation: probe).value { return value }
-            try await Task.sleep(for: interval)
-        }
-        return nil
-    }
-
-    /// Awaits one Virtualization.framework call that reports back through a completion handler.
-    private func perform(
-        _ action: String,
-        _ call: (@escaping @Sendable (Result<Void, any Error>) -> Void) -> Void
-    ) async throws {
-        do {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                call { continuation.resume(with: $0) }
-            }
-        } catch {
-            throw PaddockError("couldn't \(action): \(error.localizedDescription)")
-        }
-    }
-
     /// Forces the VM off and releases its bundle.
     private func stopMachine() async {
-        if let machine, machine.canStop {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                machine.stop { _ in continuation.resume() }
-            }
-        }
-        machine = nil
-        lock = nil
+        await vm?.stop()
+        vm = nil
     }
 
     /// Forces the clone off, releases it and deletes it unless --keep was given.
@@ -339,15 +285,5 @@ final class BenchRunner: NSObject {
             report(step, summary.median,
                    "[\(DurationFormat.short(summary.minimum)) to \(DurationFormat.short(summary.maximum))\(counted)]")
         }
-    }
-}
-
-extension BenchRunner: @preconcurrency VZVirtualMachineDelegate {
-    func guestDidStop(_ virtualMachine: VZVirtualMachine) {
-        machineFailure = PaddockError("the guest shut down during the benchmark")
-    }
-
-    func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: any Error) {
-        machineFailure = PaddockError("the VM stopped: \(error.localizedDescription)")
     }
 }
