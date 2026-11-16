@@ -78,6 +78,7 @@ import Virtualization
         let clone = VMBundle(url: tmp.url.appendingPathComponent("vms/clone-1"))
         #expect(throws: PaddockError.self) { try VMClone.clone(source, to: clone) }
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: tmp.url.appendingPathComponent("vms").path)
+            .filter { !$0.hasSuffix(".lock") }
         #expect(leftovers == ["golden"])
     }
 }

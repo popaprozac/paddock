@@ -21,32 +21,19 @@ public enum MacOSInstall {
         }
     }
 
-    /// Installs macOS into a new bundle. The work happens in a hidden staging directory next to
-    /// the bundle, which is renamed into place only when the install succeeds.
+    /// Installs macOS into a new bundle. The work happens in a `StagingArea` that is renamed into
+    /// place only when the install succeeds.
     /// `progress` receives the installer's fraction complete about once a second.
     public static func install(
         _ request: Request,
         into bundle: VMBundle,
         progress: @escaping @MainActor (Double) -> Void
     ) async throws -> VMConfig {
-        let fileManager = FileManager.default
-        guard !fileManager.fileExists(atPath: bundle.url.path) else {
-            throw PaddockError("VM '\(bundle.name)' already exists at \(bundle.url.path)")
-        }
-        let staging = VMBundle(url: bundle.url.deletingLastPathComponent()
-            .appendingPathComponent(".\(bundle.name).installing", isDirectory: true))
-        try? fileManager.removeItem(at: staging.url)
-        try fileManager.createDirectory(at: staging.url, withIntermediateDirectories: true)
-
-        do {
-            let config = try createFiles(for: request, in: staging)
-            try await runInstaller(bundle: staging, config: config, imageURL: request.image.url, progress: progress)
-            try fileManager.moveItem(at: staging.url, to: bundle.url)
-            return config
-        } catch {
-            try? fileManager.removeItem(at: staging.url)
-            throw error
-        }
+        let staging = try StagingArea(for: bundle)
+        let config = try createFiles(for: request, in: staging.bundle)
+        try await runInstaller(bundle: staging.bundle, config: config, imageURL: request.image.url, progress: progress)
+        try staging.commit()
+        return config
     }
 
     static func createFiles(for request: Request, in bundle: VMBundle) throws -> VMConfig {

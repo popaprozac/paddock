@@ -13,36 +13,23 @@ public enum VMClone {
     /// is running can't be cloned mid-write.
     @discardableResult
     public static func clone(_ source: VMBundle, to destination: VMBundle) throws -> VMConfig {
-        let fileManager = FileManager.default
         guard source.exists else {
             throw PaddockError("no VM '\(source.name)' at \(source.url.path)")
         }
-        guard !fileManager.fileExists(atPath: destination.url.path) else {
-            throw PaddockError("VM '\(destination.name)' already exists at \(destination.url.path)")
-        }
         let lock = try BundleLock(bundle: source)
         defer { withExtendedLifetime(lock) {} }
+        let staging = try StagingArea(for: destination)
 
-        let staging = VMBundle(url: destination.url.deletingLastPathComponent()
-            .appendingPathComponent(".\(destination.name).cloning", isDirectory: true))
-        try? fileManager.removeItem(at: staging.url)
-        try fileManager.createDirectory(at: staging.url, withIntermediateDirectories: true)
+        try cloneFile(source.diskURL, to: staging.bundle.diskURL)
+        try cloneFile(source.auxiliaryStorageURL, to: staging.bundle.auxiliaryStorageURL)
 
-        do {
-            try cloneFile(source.diskURL, to: staging.diskURL)
-            try cloneFile(source.auxiliaryStorageURL, to: staging.auxiliaryStorageURL)
+        var config = try source.readConfig()
+        config.machineIdentifier = VZMacMachineIdentifier().dataRepresentation
+        config.macAddress = VZMACAddress.randomLocallyAdministered().string
+        try staging.bundle.writeConfig(config)
 
-            var config = try source.readConfig()
-            config.machineIdentifier = VZMacMachineIdentifier().dataRepresentation
-            config.macAddress = VZMACAddress.randomLocallyAdministered().string
-            try staging.writeConfig(config)
-
-            try fileManager.moveItem(at: staging.url, to: destination.url)
-            return config
-        } catch {
-            try? fileManager.removeItem(at: staging.url)
-            throw error
-        }
+        try staging.commit()
+        return config
     }
 
     static func cloneFile(_ source: URL, to destination: URL) throws {
