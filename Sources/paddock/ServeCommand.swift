@@ -7,7 +7,7 @@ struct Serve: AsyncParsableCommand {
         abstract: "Keep a warm clone of a VM running headless, ready to hand out.",
         discussion: """
             serve clones the source into one slot with its own machine identifier and MAC
-            address, boots it until SSH answers and saves its state. It then restores a fresh
+            address, boots it until its guest agent answers and saves its state. It then restores a fresh
             clone of that saved state and keeps it running. If the warm VM stops, serve
             restores another. 'paddock acquire' takes the warm VM and 'paddock release'
             hands it back to be wiped and replaced; they reach serve through a socket in
@@ -15,7 +15,7 @@ struct Serve: AsyncParsableCommand {
             the slot's VMs.
             """)
 
-    @Argument(help: "VM to clone, usually the golden image. Needs Remote Login turned on.")
+    @Argument(help: "VM to clone, usually the golden image, with the guest agent installed.")
     var source: String
 
     func validate() throws {
@@ -33,15 +33,14 @@ struct Serve: AsyncParsableCommand {
 /// so the slot keeps one identity, and its VMs run one at a time.
 @MainActor
 final class WarmPool {
-    private static let leaseTimeout: Duration = .seconds(300)
-    private static let sshTimeout: Duration = .seconds(60)
+    private static let timeout: Duration = .seconds(300)
 
     private let home = PaddockHome.fromEnvironment()
     private let slotName: String
     private var saved: VMBundle?    // the slot's paused VM, cloned for every refill
     private var current: VMBundle?  // the clone that is booting, restoring or warm
     private var vm: HeadlessVM?
-    private var warmAddress: String?  // set once the current VM answers SSH
+    private var warmAddress: String?  // set once the current VM's agent answers
     private var assigned = false      // the current VM has been handed out
     private var waiting: [LineServer.Reply] = []  // acquires that came in before a VM was warm
     private var emptyReason: String?  // why the slot holds no VM, after a refill failed
@@ -83,7 +82,7 @@ final class WarmPool {
         }
     }
 
-    /// Boots a clone of `source` with a fresh identity until SSH answers, then saves its state.
+    /// Boots a clone of `source` with a fresh identity until its agent answers, then saves its state.
     private func saveBootedClone(of source: VMBundle) async throws {
         let started = ContinuousClock.now
         let bundle = try home.bundle(named: "\(slotName)-saved")
@@ -105,7 +104,7 @@ final class WarmPool {
             + "saved \(ByteFormat.gigabytes(size)) of state in \(DurationFormat.short(ContinuousClock.now - started - booted))")
     }
 
-    /// Restores a fresh clone of the slot's saved state and waits until it answers SSH.
+    /// Restores a fresh clone of the slot's saved state and waits until its agent answers.
     private func refill() async throws {
         guard let saved else { return }
         let started = ContinuousClock.now
@@ -159,14 +158,15 @@ final class WarmPool {
         replaceCurrent()
     }
 
-    /// Waits for the guest's lease and SSH banner and returns its address. A restored guest
-    /// still holds the lease it had when its state was saved, so its lease is found at once.
+    /// Waits for the guest agent to answer over vsock, then returns the guest's address on the
+    /// NAT network for the workload. A restored guest still holds the lease it had when its
+    /// state was saved, so its lease is found at once.
     private func waitUntilReady(_ vm: HeadlessVM) async throws -> String {
-        guard let ip = try await vm.leasedAddress(within: Self.leaseTimeout) else {
-            throw PaddockError("'\(vm.bundle.name)' got no DHCP lease within \(DurationFormat.short(Self.leaseTimeout))")
+        guard try await vm.agentVersion(within: Self.timeout) != nil else {
+            throw PaddockError("'\(vm.bundle.name)' never answered over vsock; install the guest agent in the golden image")
         }
-        guard try await vm.sshAnswers(at: ip, within: Self.sshTimeout) else {
-            throw PaddockError("'\(vm.bundle.name)' never answered SSH at \(ip); turn on Remote Login in the golden image")
+        guard let ip = try await vm.leasedAddress(within: Self.timeout) else {
+            throw PaddockError("'\(vm.bundle.name)' got no DHCP lease within \(DurationFormat.short(Self.timeout))")
         }
         return ip
     }

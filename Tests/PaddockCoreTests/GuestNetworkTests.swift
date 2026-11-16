@@ -41,20 +41,3 @@ import Testing
         #expect(DHCPLeases.normalize("not a mac") == nil)
     }
 }
-
-@Suite struct SSHBannerTests {
-    @Test func recognizesAnSSHServer() throws {
-        let server = try BannerServer(banner: "SSH-2.0-OpenSSH_9.9\r\n")
-        #expect(SSHProbe.banner(host: "127.0.0.1", port: server.port, timeout: .seconds(2))?.hasPrefix("SSH-2.0") == true)
-    }
-
-    @Test func ignoresOtherServers() throws {
-        let server = try BannerServer(banner: "HTTP/1.1 400 Bad Request\r\n")
-        #expect(SSHProbe.banner(host: "127.0.0.1", port: server.port, timeout: .seconds(2)) == nil)
-    }
-
-    @Test func returnsNilWhenNothingListens() throws {
-        let port = try BannerServer(banner: "").port  // the server closes when released
-        #expect(SSHProbe.banner(host: "127.0.0.1", port: port, timeout: .milliseconds(500)) == nil)
-    }
-}

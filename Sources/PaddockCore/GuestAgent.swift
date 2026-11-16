@@ -39,6 +39,24 @@ public enum GuestAgent {
         return (try? JSONEncoder().encode(response)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 
+    /// Sends `request` over `fd`, a connection to the agent, and returns its answer. The answer
+    /// comes from a guest that may be hostile, so it is size-limited and checked, not trusted.
+    public static func ask(_ request: Request, over fd: Int32, timeout seconds: Int = 2) throws -> Response {
+        UnixSocket.configure(fd, readTimeout: seconds)
+        let line = (try? JSONEncoder().encode(request)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        UnixSocket.writeLine(line, to: fd)
+        guard let answer = UnixSocket.readLine(fd, limit: 4096) else {
+            throw PaddockError("the guest agent didn't answer")
+        }
+        guard let response = try? JSONDecoder().decode(Response.self, from: Data(answer.utf8)) else {
+            throw PaddockError("unreadable answer from the guest agent")
+        }
+        if let error = response.error {
+            throw PaddockError("the guest agent refused: \(error.prefix(200))")
+        }
+        return response
+    }
+
     /// Opens a vsock socket listening on `port` for the host. Works only inside a VM: a macOS
     /// host has no vsock transport and reaches guests through Virtualization.framework instead.
     public static func listen(port: UInt32) throws -> Int32 {

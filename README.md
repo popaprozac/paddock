@@ -41,9 +41,7 @@ paddock bench golden --runs 3 # clone, boot headless, time each step, delete the
 While Setup Assistant is open in `paddock run`, set up the guest the way every clone should be:
 
 1. Create the user account.
-2. Turn on Remote Login in System Settings, under General and then Sharing. `bench` uses it to
-   time when SSH answers.
-3. Install the guest agent. Boot with the staged `guest` folder shared, then run its installer
+2. Install the guest agent. Boot with the staged `guest` folder shared, then run its installer
    in the guest's Terminal:
 
    ```bash
@@ -52,8 +50,8 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
    ```
 
    The installer prints `paddock-guestd is running` when the agent is up.
-4. Optionally turn on automatic login and stop the guest from sleeping, so clones come up ready.
-5. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
+3. Optionally turn on automatic login and stop the guest from sleeping, so clones come up ready.
+4. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
    shut down; doing it a second time forces the VM off.
 
 ## Commands
@@ -63,8 +61,8 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name>` | Boots a VM in a window. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
-| `paddock bench <source> [--runs 1] [--timeout 300] [--ssh-timeout 60] [--restore] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. |
-| `paddock serve <source>` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until SSH answers and saves its state; each warm VM is a fresh clone restored from that state. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
+| `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. |
+| `paddock serve <source>` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until its guest agent answers and saves its state; each warm VM is a fresh clone restored from that state. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
 | `paddock acquire` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
 
@@ -83,14 +81,13 @@ mid-write.
 | clone | Locking the source, `clonefile(2)` of the disk and auxiliary storage, writing the new identity and renaming the clone into place. |
 | start | Building and validating the VM configuration, creating the VM and starting it, until Virtualization.framework reports it running. |
 | running | From the same moment as start until the guest holds a DHCP lease in `/var/db/dhcpd_leases`, checked every 100 ms. |
-| ssh | From the same moment as start until the guest's SSH server sends its banner, checked every 250 ms. |
+| agent | From the same moment as start until `paddock-guestd` answers a health check over vsock, checked every 100 ms. Runs alongside the lease check. |
 
-Each run also prints clone to running, the total from cloning to a guest on the network. The
-lease and SSH checks see the guest from the outside without installing anything in it. The next
-spike replaces them with a guest agent answering over vsock, which the VM already has a device
-for.
+Each run also prints clone to ready, the total from cloning to the agent answering. A run whose
+agent never answers fails. The lease check reads the host's lease file and the agent check goes
+over vsock, so nothing in the guest listens on the network for paddock.
 
-With `--restore`, bench first cold-boots one clone until SSH answers, pauses it and saves its
+With `--restore`, bench first cold-boots one clone until its agent answers, pauses it and saves its
 memory and device state (printed as save, with the file size, and left out of the summary).
 Each run then clones that saved VM and replaces start and running with:
 
@@ -99,7 +96,7 @@ Each run then clones that saved VM and replaces start and running with:
 | clone | As above, plus `clonefile(2)` of the saved state. The clone keeps the saved VM's machine identifier and MAC address, because the saved memory still holds them. |
 | restore | Building and validating the VM configuration, creating the VM and loading the saved state, until the VM is paused. |
 | resume | From the same moment as restore until Virtualization.framework reports the VM running. |
-| ssh | From the same moment as restore until the guest's SSH server sends its banner. The guest keeps the address it leased before it was saved. |
+| agent | From the same moment as restore until `paddock-guestd` answers over vsock. The guest keeps the address it leased before it was saved, so there is no running step. |
 
 Restored clones share one identity, so only one can run at a time.
 
@@ -127,8 +124,8 @@ Restored clones share one identity, so only one can run at a time.
   ```bash
   sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default.plist bootpd -dict DHCPLeaseTimeSecs -int 600
   ```
-- `serve` has one slot with one identity, so every VM it hands out has the same MAC address, IP
-  address and SSH host key. Each starts with its clock behind by the time since `serve` saved
+- `serve` has one slot with one identity, so every VM it hands out has the same MAC address and IP
+  address. Each starts with its clock behind by the time since `serve` saved
   the slot's state.
 - Apple's macOS license permits macOS VMs for development and testing.
 

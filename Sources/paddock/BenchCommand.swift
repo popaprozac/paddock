@@ -10,10 +10,10 @@ struct Bench: AsyncParsableCommand {
               clone    APFS clone with a fresh machine identifier and MAC address
               start    until Virtualization.framework reports the VM running
               running  until the guest holds a DHCP lease on the NAT network
-              ssh      until the guest's SSH server answers; needs Remote Login
-            start, running and ssh count from when paddock begins configuring the clone.
+              agent    until the guest agent answers a health check over vsock
+            start, running and agent count from when paddock begins configuring the clone.
 
-            With --restore, paddock first boots one clone until SSH answers, then
+            With --restore, paddock first boots one clone until its agent answers, then
             pauses it and saves its state. Each run clones that saved VM, keeping its
             identity, and times these steps in place of start and running:
               restore  until the saved state is loaded into the paused clone
@@ -26,11 +26,8 @@ struct Bench: AsyncParsableCommand {
     @Option(help: "Number of runs.")
     var runs: Int = 1
 
-    @Option(help: "Seconds to wait for the guest's DHCP lease.")
+    @Option(help: "Seconds to wait for the guest's DHCP lease and for its agent.")
     var timeout: Int = 300
-
-    @Option(name: .customLong("ssh-timeout"), help: "Seconds to wait for SSH once the guest has a lease.")
-    var sshTimeout: Int = 60
 
     @Flag(help: "Restore a saved state in each run instead of cold booting.")
     var restore = false
@@ -41,13 +38,12 @@ struct Bench: AsyncParsableCommand {
     func validate() throws {
         try BundleName.validate(source)
         guard runs >= 1 else { throw ValidationError("--runs must be at least 1") }
-        guard timeout > 0, sshTimeout > 0 else { throw ValidationError("timeouts must be at least 1 second") }
+        guard timeout > 0 else { throw ValidationError("--timeout must be at least 1 second") }
     }
 
     func run() async throws {
         try await BenchRunner.run(.init(
-            source: source, runs: runs, leaseTimeout: timeout, sshTimeout: sshTimeout,
-            restore: restore, keep: keep))
+            source: source, runs: runs, timeout: timeout, restore: restore, keep: keep))
     }
 }
 
@@ -56,8 +52,7 @@ final class BenchRunner: NSObject {
     struct Settings: Sendable {
         var source: String
         var runs: Int
-        var leaseTimeout: Int
-        var sshTimeout: Int
+        var timeout: Int
         var restore: Bool
         var keep: Bool
     }
@@ -67,7 +62,7 @@ final class BenchRunner: NSObject {
         var restore: Duration?  // restores only
         var start: Duration     // until the VM runs: started, or resumed after a restore
         var running: Duration?  // cold boots only
-        var ssh: Duration?
+        var agent: Duration?    // until the guest agent answers over vsock
     }
 
     private let settings: Settings
@@ -117,8 +112,8 @@ final class BenchRunner: NSObject {
         if samples.count > 1 {
             printSummary(samples)
         }
-        // A cold boot without a lease failed; a restore shows no sign of life other than SSH.
-        if samples.contains(where: { settings.restore ? $0.ssh == nil : $0.running == nil }) {
+        // A guest whose agent never answered isn't ready, whatever else it did.
+        if samples.contains(where: { $0.agent == nil }) {
             throw ExitCode.failure
         }
     }
@@ -136,15 +131,15 @@ final class BenchRunner: NSObject {
         }
     }
 
-    /// Cold-boots a clone of `source` until SSH answers, then pauses it and saves its state
+    /// Cold-boots a clone of `source` until its agent answers, then pauses it and saves its state
     /// into the clone's bundle, which every restore run is cloned from.
     private func saveBootedClone(of source: VMBundle) async throws -> VMBundle {
         let bundle = try home.bundle(named: "\(source.name.prefix(40))-saved-\(Self.shortID())")
         clone = bundle
         do {
             let sample = try await measure(source: source, into: bundle, restoring: false)
-            guard sample.ssh != nil, let vm else {
-                throw PaddockError("the clone never answered SSH, so there is no ready state to save")
+            guard sample.agent != nil, let vm else {
+                throw PaddockError("the clone's agent never answered, so there is no ready state to save")
             }
             let saveStarted = ContinuousClock.now
             try await vm.pauseAndSave()
@@ -186,33 +181,25 @@ final class BenchRunner: NSObject {
             report("start", sample.start, "VM configured and running, headless")
         }
 
-        let macAddress = config.macAddress
-        let ip: String
-        if restoring {
-            // The restored guest still holds the lease it had when its state was saved.
-            guard let leased = DHCPLeases.ipAddress(for: macAddress) else {
-                throw PaddockError("no DHCP lease for the saved guest's MAC address \(macAddress)")
-            }
-            ip = leased
-        } else {
-            guard let leased = try await vm.leasedAddress(within: .seconds(settings.leaseTimeout)) else {
-                report("running", nil, "no DHCP lease within \(settings.leaseTimeout) s")
-                return sample
-            }
-            ip = leased
-            sample.running = ContinuousClock.now - bootStarted
-            report("running", sample.running, "guest leased \(ip)")
+        // The agent and the lease don't depend on each other, so wait for both at once.
+        let timeout = Duration.seconds(settings.timeout)
+        async let agentAnswer: (String?, Duration) = {
+            let version = try await vm.agentVersion(within: timeout)
+            return (version, ContinuousClock.now - bootStarted)
+        }()
+        if !restoring {
+            // A restored guest keeps the lease it held when it was saved, so only cold boots wait.
+            let ip = try await vm.leasedAddress(within: timeout)
+            sample.running = ip.map { _ in ContinuousClock.now - bootStarted }
+            report("running", sample.running, ip.map { "guest leased \($0)" } ?? "no DHCP lease within \(settings.timeout) s")
         }
-
-        if try await vm.sshAnswers(at: ip, within: .seconds(settings.sshTimeout)) {
-            sample.ssh = ContinuousClock.now - bootStarted
-            report("ssh", sample.ssh, "sshd answered")
+        let (version, agentTime) = try await agentAnswer
+        if let version {
+            sample.agent = agentTime
+            report("agent", agentTime, "guest agent \(version) answered over vsock")
+            print("  clone to ready: \(DurationFormat.short(sample.clone + agentTime))")
         } else {
-            report("ssh", nil, "no SSH banner within \(settings.sshTimeout) s; turn on Remote Login in '\(source.name)'")
-        }
-
-        if let running = sample.running {
-            print("  clone to running: \(DurationFormat.short(sample.clone + running))")
+            report("agent", nil, "no answer over vsock within \(settings.timeout) s; install the guest agent in '\(source.name)'")
         }
         return sample
     }
@@ -275,7 +262,7 @@ final class BenchRunner: NSObject {
         } else {
             rows += [("start", samples.map(\.start)), ("running", samples.compactMap(\.running))]
         }
-        rows.append(("ssh", samples.compactMap(\.ssh)))
+        rows.append(("agent", samples.compactMap(\.agent)))
         for (step, values) in rows {
             guard let summary = TimingSummary(values) else {
                 report(step, nil, "no successful runs")

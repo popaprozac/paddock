@@ -73,13 +73,37 @@ final class HeadlessVM: NSObject {
         }
     }
 
-    /// Waits for the guest's SSH server to send its banner; false after `timeout`. Checks
-    /// every 250 ms.
-    func sshAnswers(at ip: String, within timeout: Duration) async throws -> Bool {
-        let banner = try await poll(every: .milliseconds(250), for: timeout) {
-            SSHProbe.banner(host: ip, timeout: .seconds(1))
+    /// Waits for the guest agent to answer a health check over vsock and returns the version it
+    /// reports, or nil after `timeout`. Checks every 100 ms. The answer only shows that
+    /// something in the guest is listening; a hostile guest can say anything.
+    func agentVersion(within timeout: Duration) async throws -> String? {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if let failure { throw failure }
+            if let version = await askAgentForHealth() { return version }
+            try await Task.sleep(for: .milliseconds(100))
         }
-        return banner != nil
+        return nil
+    }
+
+    private func askAgentForHealth() async -> String? {
+        guard let device = machine.socketDevices.first as? VZVirtioSocketDevice else { return nil }
+        let fd: Int32? = await withCheckedContinuation { continuation in
+            device.connect(toPort: GuestAgent.port) { result in
+                guard case .success(let connection) = result else {
+                    return continuation.resume(returning: nil)
+                }
+                // Our own descriptor, so the blocking exchange can run off the main actor.
+                let fd = dup(connection.fileDescriptor)
+                connection.close()
+                continuation.resume(returning: fd >= 0 ? fd : nil)
+            }
+        }
+        guard let fd else { return nil }
+        return await Task.detached {
+            defer { close(fd) }
+            return try? GuestAgent.ask(GuestAgent.Request(op: "health"), over: fd).version
+        }.value
     }
 
     /// Runs `probe` off the main actor until it returns a value, the VM stops, or time runs out.
