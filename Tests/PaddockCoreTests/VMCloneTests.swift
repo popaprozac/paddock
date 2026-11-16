@@ -44,6 +44,36 @@ import Virtualization
         #expect(a.macAddress != b.macAddress)
     }
 
+    @Test func keepingSavedStateCopiesItAndKeepsTheIdentity() throws {
+        let tmp = try TemporaryDirectory()
+        let source = try makeSource(in: tmp)
+        try Data("memory".utf8).write(to: source.savedStateURL)
+        let clone = VMBundle(url: tmp.url.appendingPathComponent("vms/clone-1"))
+
+        let config = try VMClone.clone(source, to: clone, keepingSavedState: true)
+
+        #expect(try Data(contentsOf: clone.savedStateURL) == Data("memory".utf8))
+        #expect(config == VMConfigTests.sample)
+        #expect(try clone.readConfig() == config)
+    }
+
+    @Test func plainClonesLeaveSavedStateBehind() throws {
+        let tmp = try TemporaryDirectory()
+        let source = try makeSource(in: tmp)
+        try Data("memory".utf8).write(to: source.savedStateURL)
+        let clone = VMBundle(url: tmp.url.appendingPathComponent("vms/clone-1"))
+        _ = try VMClone.clone(source, to: clone)
+        #expect(!FileManager.default.fileExists(atPath: clone.savedStateURL.path))
+    }
+
+    @Test func keepingSavedStateNeedsOne() throws {
+        let tmp = try TemporaryDirectory()
+        let source = try makeSource(in: tmp)
+        let clone = VMBundle(url: tmp.url.appendingPathComponent("vms/clone-1"))
+        #expect(throws: PaddockError.self) { try VMClone.clone(source, to: clone, keepingSavedState: true) }
+        #expect(!FileManager.default.fileExists(atPath: clone.url.path))
+    }
+
     @Test func writesToTheCloneDoNotReachTheSource() throws {
         let tmp = try TemporaryDirectory()
         let source = try makeSource(in: tmp)

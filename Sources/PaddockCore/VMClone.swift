@@ -11,10 +11,19 @@ public enum VMClone {
     /// milliseconds and almost no space. It fails rather than falling back to a full copy when
     /// the destination is on another volume. The source is locked while cloning, so a VM that
     /// is running can't be cloned mid-write.
+    ///
+    /// With `keepingSavedState`, the clone also gets the source's saved state and keeps its
+    /// machine identifier and MAC address, because the saved memory still holds that identity.
+    /// Such clones can't run at the same time as each other.
     @discardableResult
-    public static func clone(_ source: VMBundle, to destination: VMBundle) throws -> VMConfig {
+    public static func clone(
+        _ source: VMBundle, to destination: VMBundle, keepingSavedState: Bool = false
+    ) throws -> VMConfig {
         guard source.exists else {
             throw PaddockError("no VM '\(source.name)' at \(source.url.path)")
+        }
+        if keepingSavedState, !FileManager.default.fileExists(atPath: source.savedStateURL.path) {
+            throw PaddockError("VM '\(source.name)' has no saved state")
         }
         let lock = try BundleLock(bundle: source)
         defer { withExtendedLifetime(lock) {} }
@@ -24,8 +33,12 @@ public enum VMClone {
         try cloneFile(source.auxiliaryStorageURL, to: staging.bundle.auxiliaryStorageURL)
 
         var config = try source.readConfig()
-        config.machineIdentifier = VZMacMachineIdentifier().dataRepresentation
-        config.macAddress = VZMACAddress.randomLocallyAdministered().string
+        if keepingSavedState {
+            try cloneFile(source.savedStateURL, to: staging.bundle.savedStateURL)
+        } else {
+            config.machineIdentifier = VZMacMachineIdentifier().dataRepresentation
+            config.macAddress = VZMACAddress.randomLocallyAdministered().string
+        }
         try staging.bundle.writeConfig(config)
 
         try staging.commit()

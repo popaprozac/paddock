@@ -77,6 +77,7 @@ for.
   aux.img      Mac auxiliary storage
   config.json  hardware model and machine identifier (base64), MAC address,
                CPU count, memory, disk size, display and the installed macOS build
+  state.vzvmsave  optional saved memory and device state of a paused VM
 ```
 
 ## Limits
