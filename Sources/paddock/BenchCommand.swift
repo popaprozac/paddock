@@ -12,7 +12,7 @@ struct Bench: AsyncParsableCommand {
               start    until Virtualization.framework reports the VM running
               running  until the guest holds a DHCP lease on the NAT network
               ssh      until the guest's SSH server answers; needs Remote Login
-            start, running and ssh count from the moment the clone is asked to start.
+            start, running and ssh count from when paddock begins configuring the clone.
             """)
 
     @Argument(help: "VM to clone and boot, usually the golden image.")

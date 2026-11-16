@@ -57,12 +57,12 @@ mid-write.
 
 ## What bench measures
 
-| Step | From | Until |
-| --- | --- | --- |
-| clone | `clonefile(2)` starts | the clone has a new machine identifier and MAC address |
-| start | the VM configuration is built | Virtualization.framework reports the VM running |
-| running | the VM is asked to start | the guest holds a DHCP lease, read from `/var/db/dhcpd_leases` |
-| ssh | the VM is asked to start | the guest's SSH server sends its banner |
+| Step | What it covers |
+| --- | --- |
+| clone | Locking the source, `clonefile(2)` of the disk and auxiliary storage, writing the new identity and renaming the clone into place. |
+| start | Building and validating the VM configuration, creating the VM and starting it, until Virtualization.framework reports it running. |
+| running | From the same moment as start until the guest holds a DHCP lease in `/var/db/dhcpd_leases`, checked every 100 ms. |
+| ssh | From the same moment as start until the guest's SSH server sends its banner, checked every 250 ms. |
 
 Each run also prints clone to running, the total from cloning to a guest on the network. The
 lease and SSH checks see the guest from the outside without installing anything in it. The next
