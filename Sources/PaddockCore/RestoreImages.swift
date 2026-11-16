@@ -134,17 +134,23 @@ private final class RestoreImageDownload: NSObject, URLSessionDownloadDelegate, 
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        // URLSession deletes `location` when this returns, so move it now. Stage under another
-        // name first: if the move crosses volumes it copies, and a half-copied file must never
-        // look like a cached image.
+        // URLSession deletes `location` when this returns, so move it now. Stage under a hidden,
+        // unique name first: if the move crosses volumes it copies, and a half-copied file must
+        // never look like a cached image.
+        let fileManager = FileManager.default
         do {
             if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 throw PaddockError("download failed: HTTP \(http.statusCode)")
             }
-            let staging = destination.appendingPathExtension("download")
-            try? FileManager.default.removeItem(at: staging)
-            try FileManager.default.moveItem(at: location, to: staging)
-            try FileManager.default.moveItem(at: staging, to: destination)
+            let staging = destination.deletingLastPathComponent()
+                .appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).download")
+            try fileManager.moveItem(at: location, to: staging)
+            do {
+                try fileManager.moveItem(at: staging, to: destination)
+            } catch where fileManager.fileExists(atPath: destination.path) {
+                // Another paddock process finished the same download first; keep its copy.
+                try? fileManager.removeItem(at: staging)
+            }
             finish(.success(()))
         } catch {
             finish(.failure(error))
