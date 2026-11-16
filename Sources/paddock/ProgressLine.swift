@@ -31,7 +31,9 @@ final class ProgressLine: @unchecked Sendable {
         }
     }
 
+    /// Goes through stdio, like `print`, so progress and status lines never interleave out of order.
     private func write(_ text: String) {
-        FileHandle.standardOutput.write(Data(text.utf8))
+        fputs(text, stdout)
+        fflush(stdout)
     }
 }
