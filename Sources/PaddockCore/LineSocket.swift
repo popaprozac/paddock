@@ -25,8 +25,9 @@ public final class LineServer: @unchecked Sendable {
             let client = accept(fd, nil, nil)
             guard client >= 0 else { return }
             UnixSocket.configure(client, readTimeout: 5)
-            // Reading blocks until the client sends its line, so keep it off `queue`.
-            DispatchQueue.global().async {
+            // Reading blocks until the client sends its line, so give it its own thread: blocked
+            // reads on GCD's shared threads stall other work until GCD adds more, slowly.
+            Thread.detachNewThread {
                 guard let line = UnixSocket.readLine(client) else {
                     close(client)
                     return

@@ -24,8 +24,9 @@ import Testing
         var fds: [Int32] = [0, 0]
         try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
         let (host, guest) = (fds[0], fds[1])
+        UnixSocket.configure(guest, readTimeout: nil)  // as LineServer does for real connections
         defer { close(host) }
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             if let line = UnixSocket.readLine(guest), let answer = agent(line) {
                 UnixSocket.writeLine(answer, to: guest)
             }
@@ -79,6 +80,41 @@ import Testing
         let output = answers.compactMap(\.output)
         #expect(output.map(\.count) == [GuestAgent.outputChunk, 9000 - GuestAgent.outputChunk])
         #expect(answers.last == GuestAgent.Response(exit: 0))
+    }
+
+    /// The host's side of run, against the agent's own handler on the far end of a socket pair.
+    @Test func askToRunStreamsOutputAndReturnsTheStatus() throws {
+        var fds: [Int32] = [0, 0]
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        let (host, guest) = (fds[0], fds[1])
+        UnixSocket.configure(guest, readTimeout: nil)  // as LineServer does for real connections
+        defer { close(host) }
+        Thread.detachNewThread {
+            if let line = UnixSocket.readLine(guest) {
+                GuestAgent.handle(line, runAs: nil, responder: Responder(fd: guest))
+            }
+        }
+        var output: [String] = []
+        let status = try GuestAgent.askToRun("echo hi; echo there; exit 4", over: host) { output.append($0) }
+        #expect(output == ["hi", "there"])
+        #expect(status == 4)
+    }
+
+    @Test func askToRunFailsWhenTheAgentStopsEarly() {
+        #expect(throws: PaddockError.self) {
+            var fds: [Int32] = [0, 0]
+            try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+            let (host, guest) = (fds[0], fds[1])
+            UnixSocket.configure(guest, readTimeout: nil)
+        UnixSocket.configure(guest, readTimeout: nil)  // as LineServer does for real connections
+            defer { close(host) }
+            Thread.detachNewThread {
+                _ = UnixSocket.readLine(guest)
+                UnixSocket.writeLine(#"{"output":"half"}"#, to: guest)
+                close(guest)
+            }
+            _ = try GuestAgent.askToRun("anything", over: host) { _ in }
+        }
     }
 
     @Test func runNeedsACommand() throws {

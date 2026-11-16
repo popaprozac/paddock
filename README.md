@@ -72,11 +72,13 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. |
 | `paddock serve <source>` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until its guest agent answers and saves its state; each warm VM is a fresh clone restored from that state. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
 | `paddock acquire` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. |
+| `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
 
-`acquire` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
-owner can open. Each connection carries one line of JSON each way. Only one `serve` can listen
-at a time.
+`acquire`, `exec` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
+owner can open. Each connection carries one request line of JSON and gets one or more answer
+lines back; `exec` streams one per line of output, then the exit status. Only one `serve` can
+listen at a time.
 
 VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned

@@ -86,24 +86,44 @@ final class HeadlessVM: NSObject {
         return nil
     }
 
+    /// Runs `command` in the guest through its agent over vsock, passing each output line to
+    /// `output` as it arrives, and returns the command's exit status.
+    func runInGuest(_ command: String, output: @escaping @Sendable (String) -> Void) async throws -> Int32 {
+        guard let fd = await connectToAgent() else {
+            throw PaddockError("can't reach the guest agent in '\(bundle.name)'")
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            // A command can run for a long time, so it gets its own thread instead of holding
+            // one of Swift concurrency's few threads.
+            Thread.detachNewThread {
+                defer { close(fd) }
+                continuation.resume(with: Result { try GuestAgent.askToRun(command, over: fd, output: output) })
+            }
+        }
+    }
+
     private func askAgentForHealth() async -> String? {
+        guard let fd = await connectToAgent() else { return nil }
+        return await Task.detached {
+            defer { close(fd) }
+            return try? GuestAgent.ask(GuestAgent.Request(op: "health"), over: fd).version
+        }.value
+    }
+
+    /// Opens a vsock connection to the agent and returns a descriptor the caller owns, so the
+    /// blocking exchange can run off the main actor. Nil if nothing in the guest is listening.
+    private func connectToAgent() async -> Int32? {
         guard let device = machine.socketDevices.first as? VZVirtioSocketDevice else { return nil }
-        let fd: Int32? = await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             device.connect(toPort: GuestAgent.port) { result in
                 guard case .success(let connection) = result else {
                     return continuation.resume(returning: nil)
                 }
-                // Our own descriptor, so the blocking exchange can run off the main actor.
                 let fd = dup(connection.fileDescriptor)
                 connection.close()
                 continuation.resume(returning: fd >= 0 ? fd : nil)
             }
         }
-        guard let fd else { return nil }
-        return await Task.detached {
-            defer { close(fd) }
-            return try? GuestAgent.ask(GuestAgent.Request(op: "health"), over: fd).version
-        }.value
     }
 
     /// Runs `probe` off the main actor until it returns a value, the VM stops, or time runs out.

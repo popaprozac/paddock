@@ -136,6 +136,8 @@ final class WarmPool {
             handOut()
         case "release":
             release(request?.vm, responder)
+        case "exec":
+            exec(request?.command, in: request?.vm, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -147,6 +149,25 @@ final class WarmPool {
         assigned = true
         print("Slot 1 assigned: '\(current.name)' at \(warmAddress)")
         waiting.removeFirst().finish(ServeResponse(vm: current.name, ip: warmAddress).line)
+    }
+
+    /// Runs a command in a VM this serve handed out, streaming its output to the caller.
+    private func exec(_ command: String?, in name: String?, _ responder: Responder) {
+        guard assigned, let vm, let current, name == current.name else {
+            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
+        }
+        guard let command, !command.isEmpty else {
+            return responder.finish(ServeResponse(error: "exec needs a command").line)
+        }
+        print("Slot 1: running a command in '\(current.name)'")
+        Task {
+            do {
+                let status = try await vm.runInGuest(command) { responder.send(ServeResponse(output: $0).line) }
+                responder.finish(ServeResponse(exit: status).line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
     }
 
     private func release(_ name: String?, _ responder: Responder) {

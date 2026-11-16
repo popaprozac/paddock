@@ -34,7 +34,7 @@ import Testing
     @Test func streamsManyLinesThenCloses() throws {
         let path = socketPath()
         let server = try LineServer(path: path, queue: queue) { line, responder in
-            DispatchQueue.global().async {
+            Thread.detachNewThread {
                 for index in 1...3 {
                     responder.send("\(line) \(index)")
                 }

@@ -1,5 +1,4 @@
 import Darwin
-import Dispatch
 import Foundation
 
 /// The protocol between the host and paddock-guestd, the agent inside each macOS guest.
@@ -28,6 +27,10 @@ public enum GuestAgent {
         public init(op: String, command: String? = nil) {
             self.op = op
             self.command = command
+        }
+
+        var line: String {
+            (try? JSONEncoder().encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
         }
     }
 
@@ -63,7 +66,8 @@ public enum GuestAgent {
               request.op == "run", let command = request.command else {
             return responder.finish(answer(line))
         }
-        DispatchQueue.global().async {
+        // A command can run for a long time, so it gets its own thread.
+        Thread.detachNewThread {
             let result = run(command, as: user) { responder.send(Response(output: $0).line) }
             responder.finish(result.line)
         }
@@ -131,10 +135,31 @@ public enum GuestAgent {
     /// comes from a guest that may be hostile, so it is size-limited and checked, not trusted.
     public static func ask(_ request: Request, over fd: Int32, timeout seconds: Int = 2) throws -> Response {
         UnixSocket.configure(fd, readTimeout: seconds)
-        UnixSocket.writeLine((try? JSONEncoder().encode(request)).map { String(decoding: $0, as: UTF8.self) } ?? "{}", to: fd)
+        UnixSocket.writeLine(request.line, to: fd)
         guard let answer = UnixSocket.readLine(fd, limit: 4096) else {
             throw PaddockError("the guest agent didn't answer")
         }
+        return try checked(answer)
+    }
+
+    /// Asks the agent over `fd` to run `command`, passes each output line to `output` as it
+    /// arrives and returns the command's exit status. Waits as long as the command runs.
+    public static func askToRun(_ command: String, over fd: Int32, output: (String) -> Void) throws -> Int32 {
+        UnixSocket.configure(fd, readTimeout: nil)
+        UnixSocket.writeLine(Request(op: "run", command: command).line, to: fd)
+        while let answer = UnixSocket.readLine(fd) {
+            let response = try checked(answer)
+            if let exit = response.exit {
+                return exit
+            }
+            if let text = response.output {
+                output(text)
+            }
+        }
+        throw PaddockError("the guest agent stopped answering before the command finished")
+    }
+
+    private static func checked(_ answer: String) throws -> Response {
         guard let response = try? JSONDecoder().decode(Response.self, from: Data(answer.utf8)) else {
             throw PaddockError("unreadable answer from the guest agent")
         }
