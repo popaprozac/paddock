@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build paddock and ad-hoc sign it with the virtualization entitlement.
+# Build paddock and ad-hoc sign it with the virtualization entitlement, and stage the guest
+# agent's files in a 'guest' folder next to it.
 # Usage: scripts/build.sh [debug|release]   (default: release)
 # Prints the path of the signed binary on success.
 set -euo pipefail
@@ -28,5 +29,12 @@ if ! codesign -d --entitlements - "$bin" 2>/dev/null | grep -q com.apple.securit
   echo "error: entitlement missing from $bin" >&2
   exit 1
 fi
+
+# Stage the guest agent with its launchd job and installer, for 'paddock run --share'.
+guest="$(dirname "$bin")/guest"
+rm -rf "$guest"
+mkdir -p "$guest"
+cp "$(dirname "$bin")/paddock-guestd" "$root/guest/paddock.guestd.plist" "$root/guest/install.sh" "$guest/"
+echo "guest agent files: $guest" >&2
 
 echo "$bin"

@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "paddock", targets: ["paddock"]),
+        .executable(name: "paddock-guestd", targets: ["paddock-guestd"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
@@ -19,6 +20,7 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
+        .executableTarget(name: "paddock-guestd", dependencies: ["PaddockCore"]),
         .testTarget(name: "PaddockCoreTests", dependencies: ["PaddockCore"]),
     ]
 )

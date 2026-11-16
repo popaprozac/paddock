@@ -25,6 +25,11 @@ The script builds a release binary, signs it ad hoc with the
 signature and prints the binary's path. Virtualization.framework refuses to start VMs from an
 unsigned binary. Pass `debug` for a debug build. Run the tests with `swift test`.
 
+The script also puts `paddock-guestd`, the agent that runs inside each guest, in a `guest`
+folder next to the binary, with its launchd job and `install.sh`. The agent listens only on
+vsock port 52525 and answers one line of JSON per connection; today the only request is
+`{"op":"health"}`, which returns its version.
+
 ## Make a golden image and benchmark it
 
 ```bash
