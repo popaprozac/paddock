@@ -1,7 +1,7 @@
 import ArgumentParser
 import Darwin
+import Dispatch
 
-@main
 struct Paddock: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "paddock",
@@ -9,20 +9,47 @@ struct Paddock: AsyncParsableCommand {
         version: "0.1.0",
         subcommands: [Install.self, Run.self, Clone.self, Bench.self]
     )
+}
 
-    /// ArgumentParser's async entry point, plus line-buffered stdout so status lines and progress
-    /// stay in order when output goes to a file or a pipe.
-    static func main() async {
+/// Process entry point.
+///
+/// Synchronous commands run straight on the main thread. `run` depends on that: AppKit's event
+/// loop has to own the main thread, because started from inside a Swift task it would hold the
+/// serial main queue that Virtualization.framework callbacks and signal handlers are delivered
+/// on. Async commands run in a task while `dispatchMain()` services the main queue.
+@main
+enum Entry {
+    @MainActor
+    static func main() {
+        // Line-buffer stdout so status lines and progress stay in order in files and pipes.
         setvbuf(stdout, nil, _IOLBF, 0)
+
+        let parsed: any ParsableCommand
         do {
-            var command = try parseAsRoot()
-            if var command = command as? any AsyncParsableCommand {
-                try await command.run()
-            } else {
-                try command.run()
-            }
+            parsed = try Paddock.parseAsRoot()
         } catch {
-            exit(withError: error)
+            Paddock.exit(withError: error)
         }
+
+        guard let asyncCommand = parsed as? any AsyncParsableCommand else {
+            var command = parsed
+            do {
+                try command.run()
+            } catch {
+                Paddock.exit(withError: error)
+            }
+            Paddock.exit()
+        }
+
+        Task.detached {
+            var command = asyncCommand
+            do {
+                try await command.run()
+            } catch {
+                Paddock.exit(withError: error)
+            }
+            Paddock.exit()
+        }
+        dispatchMain()
     }
 }

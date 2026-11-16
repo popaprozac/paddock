@@ -3,7 +3,7 @@ import ArgumentParser
 import PaddockCore
 import Virtualization
 
-struct Run: AsyncParsableCommand {
+struct Run: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Boot a VM in a window, for example to finish Setup Assistant on the golden image.",
         discussion: """
@@ -18,8 +18,10 @@ struct Run: AsyncParsableCommand {
         try BundleName.validate(name)
     }
 
-    func run() async throws {
-        try await VMWindow.show(try PaddockHome.fromEnvironment().bundle(named: name))
+    /// Runs on the main thread before any run loop starts; see `Entry`.
+    func run() throws {
+        let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
+        try MainActor.assumeIsolated { try VMWindow.show(bundle) }
     }
 }
 
