@@ -49,7 +49,7 @@ lines back:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.4.0"}` |
+| `{"op":"health"}` | `{"version":"0.5.0"}` |
 | `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
 | `{"op":"put","name":"...","size":N}` followed by N bytes | `{"exit":0}` once the file is stored |
 | `{"op":"get","name":"..."}` | `{"chunk":n}` followed by n bytes, repeated, then `{"exit":0}` |
@@ -60,6 +60,13 @@ Assistant, in its home folder, with stdin closed. Output lines over 8 KB are spl
 `get` work on files in that account's `~/paddock` folder, named by one plain path component, up
 to 4 GiB; the account itself reads and writes them, never the root agent, and stored files are
 readable only by it. The host refuses a `get` larger than it asked for and deletes a partial file.
+
+When it starts, before the user logs in, the agent copies the user's per-host preferences into
+place for the Mac it runs on. macOS keeps some settings, such as when the screen saver starts,
+per host, in files named after the hardware UUID, and every clone has a new one with its new
+machine identifier, so a clone would otherwise start those settings from macOS's defaults. The
+agent copies, as the user, the newest file of each setting from another UUID, and only where the
+clone has none yet. It logs each one it copies to `/var/log/paddock-guestd.log`.
 
 The folder also holds `paddock-session`, a LaunchAgent that runs in the desktop session of whoever
 logs in to the guest, where the accessibility API can see apps. It listens only on vsock port
@@ -109,8 +116,9 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
    [What a golden image allows](#what-a-golden-image-allows)):
    - Turn on automatic login for the user in System Settings > Users & Groups.
    - Stop sleep and the display turning off: `sudo pmset -a sleep 0 displaysleep 0`.
-   - In System Settings > Lock Screen, set "Start Screen Saver when inactive" and "Require
-     password after screen saver begins or display is turned off" to Never.
+   - Set "Start Screen Saver when inactive" to Never in System Settings > Lock Screen. Clones
+     keep the screen lock on whatever this image says (see [Limits](#limits)), so the screen
+     saver and sleep, which would set it off, must stay off.
    - Allow `paddock-session` in System Settings > Privacy & Security > Accessibility. macOS asks
      when the installer starts it.
    - Add `/usr/local/libexec/paddock-guestd` in System Settings > Privacy & Security > Full Disk
@@ -249,7 +257,7 @@ between a workload and the host, and every VM is wiped when it is released.
 | Setting | What it allows |
 | --- | --- |
 | Automatic login | macOS keeps the account's password in `/etc/kcpassword`, obfuscated but reversible, so anyone with a copy of the image can recover it. |
-| No screen lock, screen saver or sleep | Whoever has the screen has the session: paddock's screenshots and input, by design. |
+| No screen saver or sleep | Whoever has the screen has the session: paddock's screenshots and input, by design. |
 | Accessibility for `paddock-session` | It can read and drive the interface of every app in the session; `axtree` reads only the focused app's. |
 | Full Disk Access for `paddock-guestd` | Commands it runs, through `exec`, `task` and `run_command`, can read and change every file in the guest, other apps' data included. |
 
@@ -378,6 +386,11 @@ Restored clones share one identity, so only one can run at a time.
   address. Each starts with its clock behind by the time since `serve` saved
   the slot's state, until macOS corrects it once the guest's network is back: from Apple's time
   servers on NAT, and from paddock-net on the userspace network.
+- Clones always have macOS's screen lock on, whatever the golden image says: macOS keeps that
+  setting with the machine's identity, which every clone changes, and turning it off takes the
+  user's password. With no screen saver and no sleep nothing sets it off, but anything that
+  starts the screen saver or locks the screen, such as Ctrl-Cmd-Q, locks the session until the
+  password is typed. Release the VM to get a fresh one.
 - Apple's macOS license permits macOS VMs for development and testing.
 
 ## License
