@@ -4,16 +4,17 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
 // dnsHandler answers the guest's DNS queries to the gateway. A name the policy allows gets its
-// IPv4 addresses from the host's resolver; every other name is refused. Nothing the guest asks
-// is passed on to another server, so DNS can't carry data out.
+// IPv4 addresses from the host's resolver; for every other name there is no such name. Nothing
+// the guest asks is passed on to another server, so DNS can't carry data out.
 type dnsHandler struct {
-	policy *policy
+	policy *atomic.Pointer[policy]
 	lookup func(ctx context.Context, host string) ([]net.IP, error)
 	logf   func(format string, args ...any)
 }
@@ -32,9 +33,16 @@ func (h *dnsHandler) answer(r *dns.Msg) *dns.Msg {
 	}
 	q := r.Question[0]
 	name := normalize(q.Name)
-	if q.Qclass != dns.ClassINET || !h.policy.allows(name) {
+	if q.Qclass != dns.ClassINET || !h.policy.Load().allows(name) {
 		h.logf("deny dns %s: not on the list", name)
-		m.Rcode = dns.RcodeRefused
+		// An SOA with a TTL of 0 tells resolvers not to cache the answer (RFC 2308), so a name
+		// denied while the VM sat warm can resolve once a new list allows it. macOS keeps it
+		// about 75 s anyway.
+		m.Rcode = dns.RcodeNameError
+		m.Ns = []dns.RR{&dns.SOA{
+			Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 0},
+			Ns:  "paddock.invalid.", Mbox: "paddock.invalid.", Serial: 1, Refresh: 1, Retry: 1, Expire: 1, Minttl: 0,
+		}}
 		return m
 	}
 	if q.Qtype != dns.TypeA {

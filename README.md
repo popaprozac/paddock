@@ -83,7 +83,7 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
 | `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
-| `paddock acquire` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. |
+| `paddock acquire [--allow names]` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](#the-userspace-network)); `--allow` against a `serve` on NAT fails. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
@@ -118,12 +118,15 @@ isn't at `~/code/paddock/.build/out/Products/Release/paddock` on the other Mac.
 
 With `--userspace`, each VM's network is its own `paddock-net` process instead of macOS's shared
 NAT. It gives the guest 192.168.127.2 by DHCP, with the gateway 192.168.127.1 as its router and
-DNS server, and lets the guest reach only the names on its `-allow` list. paddock doesn't pass a
-list yet, so a guest on the userspace network reaches nothing.
+DNS server, and lets the guest reach only the names on its list. A warm VM's list is empty.
+`paddock acquire --allow github.com,*.githubusercontent.com` puts its list in force before
+`serve` hands the VM out, through `net.sock`, a control socket paddock-net creates in the VM's
+bundle that only you can open; a VM acquired without `--allow` reaches nothing. Releasing the VM
+deletes it with its network. `bench --userspace` passes no list.
 
 | What the guest sends | What paddock-net does |
 | --- | --- |
-| DNS to the gateway | A name on the list gets its IPv4 addresses from the host's resolver and no other records. Any other name gets REFUSED. No query is passed on to another server. |
+| DNS to the gateway | A name on the list gets its IPv4 addresses from the host's resolver and no other records. Any other name has no such name (NXDOMAIN), with an SOA record that says not to cache the answer. No query is passed on to another server. |
 | TCP to port 443 | Reads the server name from the TLS ClientHello. If it is on the list, connects to that name from the host and passes the connection through; the address the guest connected to is ignored. Otherwise closes it. |
 | TCP to port 80 | The same, with the HTTP request's `Host` header. |
 | TCP to any other port | Resets it. |
@@ -133,14 +136,19 @@ An entry `example.com` matches that name only; `*.example.com` matches every nam
 not `example.com` itself. Connections from the host never go to a loopback or link-local address,
 whatever a name resolves to, so the host's own services and EC2's instance metadata stay out of
 reach. Nothing on the host's networks can open a connection to the guest. Each decision is one
-line on paddock-net's stderr, such as `allow github.com:443`, `deny example.com:443: not on the
-list` and `deny dns example.com: not on the list`.
+line on paddock-net's stderr, which is `serve`'s or `bench`'s, such as `now allowing github.com`,
+`allow github.com:443`, `deny example.com:443: not on the list` and `deny dns example.com: not
+on the list`.
 
 paddock-net doesn't decrypt TLS, so a client can name an allowed host in its ClientHello and then
 ask that server for another site it also serves. Only ports 80 and 443 work, so git needs HTTPS
-rather than SSH. HTTP/3 runs over UDP and is dropped; clients fall back to TCP. A restored guest
-asks for about 20 Apple names, `time.apple.com` among them, and is refused, so its clock stays
-behind by the time since its state was saved.
+rather than SSH. HTTP/3 runs over UDP and is dropped; clients fall back to TCP.
+
+A restored guest asks for about 20 Apple names, `time.apple.com` among them, and is refused. Its
+clock isn't corrected, and a macOS guest's clock starts where golden's last shutdown left it:
+in testing, 3.6 hours behind. macOS also keeps a denied name for about 75 s whatever the answer
+says, so a name the warm guest looked up shortly before Assign, such as one of those Apple names,
+can stay unresolvable for that long after its acquire allowed it.
 
 ## What bench measures
 
@@ -181,14 +189,15 @@ Restored clones share one identity, so only one can run at a time.
   config.json  hardware model and machine identifier (base64), MAC address,
                CPU count, memory, disk size, display and the installed macOS build
   state.vzvmsave  optional saved memory and device state of a paused VM
+  net.sock     paddock-net's control socket, while the VM runs on the userspace network
 ```
 
 ## Limits
 
 - macOS allows at most two macOS VMs running at once on one host.
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
-- Networking is macOS's shared NAT, or with `--userspace` a network of each VM's own, which
-  reaches nothing until paddock can pass it a list (see
+- Networking is macOS's shared NAT, or with `--userspace` a network of each VM's own, where a
+  VM reaches only the names its `acquire --allow` listed (see
   [The userspace network](#the-userspace-network)). It moves about 0.35 GB/s against about
   4 GB/s for NAT, measured downloading from the host.
 - On the NAT network, a restored guest's traffic starts flowing 1 to 3 s after the guest

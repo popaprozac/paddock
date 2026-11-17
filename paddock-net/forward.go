@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,7 +31,7 @@ const (
 // HTTP Host header on 80, checks it against the policy and connects to that name itself, so the
 // address the guest connected to never matters. Every other connection is reset.
 type forwarder struct {
-	policy *policy
+	policy *atomic.Pointer[policy]
 	dial   func(ctx context.Context, network, address string) (net.Conn, error)
 	logf   func(format string, args ...any)
 }
@@ -67,7 +68,7 @@ func (f *forwarder) serve(guest net.Conn, address string, port uint16) {
 		f.logf("deny %s:%d: %v", address, port, err)
 		return
 	}
-	if !f.policy.allows(name) {
+	if !f.policy.Load().allows(name) {
 		f.logf("deny %s:%d: not on the list", name, port)
 		return
 	}

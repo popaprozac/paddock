@@ -45,7 +45,7 @@ final class WarmPool {
     private var vm: HeadlessVM?
     private var warmAddress: String?  // set once the current VM's agent answers
     private var assigned = false      // the current VM has been handed out
-    private var waiting: [Responder] = []  // acquires that came in before a VM was warm
+    private var waiting: [(responder: Responder, allow: [String])] = []  // acquires that came in before a VM was warm
     private var emptyReason: String?  // why the slot holds no VM, after a refill failed
     private var server: LineServer?
     private var interrupt: (any DispatchSourceSignal)?
@@ -138,7 +138,11 @@ final class WarmPool {
             if let emptyReason {
                 return responder.finish(ServeResponse(error: "slot 1 is empty: \(emptyReason)").line)
             }
-            waiting.append(responder)
+            let allow = request?.allow ?? []
+            if !allow.isEmpty && !userspaceNetwork {
+                return responder.finish(ServeResponse(error: "--allow needs 'paddock serve --userspace'; the NAT network has no allowlist").line)
+            }
+            waiting.append((responder, allow))
             handOut()
         case "release":
             release(request?.vm, responder)
@@ -151,12 +155,23 @@ final class WarmPool {
         }
     }
 
-    /// Gives the warm VM to the acquire that has waited longest, once there are both.
+    /// Gives the warm VM to the acquire that has waited longest, once there are both, with that
+    /// acquire's list in force on the userspace network. Until then the VM reaches nothing there.
     private func handOut() {
-        guard !assigned, let warmAddress, let current, !waiting.isEmpty else { return }
+        guard !assigned, let warmAddress, let current, let vm, !waiting.isEmpty else { return }
+        let (responder, allow) = waiting.removeFirst()
+        if !allow.isEmpty {
+            do {
+                try vm.allow(allow)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+                return handOut()
+            }
+        }
         assigned = true
-        print("Slot 1 assigned: '\(current.name)' at \(warmAddress)")
-        waiting.removeFirst().finish(ServeResponse(vm: current.name, ip: warmAddress).line)
+        print("Slot 1 assigned: '\(current.name)' at \(warmAddress)"
+            + (allow.isEmpty ? "" : ", allowing \(allow.joined(separator: ", "))"))
+        responder.finish(ServeResponse(vm: current.name, ip: warmAddress).line)
     }
 
     /// Runs a command in a VM this serve handed out, streaming its output to the caller.
@@ -244,7 +259,7 @@ final class WarmPool {
     }
 
     private func answerWaiting(with error: String) {
-        for responder in waiting {
+        for (responder, _) in waiting {
             responder.finish(ServeResponse(error: error).line)
         }
         waiting.removeAll()

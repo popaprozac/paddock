@@ -9,6 +9,7 @@ struct ServeRequest: Codable {
     var command: String?
     var bundle: String?  // task: absolute path of the git bundle to work on
     var result: String?  // task: absolute path to save the result bundle at
+    var allow: [String]?  // acquire: the names the VM may reach on the userspace network
 }
 
 /// serve's one-line answer: the VM and its address, or an error.
@@ -54,11 +55,19 @@ enum ServeClient {
 struct Acquire: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Take the warm VM from paddock serve, waiting while the slot fills.",
-        discussion: "Prints the VM's name and address. Hand it back with 'paddock release <vm>'.")
+        discussion: """
+            Prints the VM's name and address. Hand it back with 'paddock release <vm>'. With \
+            'serve --userspace', the VM reaches only the names given with --allow, and nothing \
+            without it.
+            """)
+
+    @Option(help: "Names the VM may reach, comma-separated, as host.example or *.example (any name under example). Needs 'serve --userspace'.")
+    var allow: String?
 
     func run() throws {
+        let names = allow?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let started = ContinuousClock.now
-        let response = try ServeClient.send(ServeRequest(op: "acquire"))
+        let response = try ServeClient.send(ServeRequest(op: "acquire", allow: names))
         let waited = ContinuousClock.now - started
         print("Assigned '\(response.vm ?? "?")' at \(response.ip ?? "?") in \(DurationFormat.short(waited))")
     }

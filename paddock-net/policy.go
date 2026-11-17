@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 )
 
 // policy is the list of names a guest may reach. "example.com" matches that name only;
@@ -15,8 +16,12 @@ type policy struct {
 
 // parsePolicy reads a comma-separated list of entries.
 func parsePolicy(list string) (*policy, error) {
+	return newPolicy(strings.Split(list, ","))
+}
+
+func newPolicy(entries []string) (*policy, error) {
 	p := &policy{names: map[string]bool{}}
-	for _, entry := range strings.Split(list, ",") {
+	for _, entry := range entries {
 		entry = normalize(entry)
 		if entry == "" {
 			continue
@@ -45,6 +50,13 @@ func (p *policy) allows(name string) bool {
 		}
 	}
 	return false
+}
+
+// holding returns a holder for the policy in force, which paddock replaces at Assign.
+func holding(p *policy) *atomic.Pointer[policy] {
+	var current atomic.Pointer[policy]
+	current.Store(p)
+	return &current
 }
 
 // normalize lowercases a name and drops the trailing dot of a fully qualified one.

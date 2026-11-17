@@ -23,7 +23,10 @@ final class HeadlessVM: NSObject {
     /// this object, instead of macOS's shared NAT.
     init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false) throws {
         lock = try BundleLock(bundle: bundle)
-        network = userspaceNetwork ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress) : nil
+        network = userspaceNetwork
+            ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress,
+                                   controlPath: bundle.url.appendingPathComponent("net.sock").path)
+            : nil
         machine = VZVirtualMachine(configuration: try VMConfiguration.make(
             bundle: bundle, config: config, network: network?.attachment))
         self.bundle = bundle
@@ -69,6 +72,14 @@ final class HeadlessVM: NSObject {
             }
         }
         network?.stop()
+    }
+
+    /// Lets the guest reach only `names`, on the userspace network.
+    func allow(_ names: [String]) throws {
+        guard let network else {
+            throw PaddockError("'\(bundle.name)' is on the NAT network, which has no allowlist")
+        }
+        try network.allow(names)
     }
 
     /// paddock-net, which build.sh puts next to the paddock binary.

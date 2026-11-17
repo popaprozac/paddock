@@ -76,7 +76,7 @@ func forwardOnce(t *testing.T, list string, port uint16, send []byte) (dialed st
 		t.Fatal(err)
 	}
 	f := &forwarder{
-		policy: p,
+		policy: holding(p),
 		logf:   t.Logf,
 		dial: func(_ context.Context, _, address string) (net.Conn, error) {
 			dialed = address

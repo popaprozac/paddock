@@ -16,7 +16,7 @@ func testDNS(t *testing.T) (*dnsHandler, *[]string) {
 	}
 	var looked []string
 	return &dnsHandler{
-		policy: p,
+		policy: holding(p),
 		lookup: func(_ context.Context, host string) ([]net.IP, error) {
 			looked = append(looked, host)
 			if host == "missing.example.org" {
@@ -45,11 +45,15 @@ func TestDNSAnswersAnAllowedNameWithIPv4Only(t *testing.T) {
 	}
 }
 
-func TestDNSRefusesNamesNotOnTheListWithoutAskingTheHost(t *testing.T) {
+func TestDNSDeniesNamesNotOnTheListWithoutAskingTheHost(t *testing.T) {
 	h, looked := testDNS(t)
 	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeTXT, dns.TypeHTTPS} {
-		if m := h.answer(query("secret.attacker.example", qtype)); m.Rcode != dns.RcodeRefused {
-			t.Errorf("type %d: rcode %d, want refused", qtype, m.Rcode)
+		m := h.answer(query("secret.attacker.example", qtype))
+		if m.Rcode != dns.RcodeNameError || len(m.Answer) != 0 {
+			t.Errorf("type %d: rcode %d with %d answers, want no such name", qtype, m.Rcode, len(m.Answer))
+		}
+		if len(m.Ns) != 1 || m.Ns[0].Header().Ttl != 0 || m.Ns[0].(*dns.SOA).Minttl != 0 {
+			t.Errorf("type %d: authority %v, want one SOA that says not to cache", qtype, m.Ns)
 		}
 	}
 	if len(*looked) != 0 {

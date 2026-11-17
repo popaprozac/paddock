@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/services/dhcp"
 	"github.com/containers/gvisor-tap-vsock/pkg/tap"
@@ -33,8 +34,8 @@ const (
 // newNetwork builds the guest's network from gvisor-tap-vsock's switch and DHCP server, with
 // paddock-net's own DNS and TCP handling in place of its forwarders, which would carry anything
 // anywhere. It follows gvisor-tap-vsock's virtualnetwork.New (Apache 2.0). The returned switch
-// accepts the VM's frames.
-func newNetwork(mac string, p *policy, logf func(string, ...any)) (*tap.Switch, error) {
+// accepts the VM's frames; p holds the policy in force.
+func newNetwork(mac string, p *atomic.Pointer[policy], logf func(string, ...any)) (*tap.Switch, error) {
 	ipPool, err := tap.NewIPPool(subnet)
 	if err != nil {
 		return nil, err
