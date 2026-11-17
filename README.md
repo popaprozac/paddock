@@ -105,7 +105,7 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock run <name>` | Boots a VM in a window. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
-| `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
+| `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers too, which means the desktop session is up. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
 | `paddock acquire [--allow names]` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](#the-userspace-network)); `--allow` against a `serve` on NAT fails. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
@@ -153,8 +153,9 @@ about 50 ms, mostly encoding the PNG.
   `serve` that can't reach the window server refuses screenshots.
 - Apple doesn't document that the view keeps its frame as an IOSurface. If a macOS release
   changes that, `screenshot` fails with an error saying what it couldn't find.
-- A VM restored from the slot's state shows a black screen for its first few seconds, because
-  `serve` saves the state before the guest has drawn its login window.
+- The guest sends a frame only when its screen changes, so `serve` attaches each restored VM's
+  display before the VM resumes and draws. A guest that doesn't redraw as it resumes still shows
+  a black screen until its screen next changes: 2 of 10 hand-outs in testing.
 
 ## The userspace network
 
@@ -209,9 +210,11 @@ it.
 | running | From the same moment as start until the guest holds a DHCP lease in `/var/db/dhcpd_leases`, checked every 100 ms. |
 | agent | From the same moment as start until `paddock-guestd` answers a health check over vsock, checked every 100 ms. Runs alongside the lease check. |
 | network | From the same moment as start until the guest reports, through its agent, an IPv4 address on `en0` and an IPv4 DNS server, checked every 100 ms once the agent answers. |
+| session | From the same moment as start until `paddock-session` answers a health check over vsock, checked every 100 ms once the network is up. Only when the source has the helper installed; it starts when the user logs in, so it needs automatic login. |
 
-Each run also prints clone to ready, the total from cloning to the network step. A run whose
-agent never answers or whose network never comes up fails. The lease check reads the host's
+Each run also prints clone to ready, the total from cloning to the last step: session when the
+source has `paddock-session`, network otherwise. A run whose agent never answers or that never
+reaches its last step fails. The lease check reads the host's
 lease file and the agent and network checks go over vsock, so nothing in the guest listens on
 the network for paddock. Each vsock connection gives up after 2 s if Virtualization.framework
 hasn't called back, which now and then it never does, and the next check tries again.
@@ -227,6 +230,7 @@ Each run then clones that saved VM and replaces start and running with:
 | resume | From the same moment as restore until Virtualization.framework reports the VM running. |
 | agent | From the same moment as restore until `paddock-guestd` answers over vsock. The guest keeps the address it leased before it was saved, so there is no running step. |
 | network | From the same moment as restore until the guest reports its IPv4 address and DNS server again. A restored guest renegotiates its network after it resumes, so this comes after the agent answers. Its IPv6 DNS server stays listed throughout, so only IPv4 counts. |
+| session | From the same moment as restore until `paddock-session` answers, as above. |
 
 Restored clones share one identity, so only one can run at a time.
 

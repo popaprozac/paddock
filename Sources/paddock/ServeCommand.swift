@@ -37,6 +37,7 @@ struct Serve: AsyncParsableCommand {
 @MainActor
 final class WarmPool {
     private static let timeout: Duration = .seconds(300)
+    private static let sessionTimeout: Duration = .seconds(120)
 
     private let home = PaddockHome.fromEnvironment()
     private let slotName: String
@@ -50,6 +51,7 @@ final class WarmPool {
     private var server: LineServer?
     private var interrupt: (any DispatchSourceSignal)?
     private var stopping = false
+    private var sessionHelper: Bool?  // whether the source has paddock-session, asked once
 
     static func serve(source: String, userspaceNetwork: Bool) async throws {
         let pool = WarmPool(source: source, userspaceNetwork: userspaceNetwork)
@@ -120,6 +122,9 @@ final class WarmPool {
         let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
         self.vm = vm
         try await vm.restore()
+        // Attached before the guest resumes, the display catches the frames it draws then; a
+        // serve that can't reach the window server just refuses screenshots later.
+        try? vm.attachScreen()
         try await vm.resume()
         let ip = try await waitUntilReady(vm)
         vm.onFailure = { [weak self] error in
@@ -265,16 +270,23 @@ final class WarmPool {
         replaceCurrent()
     }
 
-    /// Waits for the guest agent to answer over vsock and for the guest's network, then returns
-    /// the guest's address for the workload. A restored guest still holds the lease it had when
-    /// its state was saved, so its lease is found at once, but its network comes back about
-    /// 1.5 s after its agent.
+    /// Waits for the guest agent to answer over vsock and for the guest's network, and for
+    /// paddock-session too if the source has it, so the desktop is up; then returns the guest's
+    /// address for the workload. A restored guest still holds the lease it had when its state was
+    /// saved, so its lease is found at once, but its network comes back about 1.5 s after its agent.
     private func waitUntilReady(_ vm: HeadlessVM) async throws -> String {
         guard try await vm.agentVersion(within: Self.timeout) != nil else {
             throw PaddockError("'\(vm.bundle.name)' never answered over vsock; install the guest agent in the golden image")
         }
         guard try await vm.networkReady(within: Self.timeout) else {
             throw PaddockError("'\(vm.bundle.name)' had no IPv4 address and DNS server within \(DurationFormat.short(Self.timeout))")
+        }
+        if sessionHelper == nil {
+            sessionHelper = await vm.hasSessionHelper()
+        }
+        if sessionHelper == true, try await vm.sessionHelperVersion(within: Self.sessionTimeout) == nil {
+            throw PaddockError("'\(vm.bundle.name)' has paddock-session installed, but it didn't answer within "
+                + "\(DurationFormat.short(Self.sessionTimeout)); turn on automatic login in the golden image")
         }
         guard let ip = try await vm.leasedAddress(within: Self.timeout) else {
             throw PaddockError("'\(vm.bundle.name)' got no DHCP lease within \(DurationFormat.short(Self.timeout))")

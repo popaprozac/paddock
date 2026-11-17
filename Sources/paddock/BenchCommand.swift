@@ -13,8 +13,10 @@ struct Bench: AsyncParsableCommand {
               agent    until the guest agent answers a health check over vsock
               network  until the guest says, through its agent, it has an IPv4 address and
                        DNS server
-            start, running, agent and network count from when paddock begins configuring
-            the clone.
+              session  until paddock-session answers in the guest's desktop session, if the
+                       source has it installed
+            start, running, agent, network and session count from when paddock begins
+            configuring the clone.
 
             With --restore, paddock first boots one clone until its agent answers, then
             pauses it and saves its state. Each run clones that saved VM, keeping its
@@ -29,7 +31,7 @@ struct Bench: AsyncParsableCommand {
     @Option(help: "Number of runs.")
     var runs: Int = 1
 
-    @Option(help: "Seconds to wait for each of the guest's DHCP lease, its agent and its network.")
+    @Option(help: "Seconds to wait for each of the guest's DHCP lease, its agent, its network and its session helper.")
     var timeout: Int = 300
 
     @Flag(help: "Restore a saved state in each run instead of cold booting.")
@@ -70,7 +72,12 @@ final class BenchRunner: NSObject {
         var start: Duration     // until the VM runs: started, or resumed after a restore
         var running: Duration?  // cold boots only
         var agent: Duration?    // until the guest agent answers over vsock
-        var network: Duration?  // until the guest has an IPv4 address and DNS server; ready
+        var network: Duration?  // until the guest has an IPv4 address and DNS server
+        var session: Duration?  // until paddock-session answers, when the source has it
+        var expectsSession = false
+
+        /// The last step a guest needs: the session helper if it has one, else the network.
+        var ready: Duration? { expectsSession ? session : network }
     }
 
     private let settings: Settings
@@ -80,6 +87,7 @@ final class BenchRunner: NSObject {
     private var vm: HeadlessVM?
     private var interrupt: (any DispatchSourceSignal)?
     private var aborting = false
+    private var sessionHelper: Bool?  // whether the source has paddock-session, asked once
 
     static func run(_ settings: Settings) async throws {
         let runner = BenchRunner(settings: settings)
@@ -120,8 +128,8 @@ final class BenchRunner: NSObject {
         if samples.count > 1 {
             printSummary(samples)
         }
-        // A guest whose network never came up isn't ready, whatever else it did.
-        if samples.contains(where: { $0.network == nil }) {
+        // A guest that never got to its last step isn't ready, whatever else it did.
+        if samples.contains(where: { $0.ready == nil }) {
             throw ExitCode.failure
         }
     }
@@ -146,7 +154,7 @@ final class BenchRunner: NSObject {
         clone = bundle
         do {
             let sample = try await measure(source: source, into: bundle, restoring: false)
-            guard sample.network != nil, let vm else {
+            guard sample.ready != nil, let vm else {
                 throw PaddockError("the clone never became ready, so there is no ready state to save")
             }
             let saveStarted = ContinuousClock.now
@@ -210,7 +218,21 @@ final class BenchRunner: NSObject {
                 let networkTime = ContinuousClock.now - bootStarted
                 sample.network = networkTime
                 report("network", networkTime, "guest has an IPv4 address and DNS server")
-                print("  clone to ready: \(DurationFormat.short(sample.clone + networkTime))")
+                if sessionHelper == nil {
+                    sessionHelper = await vm.hasSessionHelper()
+                }
+                if sessionHelper == true {
+                    sample.expectsSession = true
+                    if try await vm.sessionHelperVersion(within: timeout) != nil {
+                        sample.session = ContinuousClock.now - bootStarted
+                        report("session", sample.session, "paddock-session answered: the desktop session is up")
+                    } else {
+                        report("session", nil, "paddock-session didn't answer within \(settings.timeout) s; turn on automatic login in '\(source.name)'")
+                    }
+                }
+                if let ready = sample.ready {
+                    print("  clone to ready: \(DurationFormat.short(sample.clone + ready))")
+                }
             } else {
                 report("network", nil, "no IPv4 address and DNS server within \(settings.timeout) s")
             }
@@ -282,6 +304,9 @@ final class BenchRunner: NSObject {
             }
         }
         rows += [("agent", samples.compactMap(\.agent)), ("network", samples.compactMap(\.network))]
+        if samples.contains(where: \.expectsSession) {
+            rows.append(("session", samples.compactMap(\.session)))
+        }
         for (step, values) in rows {
             guard let summary = TimingSummary(values) else {
                 report(step, nil, "no successful runs")

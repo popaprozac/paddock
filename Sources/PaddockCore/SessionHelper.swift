@@ -9,6 +9,8 @@
 public enum SessionHelper {
     public static let port: UInt32 = 52526
     public static let version = "0.1.0"
+    /// Where guest/install.sh puts the helper; a guest with a file there runs it at login.
+    public static let installedPath = "/usr/local/libexec/paddock-session"
 
     /// Asks the helper over `fd` for the focused app's accessibility tree, passing each line of
     /// its JSON to `output`.

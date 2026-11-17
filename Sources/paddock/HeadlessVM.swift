@@ -66,12 +66,21 @@ final class HeadlessVM: NSObject {
 
     private var screen: VMScreen?
 
-    /// The guest's screen as it is now. The first call puts the VM's display in an off-screen
-    /// window and waits up to 5 s for its first frame.
+    /// Puts the VM's display in an off-screen window now, so screenshots have frames to read. The
+    /// guest only sends a frame when its screen changes: a view attached to a guest that has gone
+    /// still shows nothing, so attach before a restored VM resumes and redraws.
+    func attachScreen() throws {
+        if screen == nil {
+            screen = try VMScreen(machine: machine, display: config.display)
+        }
+    }
+
+    /// The guest's screen as it is now, attaching the display first if nothing has; then it
+    /// waits up to 5 s for the first frame.
     func screenshot() async throws -> CGImage {
         if let failure { throw failure }
-        let screen = try self.screen ?? VMScreen(machine: machine, display: config.display)
-        self.screen = screen
+        try attachScreen()
+        guard let screen else { throw PaddockError("'\(bundle.name)' has no screen") }
         let deadline = ContinuousClock.now + .seconds(5)
         while true {
             if let image = try screen.capture() { return image }
@@ -125,10 +134,27 @@ final class HeadlessVM: NSObject {
     /// reports, or nil after `timeout`. Checks every 100 ms. The answer only shows that
     /// something in the guest is listening; a hostile guest can say anything.
     func agentVersion(within timeout: Duration) async throws -> String? {
+        try await version(at: GuestAgent.port, within: timeout)
+    }
+
+    /// Whether the guest has paddock-session installed, asked through its agent.
+    func hasSessionHelper() async -> Bool {
+        (try? await runInGuest("test -x \(SessionHelper.installedPath)", output: { _ in })) == 0
+    }
+
+    /// Waits for paddock-session to answer a health check over vsock and returns its version, or
+    /// nil after `timeout`. It starts when its user logs in to the desktop, so an answer means the
+    /// desktop session is up. Like the agent's, the answer can't be trusted beyond that.
+    func sessionHelperVersion(within timeout: Duration) async throws -> String? {
+        try await version(at: SessionHelper.port, within: timeout)
+    }
+
+    /// Asks the listener on `port` for its version every 100 ms until it answers or `timeout` passes.
+    private func version(at port: UInt32, within timeout: Duration) async throws -> String? {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if let failure { throw failure }
-            if let version = await askAgentForHealth() { return version }
+            if let version = await askForHealth(port: port) { return version }
             try await Task.sleep(for: .milliseconds(100))
         }
         return nil
@@ -192,8 +218,8 @@ final class HeadlessVM: NSObject {
         }
     }
 
-    private func askAgentForHealth() async -> String? {
-        guard let fd = await connectToAgent() else { return nil }
+    private func askForHealth(port: UInt32) async -> String? {
+        guard let fd = await connectToAgent(port: port) else { return nil }
         return await Task.detached {
             defer { close(fd) }
             return try? GuestAgent.ask(GuestAgent.Request(op: "health"), over: fd).version
