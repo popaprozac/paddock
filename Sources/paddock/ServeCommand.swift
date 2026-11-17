@@ -152,6 +152,8 @@ final class WarmPool {
             task(request, responder)
         case "screenshot":
             screenshot(request, responder)
+        case "axtree":
+            accessibilityTree(of: request?.vm, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -211,6 +213,22 @@ final class WarmPool {
                     command, bundle: URL(fileURLWithPath: bundle), result: URL(fileURLWithPath: result)
                 ) { responder.send(ServeResponse(output: $0).line) }
                 responder.finish(ServeResponse(exit: outcome.status, result: outcome.changed ? result : nil).line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
+    }
+
+    /// Streams the accessibility tree of the focused app in a VM this serve handed out.
+    private func accessibilityTree(of name: String?, _ responder: Responder) {
+        guard assigned, let vm, let current, name == current.name else {
+            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
+        }
+        print("Slot 1: reading the accessibility tree of '\(current.name)'")
+        Task {
+            do {
+                try await vm.accessibilityTree { responder.send(ServeResponse(output: $0).line) }
+                responder.finish(ServeResponse(exit: 0).line)
             } catch {
                 responder.finish(ServeResponse(error: error.localizedDescription).line)
             }

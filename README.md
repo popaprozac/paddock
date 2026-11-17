@@ -50,6 +50,22 @@ Assistant, in its home folder, with stdin closed. Output lines over 8 KB are spl
 to 4 GiB; the account itself reads and writes them, never the root agent, and stored files are
 readable only by it. The host refuses a `get` larger than it asked for and deletes a partial file.
 
+The folder also holds `paddock-session`, a LaunchAgent that runs in the desktop session of whoever
+logs in to the guest, where the accessibility API can see apps. It listens only on vsock port
+52526 and speaks the same protocol:
+
+| Request | Answer |
+| --- | --- |
+| `{"op":"health"}` | `{"version":"0.1.0"}` |
+| `{"op":"axtree"}` | `{"output":"..."}` for each line of the focused app's accessibility tree as JSON, then `{"exit":0}` |
+
+Each element of the tree has its role, its subrole, title, value, description and identifier when
+it has them, whether it is enabled and focused, its frame as x, y, width and height in screen
+points from the top left of the display, and its children. Text is cut at 500 characters, and a
+tree stops at 5,000 elements and 50 levels. Reading other apps needs the Accessibility
+permission, which macOS grants per binary: `axtree` fails until paddock-session is allowed in
+System Settings > Privacy & Security > Accessibility.
+
 ## Make a golden image and benchmark it
 
 ```bash
@@ -69,8 +85,15 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
    sudo bash "/Volumes/My Shared Files/install.sh"                # in the guest
    ```
 
-   The installer prints `paddock-guestd is running` when the agent is up.
-3. Optionally turn on automatic login and stop the guest from sleeping, so clones come up ready.
+   The installer prints `paddock-guestd is running` when the agent is up, and
+   `paddock-session is running` when the session helper is.
+3. For screenshots and accessibility trees, give every clone a desktop that stays up:
+   - Turn on automatic login for the user in System Settings > Users & Groups.
+   - Stop sleep and the display turning off: `sudo pmset -a sleep 0 displaysleep 0`.
+   - Turn off the screen lock in System Settings > Lock Screen.
+   - Allow `paddock-session` in System Settings > Privacy & Security > Accessibility. macOS asks
+     when the installer starts it. paddock-session is signed ad hoc, so a rebuilt one needs
+     allowing again.
 4. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
    shut down; doing it a second time forces the VM off.
 
@@ -87,9 +110,10 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
 | `paddock screenshot <vm> [-o file.png]` | Saves the screen of a VM that `acquire` handed out as a PNG, `<vm>.png` in the current folder by default. `serve` reads the VM's framebuffer on this Mac, so the guest grants nothing and runs nothing (see [Screenshots](#screenshots)). |
+| `paddock axtree <vm>` | Prints the accessibility tree of the focused app in a VM that `acquire` handed out, as JSON, from `paddock-session` in the guest. Its frames are in the same coordinates as `paddock screenshot`'s pixels. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
 
-`acquire`, `exec`, `task`, `screenshot` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
+`acquire`, `exec`, `task`, `screenshot`, `axtree` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
 owner can open. Each connection carries one request line of JSON and gets one or more answer
 lines back; `exec` streams one per line of output, then the exit status. Only one `serve` can
 listen at a time.

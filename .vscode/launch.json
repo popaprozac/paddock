@@ -39,6 +39,26 @@
             "target": "paddock-guestd",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release paddock-guestd"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:paddock}",
+            "name": "Debug paddock-session",
+            "target": "paddock-session",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug paddock-session"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:paddock}",
+            "name": "Release paddock-session",
+            "target": "paddock-session",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release paddock-session"
         }
     ]
 }

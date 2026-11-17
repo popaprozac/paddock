@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build paddock and ad-hoc sign it with the virtualization entitlement, and stage the guest
-# agent's files in a 'guest' folder next to it.
+# agent's and session helper's files in a 'guest' folder next to it.
 # Usage: scripts/build.sh [debug|release]   (default: release)
 # Prints the path of the signed binary on success.
 set -euo pipefail
@@ -37,11 +37,22 @@ if ! command -v go >/dev/null; then
 fi
 (cd "$root/paddock-net" && go build -trimpath -o "$(dirname "$bin")/paddock-net" .) >&2
 
+# paddock-session needs Accessibility in the guest, which macOS grants per signature. Signed with
+# a stable certificate, a rebuilt helper keeps the grant; signed ad hoc, every build needs it again.
+identity="${PADDOCK_SIGNING_IDENTITY:-paddock local signing}"
+if security find-identity -p codesigning | grep -qF "\"$identity\""; then
+  codesign --force --sign "$identity" "$(dirname "$bin")/paddock-session" >&2
+else
+  echo "note: no '$identity' code-signing certificate, so paddock-session is signed ad hoc;" \
+    "allow it in golden's Accessibility settings again after every build" >&2
+fi
+
 # Stage the guest agent with its launchd job and installer, for 'paddock run --share'.
 guest="$(dirname "$bin")/guest"
 rm -rf "$guest"
 mkdir -p "$guest"
-cp "$(dirname "$bin")/paddock-guestd" "$root/guest/paddock.guestd.plist" "$root/guest/install.sh" "$guest/"
+cp "$(dirname "$bin")/paddock-guestd" "$(dirname "$bin")/paddock-session" \
+  "$root/guest/paddock.guestd.plist" "$root/guest/paddock.session.plist" "$root/guest/install.sh" "$guest/"
 echo "guest agent files: $guest" >&2
 
 echo "$bin"

@@ -166,12 +166,23 @@ final class HeadlessVM: NSObject {
         try await withAgent { _ = try GuestAgent.askToGet(name, to: url, over: $0) }
     }
 
-    /// Connects to the agent and runs `exchange` on a thread of its own: commands and file
-    /// transfers can take a long time and would otherwise hold one of Swift concurrency's few
-    /// threads.
-    private func withAgent<T: Sendable>(_ exchange: @escaping @Sendable (Int32) throws -> T) async throws -> T {
-        guard let fd = await connectToAgent() else {
-            throw PaddockError("can't reach the guest agent in '\(bundle.name)'")
+    /// Asks paddock-session, in the guest's desktop session, for the focused app's accessibility
+    /// tree, passing each line of its JSON to `output`.
+    func accessibilityTree(output: @escaping @Sendable (String) -> Void) async throws {
+        try await withAgent(port: SessionHelper.port, name: "paddock-session") {
+            try SessionHelper.askForTree(over: $0, output: output)
+        }
+    }
+
+    /// Connects to the agent, or with `port` to another listener in the guest, and runs
+    /// `exchange` on a thread of its own: commands and file transfers can take a long time and
+    /// would otherwise hold one of Swift concurrency's few threads.
+    private func withAgent<T: Sendable>(
+        port: UInt32 = GuestAgent.port, name: String = "the guest agent",
+        _ exchange: @escaping @Sendable (Int32) throws -> T
+    ) async throws -> T {
+        guard let fd = await connectToAgent(port: port) else {
+            throw PaddockError("can't reach \(name) in '\(bundle.name)'")
         }
         return try await withCheckedThrowingContinuation { continuation in
             Thread.detachNewThread {
@@ -189,14 +200,15 @@ final class HeadlessVM: NSObject {
         }.value
     }
 
-    /// Opens a vsock connection to the agent and returns a descriptor the caller owns, so the
-    /// blocking exchange can run off the main actor. Nil if nothing in the guest is listening, or
-    /// if Virtualization.framework hasn't called back within 2 s: now and then it never does.
-    private func connectToAgent() async -> Int32? {
+    /// Opens a vsock connection to the agent, or to `port`, and returns a descriptor the caller
+    /// owns, so the blocking exchange can run off the main actor. Nil if nothing in the guest is
+    /// listening, or if Virtualization.framework hasn't called back within 2 s: now and then it
+    /// never does.
+    private func connectToAgent(port: UInt32 = GuestAgent.port) async -> Int32? {
         guard let device = machine.socketDevices.first as? VZVirtioSocketDevice else { return nil }
         let once = Once()
         return await withCheckedContinuation { continuation in
-            device.connect(toPort: GuestAgent.port) { result in
+            device.connect(toPort: port) { result in
                 MainActor.assumeIsolated {
                     var fd: Int32?
                     if case .success(let connection) = result {

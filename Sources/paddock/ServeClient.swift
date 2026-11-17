@@ -4,7 +4,7 @@ import PaddockCore
 
 /// A request to `paddock serve`, sent as one line of JSON over its socket.
 struct ServeRequest: Codable {
-    var op: String  // "acquire", "release", "exec", "task" or "screenshot"
+    var op: String  // "acquire", "release", "exec", "task", "screenshot" or "axtree"
     var vm: String?
     var command: String?
     var bundle: String?  // task: absolute path of the git bundle to work on
@@ -93,6 +93,34 @@ struct Screenshot: ParsableCommand {
         let started = ContinuousClock.now
         _ = try ServeClient.send(ServeRequest(op: "screenshot", vm: vm, result: url.path))
         print("Saved \(url.path) in \(DurationFormat.short(ContinuousClock.now - started))")
+    }
+}
+
+struct AXTreeCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "axtree",
+        abstract: "Print the accessibility tree of the focused app in a VM that paddock acquire handed out.",
+        discussion: """
+            The tree is JSON: each element has its role, its title, value and description when it \
+            has them, its frame as x, y, width and height in screen points from the top left, and \
+            its children. A point is a pixel of 'paddock screenshot'. It comes from paddock-session, \
+            which must run in the guest's desktop session with Accessibility allowed.
+            """)
+
+    @Argument(help: "VM that 'paddock acquire' printed.")
+    var vm: String
+
+    func validate() throws {
+        try BundleName.validate(vm)
+    }
+
+    func run() throws {
+        try ServeClient.stream(ServeRequest(op: "axtree", vm: vm)) { response in
+            if let output = response.output {
+                print(output)
+            }
+            return response.exit == nil
+        }
     }
 }
 
