@@ -89,15 +89,30 @@ final class HeadlessVM: NSObject {
     /// Runs `command` in the guest through its agent over vsock, passing each output line to
     /// `output` as it arrives, and returns the command's exit status.
     func runInGuest(_ command: String, output: @escaping @Sendable (String) -> Void) async throws -> Int32 {
+        try await withAgent { try GuestAgent.askToRun(command, over: $0, output: output) }
+    }
+
+    /// Copies the file at `url` into the guest agent's files folder as `name`.
+    func putInGuest(_ url: URL, as name: String) async throws {
+        try await withAgent { try GuestAgent.askToPut(url, as: name, over: $0) }
+    }
+
+    /// Copies `name` from the guest agent's files folder to `url`.
+    func getFromGuest(_ name: String, to url: URL) async throws {
+        try await withAgent { _ = try GuestAgent.askToGet(name, to: url, over: $0) }
+    }
+
+    /// Connects to the agent and runs `exchange` on a thread of its own: commands and file
+    /// transfers can take a long time and would otherwise hold one of Swift concurrency's few
+    /// threads.
+    private func withAgent<T: Sendable>(_ exchange: @escaping @Sendable (Int32) throws -> T) async throws -> T {
         guard let fd = await connectToAgent() else {
             throw PaddockError("can't reach the guest agent in '\(bundle.name)'")
         }
         return try await withCheckedThrowingContinuation { continuation in
-            // A command can run for a long time, so it gets its own thread instead of holding
-            // one of Swift concurrency's few threads.
             Thread.detachNewThread {
                 defer { close(fd) }
-                continuation.resume(with: Result { try GuestAgent.askToRun(command, over: fd, output: output) })
+                continuation.resume(with: Result { try exchange(fd) })
             }
         }
     }

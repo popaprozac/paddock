@@ -78,9 +78,10 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock serve <source>` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until its guest agent answers and saves its state; each warm VM is a fresh clone restored from that state. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
 | `paddock acquire` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
+| `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
 
-`acquire`, `exec` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
+`acquire`, `exec`, `task` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
 owner can open. Each connection carries one request line of JSON and gets one or more answer
 lines back; `exec` streams one per line of output, then the exit status. Only one `serve` can
 listen at a time.

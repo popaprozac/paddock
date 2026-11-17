@@ -138,6 +138,8 @@ final class WarmPool {
             release(request?.vm, responder)
         case "exec":
             exec(request?.command, in: request?.vm, responder)
+        case "task":
+            task(request, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -164,6 +166,28 @@ final class WarmPool {
             do {
                 let status = try await vm.runInGuest(command) { responder.send(ServeResponse(output: $0).line) }
                 responder.finish(ServeResponse(exit: status).line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
+    }
+
+    /// Runs a task on a git bundle in a VM this serve handed out; see `HeadlessVM.runTask`.
+    private func task(_ request: ServeRequest?, _ responder: Responder) {
+        guard assigned, let vm, let current, let request, request.vm == current.name else {
+            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
+        }
+        guard let command = request.command, !command.isEmpty,
+              let bundle = request.bundle, bundle.hasPrefix("/"), let result = request.result, result.hasPrefix("/") else {
+            return responder.finish(ServeResponse(error: "task needs a command and absolute bundle and result paths").line)
+        }
+        print("Slot 1: running a task in '\(current.name)'")
+        Task {
+            do {
+                let outcome = try await vm.runTask(
+                    command, bundle: URL(fileURLWithPath: bundle), result: URL(fileURLWithPath: result)
+                ) { responder.send(ServeResponse(output: $0).line) }
+                responder.finish(ServeResponse(exit: outcome.status, result: outcome.changed ? result : nil).line)
             } catch {
                 responder.finish(ServeResponse(error: error.localizedDescription).line)
             }

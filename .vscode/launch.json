@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:paddock}",
+            "name": "Debug paddock",
+            "target": "paddock",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug paddock"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:paddock}",
+            "name": "Release paddock",
+            "target": "paddock",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release paddock"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:paddock}",
+            "name": "Debug paddock-guestd",
+            "target": "paddock-guestd",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug paddock-guestd"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:paddock}",
+            "name": "Release paddock-guestd",
+            "target": "paddock-guestd",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release paddock-guestd"
+        }
+    ]
+}

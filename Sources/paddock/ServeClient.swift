@@ -4,9 +4,11 @@ import PaddockCore
 
 /// A request to `paddock serve`, sent as one line of JSON over its socket.
 struct ServeRequest: Codable {
-    var op: String  // "acquire", "release" or "exec"
+    var op: String  // "acquire", "release", "exec" or "task"
     var vm: String?
     var command: String?
+    var bundle: String?  // task: absolute path of the git bundle to work on
+    var result: String?  // task: absolute path to save the result bundle at
 }
 
 /// serve's one-line answer: the VM and its address, or an error.
@@ -14,7 +16,8 @@ struct ServeResponse: Codable {
     var vm: String?
     var ip: String?
     var output: String?  // exec: one line of the command's output
-    var exit: Int32?     // exec: the command's exit status, last
+    var exit: Int32?     // exec and task: the command's exit status, last
+    var result: String?  // task: where the bundle of new commits was saved, if there are any
     var error: String?
 
     var line: String {
@@ -110,6 +113,63 @@ struct Exec: ParsableCommand {
         guard let status else {
             throw PaddockError("paddock serve closed the connection before the command finished")
         }
+        if status != 0 {
+            throw ExitCode(status)
+        }
+    }
+}
+
+struct RunTask: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "task",
+        abstract: "Run a command on a git branch in a VM that paddock acquire handed out.",
+        discussion: """
+            The bundle must hold the branch with HEAD, as 'git bundle create in.bundle HEAD' \
+            makes it. paddock copies it into the guest over vsock, clones it, runs the command \
+            in the clone and commits whatever the command changed, as paddock. If the branch \
+            gained commits, they are saved as a bundle at --result, ready for \
+            'git fetch <result> HEAD:<branch>'. paddock exits with the command's status.
+            """)
+
+    @Argument(help: "VM that 'paddock acquire' printed.")
+    var vm: String
+
+    @Option(help: "Git bundle of the branch to work on.")
+    var bundle: String
+
+    @Option(help: "Where to save a bundle of the new commits.")
+    var result: String
+
+    @Argument(parsing: .postTerminator, help: "Command to run in the clone, after --.")
+    var command: [String] = []
+
+    func validate() throws {
+        try BundleName.validate(vm)
+        guard !command.isEmpty else { throw ValidationError("give the command after --") }
+        guard FileManager.default.fileExists(atPath: bundle) else { throw ValidationError("no bundle at \(bundle)") }
+    }
+
+    func run() throws {
+        let request = ServeRequest(
+            op: "task", vm: vm, command: command.joined(separator: " "),
+            bundle: URL(fileURLWithPath: bundle).standardizedFileURL.path,
+            result: URL(fileURLWithPath: result).standardizedFileURL.path)
+        var last: ServeResponse?
+        try ServeClient.stream(request) { response in
+            if let output = response.output {
+                print(output)
+            }
+            if response.exit != nil {
+                last = response
+            }
+            return last == nil
+        }
+        guard let last, let status = last.exit else {
+            throw PaddockError("paddock serve closed the connection before the task finished")
+        }
+        // stdout carries the command's output, so the summary goes to stderr.
+        let summary = last.result.map { "New commits saved to \($0)" } ?? "No changes"
+        FileHandle.standardError.write(Data((summary + "\n").utf8))
         if status != 0 {
             throw ExitCode(status)
         }
