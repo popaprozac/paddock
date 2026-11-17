@@ -86,9 +86,10 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock acquire [--allow names]` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](#the-userspace-network)); `--allow` against a `serve` on NAT fails. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
+| `paddock screenshot <vm> [-o file.png]` | Saves the screen of a VM that `acquire` handed out as a PNG, `<vm>.png` in the current folder by default. `serve` reads the VM's framebuffer on this Mac, so the guest grants nothing and runs nothing (see [Screenshots](#screenshots)). |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
 
-`acquire`, `exec`, `task` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
+`acquire`, `exec`, `task`, `screenshot` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
 owner can open. Each connection carries one request line of JSON and gets one or more answer
 lines back; `exec` streams one per line of output, then the exit status. Only one `serve` can
 listen at a time.
@@ -113,6 +114,23 @@ The script bundles `HEAD`, copies it over one SSH connection, runs `acquire`, `t
 VM, which wipes it, and removes its temporary files even when the command fails, then exits with
 the command's status. Uncommitted changes stay where they are. Set `PADDOCK_REMOTE` if paddock
 isn't at `~/code/paddock/.build/out/Products/Release/paddock` on the other Mac.
+
+## Screenshots
+
+`paddock screenshot` reads a VM's screen on the host, not in the guest. `serve` attaches a
+`VZVirtualMachineView` to the VM, in a borderless window it places off every display, and copies
+the frame that the view's framebuffer view keeps as an IOSurface. The guest needs no Screen
+Recording permission, and paddock opens no listener and asks for no permission on the host. A
+frame is the VM's display at its size in pixels, 1920×1200 by default, with the mouse pointer.
+The first screenshot of a VM attaches the view and took about 150 ms in testing; later ones took
+about 50 ms, mostly encoding the PNG.
+
+- `serve` needs the window server for this, so start it from a logged-in session on the Mac. A
+  `serve` that can't reach the window server refuses screenshots.
+- Apple doesn't document that the view keeps its frame as an IOSurface. If a macOS release
+  changes that, `screenshot` fails with an error saying what it couldn't find.
+- A VM restored from the slot's state shows a black screen for its first few seconds, because
+  `serve` saves the state before the guest has drawn its login window.
 
 ## The userspace network
 

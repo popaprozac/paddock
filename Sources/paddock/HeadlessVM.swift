@@ -64,8 +64,28 @@ final class HeadlessVM: NSObject {
         }
     }
 
+    private var screen: VMScreen?
+
+    /// The guest's screen as it is now. The first call puts the VM's display in an off-screen
+    /// window and waits up to 5 s for its first frame.
+    func screenshot() async throws -> CGImage {
+        if let failure { throw failure }
+        let screen = try self.screen ?? VMScreen(machine: machine, display: config.display)
+        self.screen = screen
+        let deadline = ContinuousClock.now + .seconds(5)
+        while true {
+            if let image = try screen.capture() { return image }
+            guard ContinuousClock.now < deadline else {
+                throw PaddockError("'\(bundle.name)' showed no frame within 5 s")
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     /// Forces the VM off without letting the guest shut down.
     func stop() async {
+        screen?.close()
+        screen = nil
         if machine.canStop {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 machine.stop { _ in continuation.resume() }

@@ -4,11 +4,11 @@ import PaddockCore
 
 /// A request to `paddock serve`, sent as one line of JSON over its socket.
 struct ServeRequest: Codable {
-    var op: String  // "acquire", "release", "exec" or "task"
+    var op: String  // "acquire", "release", "exec", "task" or "screenshot"
     var vm: String?
     var command: String?
     var bundle: String?  // task: absolute path of the git bundle to work on
-    var result: String?  // task: absolute path to save the result bundle at
+    var result: String?  // task and screenshot: absolute path to save the result at
     var allow: [String]?  // acquire: the names the VM may reach on the userspace network
 }
 
@@ -70,6 +70,29 @@ struct Acquire: ParsableCommand {
         let response = try ServeClient.send(ServeRequest(op: "acquire", allow: names))
         let waited = ContinuousClock.now - started
         print("Assigned '\(response.vm ?? "?")' at \(response.ip ?? "?") in \(DurationFormat.short(waited))")
+    }
+}
+
+struct Screenshot: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Save the screen of a VM that paddock acquire handed out, as a PNG.",
+        discussion: "serve reads the VM's framebuffer on this Mac; the guest grants nothing and runs nothing.")
+
+    @Argument(help: "VM that 'paddock acquire' printed.")
+    var vm: String
+
+    @Option(name: .shortAndLong, help: "Where to save the PNG. Defaults to <vm>.png in the current folder.")
+    var output: String?
+
+    func validate() throws {
+        try BundleName.validate(vm)
+    }
+
+    func run() throws {
+        let url = URL(fileURLWithPath: output ?? "\(vm).png").standardizedFileURL
+        let started = ContinuousClock.now
+        _ = try ServeClient.send(ServeRequest(op: "screenshot", vm: vm, result: url.path))
+        print("Saved \(url.path) in \(DurationFormat.short(ContinuousClock.now - started))")
     }
 }
 

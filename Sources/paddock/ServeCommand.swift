@@ -150,6 +150,8 @@ final class WarmPool {
             exec(request?.command, in: request?.vm, responder)
         case "task":
             task(request, responder)
+        case "screenshot":
+            screenshot(request, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -209,6 +211,27 @@ final class WarmPool {
                     command, bundle: URL(fileURLWithPath: bundle), result: URL(fileURLWithPath: result)
                 ) { responder.send(ServeResponse(output: $0).line) }
                 responder.finish(ServeResponse(exit: outcome.status, result: outcome.changed ? result : nil).line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
+    }
+
+    /// Saves the screen of a VM this serve handed out as a PNG at the request's result path.
+    private func screenshot(_ request: ServeRequest?, _ responder: Responder) {
+        guard assigned, let vm, let current, let request, request.vm == current.name else {
+            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
+        }
+        guard let path = request.result, path.hasPrefix("/") else {
+            return responder.finish(ServeResponse(error: "screenshot needs an absolute path to save the PNG at").line)
+        }
+        print("Slot 1: saving the screen of '\(current.name)'")
+        Task {
+            do {
+                let image = try await vm.screenshot()
+                // Encoding takes about 70 ms; keep it off the main actor.
+                try await Task.detached { try FrameImage.writePNG(image, to: URL(fileURLWithPath: path)) }.value
+                responder.finish(ServeResponse(result: path).line)
             } catch {
                 responder.finish(ServeResponse(error: error.localizedDescription).line)
             }
