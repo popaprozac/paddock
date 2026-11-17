@@ -209,12 +209,16 @@ final class WarmPool {
         replaceCurrent()
     }
 
-    /// Waits for the guest agent to answer over vsock, then returns the guest's address on the
-    /// NAT network for the workload. A restored guest still holds the lease it had when its
-    /// state was saved, so its lease is found at once.
+    /// Waits for the guest agent to answer over vsock and for the guest's network, then returns
+    /// the guest's address for the workload. A restored guest still holds the lease it had when
+    /// its state was saved, so its lease is found at once, but its network comes back about
+    /// 1.5 s after its agent.
     private func waitUntilReady(_ vm: HeadlessVM) async throws -> String {
         guard try await vm.agentVersion(within: Self.timeout) != nil else {
             throw PaddockError("'\(vm.bundle.name)' never answered over vsock; install the guest agent in the golden image")
+        }
+        guard try await vm.networkReady(within: Self.timeout) else {
+            throw PaddockError("'\(vm.bundle.name)' had no IPv4 address and DNS server within \(DurationFormat.short(Self.timeout))")
         }
         guard let ip = try await vm.leasedAddress(within: Self.timeout) else {
             throw PaddockError("'\(vm.bundle.name)' got no DHCP lease within \(DurationFormat.short(Self.timeout))")

@@ -103,6 +103,22 @@ final class HeadlessVM: NSObject {
         return nil
     }
 
+    /// Waits until the guest says, through its agent, that it has an IPv4 address and an IPv4
+    /// DNS server, or returns false after `timeout`. Checks every 100 ms. A restored guest
+    /// renegotiates its network after it resumes, so its agent answers before it can reach
+    /// anything; its IPv6 DNS server stays listed through the restore, so only IPv4 counts. The
+    /// answer only decides when the guest is handed out, so a guest that lies hurts only itself.
+    func networkReady(within timeout: Duration) async throws -> Bool {
+        let check = "ipconfig getifaddr en0 >/dev/null && scutil --dns | grep -qE 'nameserver\\[[0-9]+\\] : [0-9.]+$'"
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if let failure { throw failure }
+            if (try? await runInGuest(check, output: { _ in })) == 0 { return true }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+    }
+
     /// Runs `command` in the guest through its agent over vsock, passing each output line to
     /// `output` as it arrives, and returns the command's exit status.
     func runInGuest(_ command: String, output: @escaping @Sendable (String) -> Void) async throws -> Int32 {

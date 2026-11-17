@@ -11,7 +11,10 @@ struct Bench: AsyncParsableCommand {
               start    until Virtualization.framework reports the VM running
               running  until the guest holds a DHCP lease on the NAT network
               agent    until the guest agent answers a health check over vsock
-            start, running and agent count from when paddock begins configuring the clone.
+              network  until the guest says, through its agent, it has an IPv4 address and
+                       DNS server
+            start, running, agent and network count from when paddock begins configuring
+            the clone.
 
             With --restore, paddock first boots one clone until its agent answers, then
             pauses it and saves its state. Each run clones that saved VM, keeping its
@@ -26,7 +29,7 @@ struct Bench: AsyncParsableCommand {
     @Option(help: "Number of runs.")
     var runs: Int = 1
 
-    @Option(help: "Seconds to wait for the guest's DHCP lease and for its agent.")
+    @Option(help: "Seconds to wait for each of the guest's DHCP lease, its agent and its network.")
     var timeout: Int = 300
 
     @Flag(help: "Restore a saved state in each run instead of cold booting.")
@@ -67,6 +70,7 @@ final class BenchRunner: NSObject {
         var start: Duration     // until the VM runs: started, or resumed after a restore
         var running: Duration?  // cold boots only
         var agent: Duration?    // until the guest agent answers over vsock
+        var network: Duration?  // until the guest has an IPv4 address and DNS server; ready
     }
 
     private let settings: Settings
@@ -116,8 +120,8 @@ final class BenchRunner: NSObject {
         if samples.count > 1 {
             printSummary(samples)
         }
-        // A guest whose agent never answered isn't ready, whatever else it did.
-        if samples.contains(where: { $0.agent == nil }) {
+        // A guest whose network never came up isn't ready, whatever else it did.
+        if samples.contains(where: { $0.network == nil }) {
             throw ExitCode.failure
         }
     }
@@ -142,8 +146,8 @@ final class BenchRunner: NSObject {
         clone = bundle
         do {
             let sample = try await measure(source: source, into: bundle, restoring: false)
-            guard sample.agent != nil, let vm else {
-                throw PaddockError("the clone's agent never answered, so there is no ready state to save")
+            guard sample.network != nil, let vm else {
+                throw PaddockError("the clone never became ready, so there is no ready state to save")
             }
             let saveStarted = ContinuousClock.now
             try await vm.pauseAndSave()
@@ -202,7 +206,14 @@ final class BenchRunner: NSObject {
         if let version {
             sample.agent = agentTime
             report("agent", agentTime, "guest agent \(version) answered over vsock")
-            print("  clone to ready: \(DurationFormat.short(sample.clone + agentTime))")
+            if try await vm.networkReady(within: timeout) {
+                let networkTime = ContinuousClock.now - bootStarted
+                sample.network = networkTime
+                report("network", networkTime, "guest has an IPv4 address and DNS server")
+                print("  clone to ready: \(DurationFormat.short(sample.clone + networkTime))")
+            } else {
+                report("network", nil, "no IPv4 address and DNS server within \(settings.timeout) s")
+            }
         } else {
             report("agent", nil, "no answer over vsock within \(settings.timeout) s; install the guest agent in '\(source.name)'")
         }
@@ -270,7 +281,7 @@ final class BenchRunner: NSObject {
                 rows.append(("running", samples.compactMap(\.running)))
             }
         }
-        rows.append(("agent", samples.compactMap(\.agent)))
+        rows += [("agent", samples.compactMap(\.agent)), ("network", samples.compactMap(\.network))]
         for (step, values) in rows {
             guard let summary = TimingSummary(values) else {
                 report(step, nil, "no successful runs")
