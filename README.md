@@ -90,6 +90,23 @@ VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned
 mid-write.
 
+## Run a task from another Mac
+
+`scripts/run-on-studio.sh` runs a command in a fresh VM on another Mac, on the current repo's
+last commit, and brings what it commits back as a local branch. It needs only `git` and `ssh` on
+the Mac you run it from. The other Mac needs Remote Login on for your account, `paddock serve`
+running, and the Command Line Tools in its golden image for `git`.
+
+```bash
+scripts/run-on-studio.sh you@studio.local -- 'swift test'
+```
+
+The script bundles `HEAD`, copies it over one SSH connection, runs `acquire`, `task` and
+`release` on the other Mac, and fetches any new commits as `paddock/<date-time>`. It releases the
+VM, which wipes it, and removes its temporary files even when the command fails, then exits with
+the command's status. Uncommitted changes stay where they are. Set `PADDOCK_REMOTE` if paddock
+isn't at `~/code/paddock/.build/out/Products/Release/paddock` on the other Mac.
+
 ## What bench measures
 
 | Step | What it covers |
