@@ -32,6 +32,9 @@ struct Bench: AsyncParsableCommand {
     @Flag(help: "Restore a saved state in each run instead of cold booting.")
     var restore = false
 
+    @Flag(help: "Give each VM its own userspace network (paddock-net) instead of the shared NAT.")
+    var userspace = false
+
     @Flag(help: "Keep each clone, and the saved VM with --restore, instead of deleting them.")
     var keep = false
 
@@ -43,7 +46,7 @@ struct Bench: AsyncParsableCommand {
 
     func run() async throws {
         try await BenchRunner.run(.init(
-            source: source, runs: runs, timeout: timeout, restore: restore, keep: keep))
+            source: source, runs: runs, timeout: timeout, restore: restore, userspace: userspace, keep: keep))
     }
 }
 
@@ -54,6 +57,7 @@ final class BenchRunner: NSObject {
         var runs: Int
         var timeout: Int
         var restore: Bool
+        var userspace: Bool
         var keep: Bool
     }
 
@@ -88,7 +92,7 @@ final class BenchRunner: NSObject {
         let config = try source.readConfig()
         let os = config.os.map { "macOS \($0.version) (\($0.build))" } ?? "macOS"
         print("""
-            Benchmarking \(settings.restore ? "restores of " : "")'\(source.name)': \(os), \(config.cpuCount) CPUs, \(config.memorySize >> 30) GB memory, \
+            Benchmarking \(settings.restore ? "restores of " : "")'\(source.name)'\(settings.userspace ? " on userspace networks" : ""): \(os), \(config.cpuCount) CPUs, \(config.memorySize >> 30) GB memory, \
             \(settings.runs) run\(settings.runs == 1 ? "" : "s")
             """)
         interrupt = onInterrupt { [weak self] in self?.abort() }
@@ -163,7 +167,7 @@ final class BenchRunner: NSObject {
         report("clone", cloneTime, "APFS clone '\(bundle.name)', MAC \(config.macAddress)")
 
         let bootStarted = ContinuousClock.now
-        let vm = try HeadlessVM(bundle: bundle, config: config)
+        let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: settings.userspace)
         self.vm = vm
         var restoreTime: Duration?
         if restoring {
@@ -187,8 +191,9 @@ final class BenchRunner: NSObject {
             let version = try await vm.agentVersion(within: timeout)
             return (version, ContinuousClock.now - bootStarted)
         }()
-        if !restoring {
-            // A restored guest keeps the lease it held when it was saved, so only cold boots wait.
+        if !restoring && !settings.userspace {
+            // A restored guest keeps the lease it held when it was saved, so only cold boots wait;
+            // paddock-net's DHCP runs inside it, out of sight of the host's lease file.
             let ip = try await vm.leasedAddress(within: timeout)
             sample.running = ip.map { _ in ContinuousClock.now - bootStarted }
             report("running", sample.running, ip.map { "guest leased \($0)" } ?? "no DHCP lease within \(settings.timeout) s")
@@ -260,7 +265,10 @@ final class BenchRunner: NSObject {
         if settings.restore {
             rows += [("restore", samples.compactMap(\.restore)), ("resume", samples.map(\.start))]
         } else {
-            rows += [("start", samples.map(\.start)), ("running", samples.compactMap(\.running))]
+            rows.append(("start", samples.map(\.start)))
+            if !settings.userspace {
+                rows.append(("running", samples.compactMap(\.running)))
+            }
         }
         rows.append(("agent", samples.compactMap(\.agent)))
         for (step, values) in rows {

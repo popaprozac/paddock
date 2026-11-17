@@ -8,8 +8,10 @@ import Virtualization
 public enum VMConfiguration {
     /// `sharing` mounts a host folder read-only in the guest at `/Volumes/My Shared Files`.
     /// Only `run` uses it, to carry files such as the guest agent into the golden image.
+    /// `network` replaces macOS's shared NAT with another attachment, such as a
+    /// `UserspaceNetwork`'s; a saved state restores only into the same kind it was saved with.
     public static func make(
-        bundle: VMBundle, config: VMConfig, sharing directory: URL? = nil
+        bundle: VMBundle, config: VMConfig, sharing directory: URL? = nil, network attachment: VZNetworkDeviceAttachment? = nil
     ) throws -> VZVirtualMachineConfiguration {
         let configuration = VZVirtualMachineConfiguration()
         configuration.platform = try platform(bundle: bundle, config: config)
@@ -35,7 +37,7 @@ public enum VMConfiguration {
         configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk)]
 
         let network = VZVirtioNetworkDeviceConfiguration()
-        network.attachment = VZNATNetworkDeviceAttachment()
+        network.attachment = attachment ?? VZNATNetworkDeviceAttachment()
         network.macAddress = try macAddress(from: config.macAddress)
         configuration.networkDevices = [network]
 

@@ -18,12 +18,15 @@ struct Serve: AsyncParsableCommand {
     @Argument(help: "VM to clone, usually the golden image, with the guest agent installed.")
     var source: String
 
+    @Flag(help: "Give the slot's VMs their own userspace network (paddock-net) instead of the shared NAT.")
+    var userspace = false
+
     func validate() throws {
         try BundleName.validate(source)
     }
 
     func run() async throws {
-        try await WarmPool.serve(source: source)
+        try await WarmPool.serve(source: source, userspaceNetwork: userspace)
     }
 }
 
@@ -48,14 +51,17 @@ final class WarmPool {
     private var interrupt: (any DispatchSourceSignal)?
     private var stopping = false
 
-    static func serve(source: String) async throws {
-        let pool = WarmPool(source: source)
+    static func serve(source: String, userspaceNetwork: Bool) async throws {
+        let pool = WarmPool(source: source, userspaceNetwork: userspaceNetwork)
         defer { withExtendedLifetime(pool) {} }
         try await pool.run(source: source)
     }
 
-    private init(source: String) {
+    private let userspaceNetwork: Bool
+
+    private init(source: String, userspaceNetwork: Bool) {
         slotName = "\(source.prefix(40))-slot1-\(Self.shortID())"
+        self.userspaceNetwork = userspaceNetwork
     }
 
     /// Prepares the slot, fills it and serves until Ctrl-C, which exits the process.
@@ -88,7 +94,7 @@ final class WarmPool {
         let bundle = try home.bundle(named: "\(slotName)-saved")
         current = bundle
         let config = try VMClone.clone(source, to: bundle)
-        let vm = try HeadlessVM(bundle: bundle, config: config)
+        let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
         self.vm = vm
         try await vm.start()
         let ip = try await waitUntilReady(vm)
@@ -111,7 +117,7 @@ final class WarmPool {
         let bundle = try home.bundle(named: "\(slotName)-\(Self.shortID())")
         current = bundle
         let config = try VMClone.clone(saved, to: bundle, keepingSavedState: true)
-        let vm = try HeadlessVM(bundle: bundle, config: config)
+        let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
         self.vm = vm
         try await vm.restore()
         try await vm.resume()

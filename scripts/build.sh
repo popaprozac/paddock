@@ -30,6 +30,13 @@ if ! codesign -d --entitlements - "$bin" 2>/dev/null | grep -q com.apple.securit
   exit 1
 fi
 
+# paddock-net, each VM's userspace network stack, is Go and sits next to paddock.
+if ! command -v go >/dev/null; then
+  echo "error: paddock-net needs Go (https://go.dev/dl)" >&2
+  exit 1
+fi
+(cd "$root/paddock-net" && go build -trimpath -o "$(dirname "$bin")/paddock-net" .) >&2
+
 # Stage the guest agent with its launchd job and installer, for 'paddock run --share'.
 guest="$(dirname "$bin")/guest"
 rm -rf "$guest"

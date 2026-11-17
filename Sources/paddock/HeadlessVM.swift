@@ -12,15 +12,20 @@ final class HeadlessVM: NSObject {
     let bundle: VMBundle
     let config: VMConfig
     private let lock: BundleLock
+    private let network: UserspaceNetwork?
     private let machine: VZVirtualMachine
     /// Set once the guest shuts down or the VM stops with an error; the waits below throw it.
     private(set) var failure: PaddockError?
     /// Called when `failure` is set, for a VM that nothing is waiting on.
     var onFailure: ((PaddockError) -> Void)?
 
-    init(bundle: VMBundle, config: VMConfig) throws {
+    /// With `userspaceNetwork`, the VM's network is its own paddock-net process, which stops with
+    /// this object, instead of macOS's shared NAT.
+    init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false) throws {
         lock = try BundleLock(bundle: bundle)
-        machine = VZVirtualMachine(configuration: try VMConfiguration.make(bundle: bundle, config: config))
+        network = userspaceNetwork ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress) : nil
+        machine = VZVirtualMachine(configuration: try VMConfiguration.make(
+            bundle: bundle, config: config, network: network?.attachment))
         self.bundle = bundle
         self.config = config
         super.init()
@@ -58,15 +63,27 @@ final class HeadlessVM: NSObject {
 
     /// Forces the VM off without letting the guest shut down.
     func stop() async {
-        guard machine.canStop else { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            machine.stop { _ in continuation.resume() }
+        if machine.canStop {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                machine.stop { _ in continuation.resume() }
+            }
         }
+        network?.stop()
+    }
+
+    /// paddock-net, which build.sh puts next to the paddock binary.
+    private static var helperURL: URL {
+        URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+            .deletingLastPathComponent().appendingPathComponent("paddock-net")
     }
 
     /// Waits for the guest's DHCP lease on the NAT network and returns its address, or nil
     /// after `timeout`. Checks every 100 ms.
     func leasedAddress(within timeout: Duration) async throws -> String? {
+        // paddock-net's DHCP always gives the guest the same address.
+        if network != nil {
+            return UserspaceNetwork.guestIP
+        }
         let macAddress = config.macAddress
         return try await poll(every: .milliseconds(100), for: timeout) {
             DHCPLeases.ipAddress(for: macAddress)

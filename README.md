@@ -10,6 +10,8 @@ usable. It has no Tart or Lume dependency.
 
 - An Apple silicon Mac running macOS 14 or later.
 - Swift 6 from Xcode or the Command Line Tools.
+- Go, for `paddock-net`. Its dependencies need Go 1.26; with an older Go installed, Go fetches
+  1.26 itself on the first build.
 - Disk space for one restore image (about 26 GB for macOS 27) plus the golden VM's disk. The disk
   is sparse, so a fresh install takes about 25 GB of its nominal 80 GB. Delete the cached image
   in `~/.paddock/cache/ipsw` once installed if space is tight; `install` downloads it again.
@@ -24,6 +26,11 @@ The script builds a release binary, signs it ad hoc with the
 `com.apple.security.virtualization` entitlement from `paddock.entitlements`, checks the
 signature and prints the binary's path. Virtualization.framework refuses to start VMs from an
 unsigned binary. Pass `debug` for a debug build. Run the tests with `swift test`.
+
+The script also builds `paddock-net` next to the binary: each VM's userspace network stack,
+when `bench` or `serve` runs with `--userspace`. It is Go, on
+[gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock), with its module in
+`paddock-net/`. Run its checks with `go vet ./...` there.
 
 The script also puts `paddock-guestd`, the agent that runs inside each guest, in a `guest`
 folder next to the binary, with its launchd job and `install.sh`. The agent listens only on
@@ -74,8 +81,8 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name>` | Boots a VM in a window. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
-| `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. |
-| `paddock serve <source>` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until its guest agent answers and saves its state; each warm VM is a fresh clone restored from that state. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
+| `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
+| `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until its guest agent answers and saves its state; each warm VM is a fresh clone restored from that state. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
 | `paddock acquire` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
@@ -148,7 +155,13 @@ Restored clones share one identity, so only one can run at a time.
 
 - macOS allows at most two macOS VMs running at once on one host.
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
-- Networking is NAT only.
+- Networking is macOS's shared NAT, or with `--userspace` a network of each VM's own: one
+  `paddock-net` process per VM gives the guest 192.168.127.2 by DHCP, DNS through the host and
+  outbound TCP and UDP through the host's sockets, with no way to the host's own services and
+  nothing able to connect in. It moves about 0.36 GB/s against about 4 GB/s for NAT, measured
+  downloading from the host, and has no allowlist yet.
+- A restored guest's network comes back about 1.5 s after the guest agent answers, on either
+  network, so the first commands in a freshly handed-out VM can find no network.
 - Every clone has a new MAC address, so every boot takes a new lease from macOS's DHCP server,
   which keeps leases for a day. The NAT network has about 250 addresses, so a few hundred clone
   boots in one day exhaust it and new guests get no address. Shorten the lease time if you
