@@ -75,6 +75,28 @@ final class HeadlessVM: NSObject {
         }
     }
 
+    /// Clicks in the guest through its virtual pointer, at its screen pixels from the top left.
+    func click(x: Int, y: Int, button: VMScreen.MouseButton, count: Int) throws {
+        try drivenScreen().click(x: x, y: y, button: button, count: count)
+    }
+
+    /// Presses keys on the guest's virtual keyboard.
+    func press(_ strokes: [KeyStroke]) async throws {
+        try await drivenScreen().press(strokes)
+    }
+
+    /// Scrolls in the guest by lines at its screen pixels from the top left.
+    func scroll(x: Int, y: Int, down: Int, right: Int) throws {
+        try drivenScreen().scroll(x: x, y: y, down: down, right: right)
+    }
+
+    private func drivenScreen() throws -> VMScreen {
+        if let failure { throw failure }
+        try attachScreen()
+        guard let screen else { throw PaddockError("'\(bundle.name)' has no screen") }
+        return screen
+    }
+
     /// The guest's screen as it is now, attaching the display first if nothing has; then it
     /// waits up to 5 s for the first frame.
     func screenshot() async throws -> CGImage {

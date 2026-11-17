@@ -10,7 +10,8 @@ Tart or Lume dependency. On one Mac it can:
   the next one in about 6 s;
 - run commands and git tasks in a guest through an agent that listens only on vsock;
 - limit a guest's network to the names its session allows;
-- read a guest's screen on the host, and its accessibility tree in the guest.
+- read a guest's screen on the host, and its accessibility tree in the guest;
+- click, type, press keys and scroll in a guest from the host.
 
 There is no control plane yet: each Mac runs its own `paddock serve`.
 
@@ -120,12 +121,16 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
 | `paddock screenshot <vm> [-o file.png]` | Saves the screen of a VM that `acquire` handed out as a PNG, `<vm>.png` in the current folder by default. `serve` reads the VM's framebuffer on this Mac, so the guest grants nothing and runs nothing (see [Screenshots](#screenshots)). |
 | `paddock axtree <vm>` | Prints the accessibility tree of the focused app in a VM that `acquire` handed out, as JSON, from `paddock-session` in the guest. Its frames are in the same coordinates as `paddock screenshot`'s pixels. |
+| `paddock click <vm> <x> <y> [--right] [--double]` | Clicks at a point of the guest's screen, in pixels from the top left, as in `paddock screenshot` (see [Input](#input)). |
+| `paddock type <vm> <text>` | Types text into whatever has the keyboard focus in the guest, as key presses. |
+| `paddock key <vm> <combination>...` | Presses key combinations in turn, such as `cmd+s`, `cmd+shift+z` or `return`. |
+| `paddock scroll <vm> <x> <y> [--down n] [--up n] [--right n] [--left n]` | Scrolls by about n lines at a point of the guest's screen. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
 
-`acquire`, `exec`, `task`, `screenshot`, `axtree` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
-owner can open. Each connection carries one request line of JSON and gets one or more answer
-lines back; `exec` streams one per line of output, then the exit status. Only one `serve` can
-listen at a time.
+These commands reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its owner can
+open. Each connection carries one request line of JSON and gets one or more answer lines back;
+`exec` streams one per line of output, then the exit status. Only one `serve` can listen at a
+time.
 
 VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned
@@ -165,6 +170,26 @@ about 50 ms, mostly encoding the PNG.
 - The guest sends a frame only when its screen changes, so `serve` attaches each restored VM's
   display before the VM resumes and draws. A guest that doesn't redraw as it resumes still shows
   a black screen until its screen next changes: 2 of 10 hand-outs in testing.
+
+## Input
+
+`click`, `type`, `key` and `scroll` drive the guest from the host. `serve` sends mouse and
+keyboard events to the `VZVirtualMachineView` it attaches for screenshots, and the guest gets them
+from its virtual pointer and keyboard, so the guest grants nothing and runs nothing for them. A
+command returns once its events are sent, not once the guest has acted on them; read the screen
+or the accessibility tree to see the result.
+
+- `type` and `key` press keys of a US keyboard, so the guest must use a US keyboard layout for
+  text to come out as typed, and `type` refuses characters a US keyboard can't type, such as
+  `é`. Apps still apply their own changes: TextEdit turns straight quotes into curly ones.
+- A combination for `key` is modifiers and one key joined by `+`: modifiers are `cmd`, `ctrl`,
+  `opt` and `shift`, and the key is a character, `plus` for `+`, or one of `return`, `tab`,
+  `space`, `delete`, `forwarddelete`, `escape`, `left`, `right`, `up`, `down`, `home`, `end`,
+  `pageup`, `pagedown` and `f1` to `f12`.
+- Keys go at about 100 characters a second. The guest drops keys that go down and up much
+  faster: typing 500 characters with no pause between key events, 163 arrived in testing.
+- `scroll` directions are the content's with macOS's default natural scrolling. A golden image
+  that turns natural scrolling off scrolls the other way.
 
 ## The userspace network
 
@@ -280,6 +305,10 @@ Restored clones share one identity, so only one can run at a time.
   address. Each starts with its clock behind by the time since `serve` saved
   the slot's state, until macOS corrects it once the guest's network is back: from Apple's time
   servers on NAT, and from paddock-net on the userspace network.
+- A VM can be handed out while loginwindow is still finishing the login: it covers the screen
+  with a snapshot of the desktop until the Dock reports the desktop ready, which took 3 s to over
+  20 s in testing. Until then screenshots show the snapshot, and a click lands on loginwindow,
+  which keeps the keyboard focus afterwards.
 - Apple's macOS license permits macOS VMs for development and testing.
 
 ## License

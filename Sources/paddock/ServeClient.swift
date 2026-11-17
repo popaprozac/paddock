@@ -4,12 +4,27 @@ import PaddockCore
 
 /// A request to `paddock serve`, sent as one line of JSON over its socket.
 struct ServeRequest: Codable {
-    var op: String  // "acquire", "release", "exec", "task", "screenshot" or "axtree"
+    var op: String  // "acquire", "release", "exec", "task", "screenshot", "axtree" or "input"
     var vm: String?
     var command: String?
     var bundle: String?  // task: absolute path of the git bundle to work on
     var result: String?  // task and screenshot: absolute path to save the result at
     var allow: [String]?  // acquire: the names the VM may reach on the userspace network
+    var input: InputAction?  // input: what to send to the VM's pointer or keyboard
+}
+
+/// One piece of input for a VM, sent with the "input" request. Coordinates are the guest's screen
+/// pixels from the top left, as in screenshots and accessibility frames.
+struct InputAction: Codable {
+    var kind: String  // "click", "type", "key" or "scroll"
+    var x: Int?
+    var y: Int?
+    var button: String?  // click: "left", the default, or "right"
+    var count: Int?      // click: how many in a row, 1 to 3
+    var text: String?    // type: characters a US keyboard types
+    var keys: [String]?  // key: combinations such as "cmd+s", pressed in order
+    var down: Int?       // scroll: lines toward the end of the content; negative scrolls up
+    var right: Int?      // scroll: lines toward the right; negative scrolls left
 }
 
 /// serve's one-line answer: the VM and its address, or an error.
@@ -122,6 +137,108 @@ struct AXTreeCommand: ParsableCommand {
             return response.exit == nil
         }
     }
+}
+
+/// The input commands: each sends one input request to serve for a VM it handed out.
+private func sendInput(_ vm: String, _ action: InputAction) throws {
+    _ = try ServeClient.send(ServeRequest(op: "input", vm: vm, input: action))
+}
+
+private let inputDiscussion = """
+    The input goes to the VM's virtual pointer and keyboard from the host, so the guest grants \
+    nothing, and it is sent before the guest has acted on it.
+    """
+
+private let pointerDiscussion = """
+    Coordinates are the guest's screen pixels from the top left, the same as in \
+    'paddock screenshot' and the frames 'paddock axtree' prints. \(inputDiscussion)
+    """
+
+struct Click: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Click in a VM that paddock acquire handed out.", discussion: pointerDiscussion)
+
+    @Argument(help: "VM that 'paddock acquire' printed.") var vm: String
+    @Argument(help: "Pixels from the left of the guest's screen.") var x: Int
+    @Argument(help: "Pixels from the top of the guest's screen.") var y: Int
+    @Flag(help: "Click the right button.") var right = false
+    @Flag(help: "Click twice in a row.") var double = false
+
+    func validate() throws { try BundleName.validate(vm) }
+
+    func run() throws {
+        try sendInput(vm, InputAction(kind: "click", x: x, y: y, button: right ? "right" : "left", count: double ? 2 : 1))
+    }
+}
+
+struct TypeText: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "type",
+        abstract: "Type text into a VM that paddock acquire handed out, as key presses.",
+        discussion: """
+            The text goes to whatever has the keyboard focus in the guest, at about 100 \
+            characters a second. Only characters a US keyboard types work, and the guest must \
+            use a US keyboard layout for them to come out as typed. \(inputDiscussion)
+            """)
+
+    @Argument(help: "VM that 'paddock acquire' printed.") var vm: String
+    @Argument(help: "Text to type.") var text: String
+
+    func validate() throws {
+        try BundleName.validate(vm)
+        do { _ = try KeyInput.strokes(typing: text) } catch let error as PaddockError { throw ValidationError(error.message) }
+    }
+
+    func run() throws { try sendInput(vm, InputAction(kind: "type", text: text)) }
+}
+
+struct Key: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Press key combinations in a VM that paddock acquire handed out.",
+        discussion: """
+            Each combination is modifiers and one key joined by +, such as cmd+s, cmd+shift+z, \
+            return or escape, pressed in order. Modifiers are cmd, ctrl, opt and shift; keys are \
+            characters a US keyboard types, plus for +, or return, tab, space, delete, \
+            forwarddelete, escape, left, right, up, down, home, end, pageup, pagedown and f1 to f12. \
+            \(inputDiscussion)
+            """)
+
+    @Argument(help: "VM that 'paddock acquire' printed.") var vm: String
+    @Argument(help: "Key combinations, such as cmd+s.") var combinations: [String]
+
+    func validate() throws {
+        try BundleName.validate(vm)
+        guard !combinations.isEmpty else { throw ValidationError("give at least one key combination, such as cmd+s") }
+        for combination in combinations {
+            do { _ = try KeyInput.stroke(combination) } catch let error as PaddockError { throw ValidationError(error.message) }
+        }
+    }
+
+    func run() throws { try sendInput(vm, InputAction(kind: "key", keys: combinations)) }
+}
+
+struct Scroll: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Scroll in a VM that paddock acquire handed out.",
+        discussion: """
+            Directions are the content's, as with macOS's default natural scrolling; a guest that \
+            turns natural scrolling off scrolls the other way. \(pointerDiscussion)
+            """)
+
+    @Argument(help: "VM that 'paddock acquire' printed.") var vm: String
+    @Argument(help: "Pixels from the left of the guest's screen.") var x: Int
+    @Argument(help: "Pixels from the top of the guest's screen.") var y: Int
+    @Option(help: "Lines to scroll down.") var down = 0
+    @Option(help: "Lines to scroll up.") var up = 0
+    @Option(help: "Lines to scroll right.") var right = 0
+    @Option(help: "Lines to scroll left.") var left = 0
+
+    func validate() throws {
+        try BundleName.validate(vm)
+        guard [down, up, right, left].allSatisfy({ $0 >= 0 }) else { throw ValidationError("give lines as positive numbers") }
+    }
+
+    func run() throws { try sendInput(vm, InputAction(kind: "scroll", x: x, y: y, down: down - up, right: right - left)) }
 }
 
 struct Release: ParsableCommand {

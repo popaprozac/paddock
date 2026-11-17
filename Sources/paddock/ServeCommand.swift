@@ -159,6 +159,8 @@ final class WarmPool {
             screenshot(request, responder)
         case "axtree":
             accessibilityTree(of: request?.vm, responder)
+        case "input":
+            input(request, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -233,6 +235,50 @@ final class WarmPool {
         Task {
             do {
                 try await vm.accessibilityTree { responder.send(ServeResponse(output: $0).line) }
+                responder.finish(ServeResponse(exit: 0).line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
+    }
+
+    /// Sends a click, text, key combinations or a scroll to a VM this serve handed out, through
+    /// its virtual pointer and keyboard. Answers once the input is sent, before the guest has acted
+    /// on it.
+    private func input(_ request: ServeRequest?, _ responder: Responder) {
+        guard assigned, let vm, let current, let request, request.vm == current.name else {
+            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
+        }
+        Task {
+            do {
+                guard let action = request.input else { throw PaddockError("input needs an action") }
+                switch action.kind {
+                case "click":
+                    guard let x = action.x, let y = action.y else { throw PaddockError("click needs x and y") }
+                    guard let button = VMScreen.MouseButton(rawValue: action.button ?? "left") else {
+                        throw PaddockError("click's button is left or right")
+                    }
+                    let count = action.count ?? 1
+                    guard (1...3).contains(count) else { throw PaddockError("click's count is 1 to 3") }
+                    try vm.click(x: x, y: y, button: button, count: count)
+                case "type":
+                    guard let text = action.text, (1...10_000).contains(text.count) else {
+                        throw PaddockError("type needs text of 1 to 10,000 characters")
+                    }
+                    try await vm.press(KeyInput.strokes(typing: text))
+                case "key":
+                    guard let keys = action.keys, (1...100).contains(keys.count) else {
+                        throw PaddockError("key needs 1 to 100 key combinations")
+                    }
+                    try await vm.press(keys.map(KeyInput.stroke))
+                case "scroll":
+                    guard let x = action.x, let y = action.y else { throw PaddockError("scroll needs x and y") }
+                    let down = action.down ?? 0, right = action.right ?? 0
+                    guard abs(down) <= 1000, abs(right) <= 1000 else { throw PaddockError("scroll is at most 1,000 lines") }
+                    try vm.scroll(x: x, y: y, down: down, right: right)
+                default:
+                    throw PaddockError("input is click, type, key or scroll")
+                }
                 responder.finish(ServeResponse(exit: 0).line)
             } catch {
                 responder.finish(ServeResponse(error: error.localizedDescription).line)
