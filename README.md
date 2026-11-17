@@ -28,9 +28,9 @@ signature and prints the binary's path. Virtualization.framework refuses to star
 unsigned binary. Pass `debug` for a debug build. Run the tests with `swift test`.
 
 The script also builds `paddock-net` next to the binary: each VM's userspace network stack,
-when `bench` or `serve` runs with `--userspace`. It is Go, on
-[gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock), with its module in
-`paddock-net/`. Run its checks with `go vet ./...` there.
+when `bench` or `serve` runs with `--userspace` (see [The userspace network](#the-userspace-network)).
+It is Go, on [gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock), with its module
+in `paddock-net/`. Run its checks with `go vet ./...` and `go test ./...` there.
 
 The script also puts `paddock-guestd`, the agent that runs inside each guest, in a `guest`
 folder next to the binary, with its launchd job and `install.sh`. The agent listens only on
@@ -114,6 +114,34 @@ VM, which wipes it, and removes its temporary files even when the command fails,
 the command's status. Uncommitted changes stay where they are. Set `PADDOCK_REMOTE` if paddock
 isn't at `~/code/paddock/.build/out/Products/Release/paddock` on the other Mac.
 
+## The userspace network
+
+With `--userspace`, each VM's network is its own `paddock-net` process instead of macOS's shared
+NAT. It gives the guest 192.168.127.2 by DHCP, with the gateway 192.168.127.1 as its router and
+DNS server, and lets the guest reach only the names on its `-allow` list. paddock doesn't pass a
+list yet, so a guest on the userspace network reaches nothing.
+
+| What the guest sends | What paddock-net does |
+| --- | --- |
+| DNS to the gateway | A name on the list gets its IPv4 addresses from the host's resolver and no other records. Any other name gets REFUSED. No query is passed on to another server. |
+| TCP to port 443 | Reads the server name from the TLS ClientHello. If it is on the list, connects to that name from the host and passes the connection through; the address the guest connected to is ignored. Otherwise closes it. |
+| TCP to port 80 | The same, with the HTTP request's `Host` header. |
+| TCP to any other port | Resets it. |
+| Anything else | Drops it: UDP other than DNS and DHCP to the gateway, so DNS sent to any other server too, and ICMP. |
+
+An entry `example.com` matches that name only; `*.example.com` matches every name under it, but
+not `example.com` itself. Connections from the host never go to a loopback or link-local address,
+whatever a name resolves to, so the host's own services and EC2's instance metadata stay out of
+reach. Nothing on the host's networks can open a connection to the guest. Each decision is one
+line on paddock-net's stderr, such as `allow github.com:443`, `deny example.com:443: not on the
+list` and `deny dns example.com: not on the list`.
+
+paddock-net doesn't decrypt TLS, so a client can name an allowed host in its ClientHello and then
+ask that server for another site it also serves. Only ports 80 and 443 work, so git needs HTTPS
+rather than SSH. HTTP/3 runs over UDP and is dropped; clients fall back to TCP. A restored guest
+asks for about 20 Apple names, `time.apple.com` among them, and is refused, so its clock stays
+behind by the time since its state was saved.
+
 ## What bench measures
 
 | Step | What it covers |
@@ -159,11 +187,10 @@ Restored clones share one identity, so only one can run at a time.
 
 - macOS allows at most two macOS VMs running at once on one host.
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
-- Networking is macOS's shared NAT, or with `--userspace` a network of each VM's own: one
-  `paddock-net` process per VM gives the guest 192.168.127.2 by DHCP, DNS through the host and
-  outbound TCP and UDP through the host's sockets, with no way to the host's own services and
-  nothing able to connect in. It moves about 0.36 GB/s against about 4 GB/s for NAT, measured
-  downloading from the host, and has no allowlist yet.
+- Networking is macOS's shared NAT, or with `--userspace` a network of each VM's own, which
+  reaches nothing until paddock can pass it a list (see
+  [The userspace network](#the-userspace-network)). It moves about 0.35 GB/s against about
+  4 GB/s for NAT, measured downloading from the host.
 - On the NAT network, a restored guest's traffic starts flowing 1 to 3 s after the guest
   reports its address and DNS server, so the first network request in a freshly handed-out VM
   can stall that long: the first DNS lookup took 0.8 to 2.0 s in testing, later ones about

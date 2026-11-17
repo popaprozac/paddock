@@ -2,60 +2,52 @@
 //
 // Its stdin is a datagram socket carrying the VM's Ethernet frames, one per datagram, the way
 // Virtualization.framework's file-handle network attachment sends them. It answers DHCP with a
-// fixed address, resolves DNS through the host and carries the guest's outbound TCP and UDP
-// through the host's own sockets. It gives the guest no way to the host's own services, and
-// nothing on the host's networks can open a connection to the guest. It exits when the paddock
-// process that started it does.
+// fixed address and lets the guest reach only the names on its -allow list: DNS answers those
+// names and refuses the rest, and TCP to ports 80 and 443 is carried out through the host's own
+// sockets to the name the guest asks for, if it is on the list. Everything else the guest sends
+// goes nowhere. Nothing on the host's networks can open a connection to the guest. It logs each
+// decision to stderr and exits when the paddock process that started it does.
 package main
 
 import (
 	"context"
 	"flag"
+	stdlog "log"
 	"net"
 	"os"
 	"time"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
-	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	log "github.com/sirupsen/logrus"
-)
-
-// The guest's address; paddock's UserspaceNetwork.guestIP must match.
-const (
-	subnet     = "192.168.127.0/24"
-	gatewayIP  = "192.168.127.1"
-	gatewayMAC = "5a:94:ef:e4:0c:dd"
-	guestIP    = "192.168.127.2"
 )
 
 func main() {
 	mac := flag.String("mac", "", "the guest's MAC address, which DHCP gives "+guestIP)
+	allow := flag.String("allow", "", "comma-separated names the guest may reach, as host.example or *.example; none without it")
 	flag.Parse()
 	if _, err := net.ParseMAC(*mac); err != nil {
-		log.Fatalf("paddock-net: -mac: %v", err)
+		stdlog.Fatalf("paddock-net: -mac: %v", err)
 	}
-	log.SetLevel(log.WarnLevel)
-
-	network, err := virtualnetwork.New(&types.Configuration{
-		MTU:               1500,
-		Subnet:            subnet,
-		GatewayIP:         gatewayIP,
-		GatewayMacAddress: gatewayMAC,
-		DHCPStaticLeases:  map[string]string{guestIP: *mac},
-		Protocol:          types.VfkitProtocol,
-	})
+	p, err := parsePolicy(*allow)
 	if err != nil {
-		log.Fatalf("paddock-net: %v", err)
+		stdlog.Fatalf("paddock-net: -allow: %v", err)
+	}
+	log.SetLevel(log.WarnLevel) // gvisor-tap-vsock's own logging
+
+	logf := stdlog.New(os.Stderr, "paddock-net: ", stdlog.LstdFlags).Printf
+	networkSwitch, err := newNetwork(*mac, p, logf)
+	if err != nil {
+		stdlog.Fatalf("paddock-net: %v", err)
 	}
 	conn, err := net.FileConn(os.NewFile(0, "vm"))
 	if err != nil {
-		log.Fatalf("paddock-net: stdin must be the VM's datagram socket: %v", err)
+		stdlog.Fatalf("paddock-net: stdin must be the VM's datagram socket: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go exitWithParent(cancel)
-	if err := network.AcceptVfkit(ctx, conn); err != nil && ctx.Err() == nil {
-		log.Fatalf("paddock-net: %v", err)
+	if err := networkSwitch.Accept(ctx, conn, types.VfkitProtocol); err != nil && ctx.Err() == nil {
+		stdlog.Fatalf("paddock-net: %v", err)
 	}
 }
 
