@@ -11,6 +11,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
+        // The official MCP SDK, for `paddock mcp`. Pinned exactly: it is pre-1.0 and changes its API.
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk", exact: "0.12.1"),
     ],
     targets: [
         .target(name: "PaddockCore"),
@@ -19,6 +21,7 @@ let package = Package(
             dependencies: [
                 "PaddockCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
         .executableTarget(name: "paddock-guestd", dependencies: ["PaddockCore"]),

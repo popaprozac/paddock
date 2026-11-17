@@ -7,7 +7,7 @@ import SystemConfiguration
 /// The agent listens only on vsock, so nothing on the VM network can reach it. Each
 /// connection carries one request line of JSON and gets one or more answer lines back:
 ///
-///     {"op":"health"}                       ->  {"version":"0.3.1"}
+///     {"op":"health"}                       ->  {"version":"0.5.0"}
 ///     {"op":"run","command":"ls"}           ->  {"output":"..."} per line, then {"exit":0}
 ///     {"op":"put","name":"a","size":N} + N bytes  ->  {"exit":0}
 ///     {"op":"get","name":"a"}               ->  {"chunk":n} + n bytes, repeated, then {"exit":0}
@@ -20,7 +20,7 @@ import SystemConfiguration
 public enum GuestAgent {
     /// The vsock port the agent listens on inside the guest.
     public static let port: UInt32 = 52525
-    public static let version = "0.4.0"
+    public static let version = "0.5.0"
 
     /// Output lines longer than this are split, so every answer line stays well under the
     /// 64 KB a reader accepts even after JSON escaping.
@@ -123,11 +123,11 @@ public enum GuestAgent {
     /// Runs `command` with stdin closed, passes its combined stdout and stderr to `output` as
     /// lines, all those that arrive together at once, and returns its exit status, or an error if
     /// it couldn't start.
-    static func run(_ command: String, as user: String?, output: ([String]) -> Void) -> Response {
+    static func run(_ command: String, shell: [String]? = nil, as user: String?, output: ([String]) -> Void) -> Response {
         let pipe = Pipe()
         let process: Process
         do {
-            process = try launch(user == nil ? ["/bin/zsh", "-c", command] : ["/bin/zsh", "-lc", command], as: user) {
+            process = try launch((shell ?? (user == nil ? ["/bin/zsh", "-c"] : ["/bin/zsh", "-lc"])) + [command], as: user) {
                 $0.standardOutput = pipe
                 $0.standardError = pipe
             }
@@ -160,6 +160,29 @@ public enum GuestAgent {
         }
         process.waitUntilExit()
         return Response(exit: process.terminationStatus)
+    }
+
+    /// Copies the workload user's per-host preferences from the Mac the image was set up on to
+    /// this one, and returns a line for each it copied. macOS keeps settings such as the screen
+    /// saver's per host, under the hardware UUID, which every clone changes with its machine
+    /// identifier, so a clone would otherwise start from macOS's defaults. Each setting comes from
+    /// its newest file, and only where this Mac has none yet, so the agent, which starts before
+    /// the user logs in, never overwrites one the clone has made. It runs as the user, with no
+    /// shell startup files, so root never writes in the user's folder.
+    public static func carryHostPreferences(for user: String) -> [String] {
+        let script = #"""
+            uuid=$(ioreg -rd1 -c IOPlatformExpertDevice | awk -F'"' '/IOPlatformUUID/{print $4}')
+            [[ -n $uuid ]] && cd ~/Library/Preferences/ByHost 2>/dev/null || exit 0
+            pattern='^(.+)\.([0-9A-F-]{36})\.plist$'
+            for file in *.plist(Nom); do
+              [[ $file =~ $pattern && ! -e $match[1].$uuid.plist ]] || continue
+              cp -p $file $match[1].$uuid.plist && print "carried $match[1] from ${match[2]%%-*}"
+            done
+            """#
+        var lines: [String] = []
+        let result = run(script, shell: ["/bin/zsh", "-fc"], as: user) { lines += $0 }
+        if let error = result.error { lines.append(error) }
+        return lines
     }
 
     /// What the host waits for before handing the guest out: "network" once en0 has an IPv4

@@ -10,7 +10,9 @@ Tart or Lume dependency. On one Mac it can:
   the next one in about 6 s;
 - run commands and git tasks in a guest through an agent that listens only on vsock;
 - limit a guest's network to the names its session allows;
-- read a guest's screen on the host, and its accessibility tree in the guest.
+- read a guest's screen on the host, and its accessibility tree in the guest;
+- click, type, press keys and scroll in a guest from the host;
+- give an agent all of that as an MCP server, `paddock mcp`.
 
 There is no control plane yet: each Mac runs its own `paddock serve`.
 
@@ -47,7 +49,7 @@ lines back:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.4.0"}` |
+| `{"op":"health"}` | `{"version":"0.5.0"}` |
 | `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
 | `{"op":"put","name":"...","size":N}` followed by N bytes | `{"exit":0}` once the file is stored |
 | `{"op":"get","name":"..."}` | `{"chunk":n}` followed by n bytes, repeated, then `{"exit":0}` |
@@ -59,14 +61,27 @@ Assistant, in its home folder, with stdin closed. Output lines over 8 KB are spl
 to 4 GiB; the account itself reads and writes them, never the root agent, and stored files are
 readable only by it. The host refuses a `get` larger than it asked for and deletes a partial file.
 
+When it starts, before the user logs in, the agent copies the user's per-host preferences into
+place for the Mac it runs on. macOS keeps some settings, such as when the screen saver starts,
+per host, in files named after the hardware UUID, and every clone has a new one with its new
+machine identifier, so a clone would otherwise start those settings from macOS's defaults. The
+agent copies, as the user, the newest file of each setting from another UUID, and only where the
+clone has none yet. It logs each one it copies to `/var/log/paddock-guestd.log`.
+
 The folder also holds `paddock-session`, a LaunchAgent that runs in the desktop session of whoever
 logs in to the guest, where the accessibility API can see apps. It listens only on vsock port
 52526 and speaks the same protocol:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.1.0"}` |
+| `{"op":"health"}` | `{"version":"0.2.0"}` |
 | `{"op":"axtree"}` | `{"output":"..."}` for each line of the focused app's accessibility tree as JSON, then `{"exit":0}` |
+| `{"op":"state"}` | `{"output":"desktop"}` once loginwindow has no window on screen, then `{"exit":0}` |
+
+After a login, loginwindow covers the screen with a snapshot of the desktop until the Dock reports
+the desktop ready, which took 3 s to over 20 s in testing. Until then screenshots show the
+snapshot, and a click lands on loginwindow, which keeps the keyboard focus afterwards. `state`
+reads only the owners of on-screen windows, which needs no permission.
 
 Each element of the tree has its role, its subrole, title, value, description and identifier when
 it has them, whether it is enabled and focused, its frame as x, y, width and height in screen
@@ -96,13 +111,25 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 
    The installer prints `paddock-guestd is running` when the agent is up, and
    `paddock-session is running` when the session helper is.
-3. For screenshots and accessibility trees, give every clone a desktop that stays up:
+3. Give every clone a desktop that stays up and commands that never wait for a prompt. These
+   are security settings, so they are yours to make (see
+   [What a golden image allows](#what-a-golden-image-allows)):
    - Turn on automatic login for the user in System Settings > Users & Groups.
    - Stop sleep and the display turning off: `sudo pmset -a sleep 0 displaysleep 0`.
-   - Turn off the screen lock in System Settings > Lock Screen.
+   - Set "Start Screen Saver when inactive" to Never in System Settings > Lock Screen. Clones
+     keep the screen lock on whatever this image says (see [Limits](#limits)), so the screen
+     saver and sleep, which would set it off, must stay off.
    - Allow `paddock-session` in System Settings > Privacy & Security > Accessibility. macOS asks
-     when the installer starts it. paddock-session is signed ad hoc, so a rebuilt one needs
-     allowing again.
+     when the installer starts it.
+   - Add `/usr/local/libexec/paddock-guestd` in System Settings > Privacy & Security > Full Disk
+     Access. Without it, a command that touches Desktop, Documents or Downloads waits for a
+     prompt that nobody answers.
+
+   macOS keeps both grants for rebuilt binaries only if they have the same signature:
+   `scripts/build.sh` signs both with the code-signing certificate named in
+   `PADDOCK_SIGNING_IDENTITY`, `paddock local signing` by default, and ad hoc if there is none,
+   in which case every rebuild needs granting again. `serve` checks these settings in the
+   clone it boots for its slot and warns about each one that is missing.
 4. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
    shut down; doing it a second time forces the VM off.
 
@@ -114,18 +141,23 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock run <name>` | Boots a VM in a window. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
-| `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers too, which means the desktop session is up. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
+| `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
 | `paddock acquire [--allow names]` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](#the-userspace-network)); `--allow` against a `serve` on NAT fails. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
 | `paddock screenshot <vm> [-o file.png]` | Saves the screen of a VM that `acquire` handed out as a PNG, `<vm>.png` in the current folder by default. `serve` reads the VM's framebuffer on this Mac, so the guest grants nothing and runs nothing (see [Screenshots](#screenshots)). |
 | `paddock axtree <vm>` | Prints the accessibility tree of the focused app in a VM that `acquire` handed out, as JSON, from `paddock-session` in the guest. Its frames are in the same coordinates as `paddock screenshot`'s pixels. |
+| `paddock click <vm> <x> <y> [--right] [--double]` | Clicks at a point of the guest's screen, in pixels from the top left, as in `paddock screenshot` (see [Input](#input)). |
+| `paddock type <vm> <text>` | Types text into whatever has the keyboard focus in the guest, as key presses. |
+| `paddock key <vm> <combination>...` | Presses key combinations in turn, such as `cmd+s`, `cmd+shift+z` or `return`. |
+| `paddock scroll <vm> <x> <y> [--down n] [--up n] [--right n] [--left n]` | Scrolls by about n lines at a point of the guest's screen. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
+| `paddock mcp` | Serves `serve`'s VMs to an agent as an MCP server on stdin and stdout (see [Agents over MCP](#agents-over-mcp)). |
 
-`acquire`, `exec`, `task`, `screenshot`, `axtree` and `release` reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its
-owner can open. Each connection carries one request line of JSON and gets one or more answer
-lines back; `exec` streams one per line of output, then the exit status. Only one `serve` can
-listen at a time.
+These commands reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its owner can
+open. Each connection carries one request line of JSON and gets one or more answer lines back;
+`exec` streams one per line of output, then the exit status. Only one `serve` can listen at a
+time.
 
 VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned
@@ -165,6 +197,78 @@ about 50 ms, mostly encoding the PNG.
 - The guest sends a frame only when its screen changes, so `serve` attaches each restored VM's
   display before the VM resumes and draws. A guest that doesn't redraw as it resumes still shows
   a black screen until its screen next changes: 2 of 10 hand-outs in testing.
+
+## Input
+
+`click`, `type`, `key` and `scroll` drive the guest from the host. `serve` sends mouse and
+keyboard events to the `VZVirtualMachineView` it attaches for screenshots, and the guest gets them
+from its virtual pointer and keyboard, so the guest grants nothing and runs nothing for them. A
+command returns once its events are sent, not once the guest has acted on them; read the screen
+or the accessibility tree to see the result.
+
+- `type` and `key` press keys of a US keyboard, so the guest must use a US keyboard layout for
+  text to come out as typed, and `type` refuses characters a US keyboard can't type, such as
+  `é`. Apps still apply their own changes: TextEdit turns straight quotes into curly ones.
+- A combination for `key` is modifiers and one key joined by `+`: modifiers are `cmd`, `ctrl`,
+  `opt` and `shift`, and the key is a character, `plus` for `+`, or one of `return`, `tab`,
+  `space`, `delete`, `forwarddelete`, `escape`, `left`, `right`, `up`, `down`, `home`, `end`,
+  `pageup`, `pagedown` and `f1` to `f12`.
+- Keys go at about 100 characters a second. The guest drops keys that go down and up much
+  faster: typing 500 characters with no pause between key events, 163 arrived in testing.
+- `scroll` directions are the content's with macOS's default natural scrolling. A golden image
+  that turns natural scrolling off scrolls the other way.
+
+## Agents over MCP
+
+`paddock mcp` is an MCP server that an agent's client starts and talks to over stdin and stdout.
+It reaches `serve` through its socket, like the other commands, so it runs on the Mac that runs
+`serve`. From another Mac, start it through ssh, which must log in without a prompt, with a key:
+an MCP client can't answer a password prompt. In Claude Code, for example:
+
+```bash
+claude mcp add paddock -- ~/code/paddock/.build/out/Products/Release/paddock mcp                 # on the Mac
+claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/Release/paddock mcp  # from another
+```
+
+| Tool | What it does |
+| --- | --- |
+| `acquire` | Takes the warm VM from `serve`, waiting while the slot fills. `allow` lists the names it may reach on the userspace network. |
+| `screenshot` | The VM's screen as a PNG. |
+| `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
+| `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). |
+| `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. After `timeout` seconds, 120 by default and at most 3,600, it returns what the command printed so far, and the command goes on running in the VM. |
+| `release` | Hands the VM back to `serve`, which wipes it. |
+
+- A session holds one VM at a time. When the client closes stdin, or stops the server with
+  SIGINT, SIGTERM or SIGHUP, as a dropped ssh connection does, the server releases the VM it
+  holds.
+- Screenshots are scaled to fit 1280x800, keeping the screen's shape: 1920x1200 becomes
+  1280x800. Every coordinate the tools take or return is in the screenshot's pixels, frames in
+  the accessibility tree included, and the server converts them for the guest.
+- What the tools return from the guest, its screen, tree and command output, is whatever the
+  workload in the VM put there. An agent should trust it no more than the workload.
+
+## What a golden image allows
+
+A golden image set up as above gives up some of macOS's protections so that its VMs run with
+nobody watching. They are the guest's protections, not this Mac's: the VM is the boundary
+between a workload and the host, and every VM is wiped when it is released.
+
+| Setting | What it allows |
+| --- | --- |
+| Automatic login | macOS keeps the account's password in `/etc/kcpassword`, obfuscated but reversible, so anyone with a copy of the image can recover it. |
+| No screen saver or sleep | Whoever has the screen has the session: paddock's screenshots and input, by design. |
+| Accessibility for `paddock-session` | It can read and drive the interface of every app in the session; `axtree` reads only the focused app's. |
+| Full Disk Access for `paddock-guestd` | Commands it runs, through `exec`, `task` and `run_command`, can read and change every file in the guest, other apps' data included. |
+
+- Give the golden image's account a password used nowhere else, and sign it in to nothing:
+  every workload can read what the image holds.
+- The grants are made by hand, once, in the golden image, so SIP stays on. paddock needs no
+  Screen Recording permission, since it reads the screen on the host.
+- A grant belongs to a binary's signature, so a workload that replaces `paddock-session` or
+  `paddock-guestd` with its own binary doesn't get it. paddock treats both as untrusted anyway.
+- `serve` warns about each setting missing from the clone it boots for its slot, with what to
+  change. It doesn't change them itself.
 
 ## The userspace network
 
@@ -220,15 +324,16 @@ it.
 | agent | From the same moment as start until `paddock-guestd` answers a health check over vsock, checked every 100 ms. Runs alongside the lease check. |
 | network | From the same moment as start until the guest reports, through its agent's `state` request, an IPv4 address on `en0` and an IPv4 DNS server, checked every 100 ms once the agent answers. An agent before 0.4.0 is asked through a command instead, which takes seconds while the guest's user is logging in. |
 | session | From the same moment as start until `paddock-session` answers a health check over vsock, checked every 100 ms once the network is up. Only when the source has the helper installed; it starts when the user logs in, so it needs automatic login. |
+| desktop | From the same moment as start until `paddock-session` says, through its `state` request, that loginwindow has finished the login, checked every 100 ms once the helper answers. A helper before 0.2.0 can't say, so the step ends as soon as it answers. |
 
-Each run also prints clone to ready, the total from cloning to the last step: session when the
+Each run also prints clone to ready, the total from cloning to the last step: desktop when the
 source has `paddock-session`, network otherwise. A run whose agent never answers or that never
 reaches its last step fails. The lease check reads the host's
 lease file and the agent and network checks go over vsock, so nothing in the guest listens on
 the network for paddock. Each vsock connection gives up after 2 s if Virtualization.framework
 hasn't called back, which now and then it never does, and the next check tries again.
 
-With `--restore`, bench first cold-boots one clone until its network step, pauses it and saves its
+With `--restore`, bench first cold-boots one clone until its last step, pauses it and saves its
 memory and device state (printed as save, with the file size, and left out of the summary).
 Each run then clones that saved VM and replaces start and running with:
 
@@ -240,6 +345,7 @@ Each run then clones that saved VM and replaces start and running with:
 | agent | From the same moment as restore until `paddock-guestd` answers over vsock. The guest keeps the address it leased before it was saved, so there is no running step. |
 | network | From the same moment as restore until the guest reports its IPv4 address and DNS server again. A restored guest renegotiates its network after it resumes, so this comes after the agent answers. Its IPv6 DNS server stays listed throughout, so only IPv4 counts. |
 | session | From the same moment as restore until `paddock-session` answers, as above. |
+| desktop | From the same moment as restore until `paddock-session` says loginwindow has finished the login, as above. |
 
 Restored clones share one identity, so only one can run at a time.
 
@@ -280,6 +386,11 @@ Restored clones share one identity, so only one can run at a time.
   address. Each starts with its clock behind by the time since `serve` saved
   the slot's state, until macOS corrects it once the guest's network is back: from Apple's time
   servers on NAT, and from paddock-net on the userspace network.
+- Clones always have macOS's screen lock on, whatever the golden image says: macOS keeps that
+  setting with the machine's identity, which every clone changes, and turning it off takes the
+  user's password. With no screen saver and no sleep nothing sets it off, but anything that
+  starts the screen saver or locks the screen, such as Ctrl-Cmd-Q, locks the session until the
+  password is typed. Release the VM to get a fresh one.
 - Apple's macOS license permits macOS VMs for development and testing.
 
 ## License

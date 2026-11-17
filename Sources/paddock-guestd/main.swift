@@ -9,6 +9,10 @@ do {
     guard let user = GuestAgent.workloadUser(), let files = GuestAgent.filesDirectory(for: user) else {
         throw PaddockError("no user with uid 501 to run commands as; finish Setup Assistant first")
     }
+    // Before the user logs in, which is when their per-host preferences are first read.
+    for line in GuestAgent.carryHostPreferences(for: user) {
+        print("paddock-guestd: \(line)")
+    }
     let fd = try GuestAgent.listen(port: GuestAgent.port)
     let server = LineServer(listening: fd, queue: .main) { line, responder in
         GuestAgent.handle(line, runAs: user, files: files, responder: responder)

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import os
 import PaddockCore
 
 struct Serve: AsyncParsableCommand {
@@ -101,6 +102,8 @@ final class WarmPool {
         try await vm.start()
         let ip = try await waitUntilReady(vm)
         let booted = ContinuousClock.now - started
+        await warnAboutSource(vm, source)
+        let saveStarted = ContinuousClock.now
         try await vm.pauseAndSave()
         await vm.stop()
         self.vm = nil
@@ -109,7 +112,30 @@ final class WarmPool {
         let attributes = try? FileManager.default.attributesOfItem(atPath: bundle.savedStateURL.path)
         let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
         print("  booted at \(ip) in \(DurationFormat.short(booted)), "
-            + "saved \(ByteFormat.gigabytes(size)) of state in \(DurationFormat.short(ContinuousClock.now - started - booted))")
+            + "saved \(ByteFormat.gigabytes(size)) of state in \(DurationFormat.short(ContinuousClock.now - saveStarted))")
+    }
+
+    /// Prints what in `source` breaks VMs that nobody watches, found in its freshly booted clone:
+    /// see SourceCheck. serve carries on, since the VMs still work until the setting bites.
+    private func warnAboutSource(_ vm: HeadlessVM, _ source: VMBundle) async {
+        let output = OSAllocatedUnfairLock(initialState: [String]())
+        guard (try? await vm.runInGuest(SourceCheck.command) { line in output.withLock { $0.append(line) } }) == 0 else {
+            return print("  warning: couldn't check '\(source.name)' for settings that break unattended VMs")
+        }
+        var problems = SourceCheck.problems(in: output.withLock { $0 })
+        if sessionHelper == true {
+            do {
+                try await vm.accessibilityTree { _ in }
+            } catch let error as PaddockError where error.message.contains("Accessibility") {
+                problems.append("paddock-session lacks Accessibility, so axtree fails: allow it in System Settings > "
+                    + "Privacy & Security > Accessibility")
+            } catch {}
+        }
+        guard !problems.isEmpty else { return }
+        print("  warning: '\(source.name)' isn't set up for VMs that nobody watches; change it in the golden image:")
+        for problem in problems {
+            print("    - \(problem)")
+        }
     }
 
     /// Restores a fresh clone of the slot's saved state and waits until its agent answers.
@@ -159,6 +185,8 @@ final class WarmPool {
             screenshot(request, responder)
         case "axtree":
             accessibilityTree(of: request?.vm, responder)
+        case "input":
+            input(request, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -240,6 +268,50 @@ final class WarmPool {
         }
     }
 
+    /// Sends a click, text, key combinations or a scroll to a VM this serve handed out, through
+    /// its virtual pointer and keyboard. Answers once the input is sent, before the guest has acted
+    /// on it.
+    private func input(_ request: ServeRequest?, _ responder: Responder) {
+        guard assigned, let vm, let current, let request, request.vm == current.name else {
+            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
+        }
+        Task {
+            do {
+                guard let action = request.input else { throw PaddockError("input needs an action") }
+                switch action.kind {
+                case "click":
+                    guard let x = action.x, let y = action.y else { throw PaddockError("click needs x and y") }
+                    guard let button = VMScreen.MouseButton(rawValue: action.button ?? "left") else {
+                        throw PaddockError("click's button is left or right")
+                    }
+                    let count = action.count ?? 1
+                    guard (1...3).contains(count) else { throw PaddockError("click's count is 1 to 3") }
+                    try vm.click(x: x, y: y, button: button, count: count)
+                case "type":
+                    guard let text = action.text, (1...10_000).contains(text.count) else {
+                        throw PaddockError("type needs text of 1 to 10,000 characters")
+                    }
+                    try await vm.press(KeyInput.strokes(typing: text))
+                case "key":
+                    guard let keys = action.keys, (1...100).contains(keys.count) else {
+                        throw PaddockError("key needs 1 to 100 key combinations")
+                    }
+                    try await vm.press(keys.map(KeyInput.stroke))
+                case "scroll":
+                    guard let x = action.x, let y = action.y else { throw PaddockError("scroll needs x and y") }
+                    let down = action.down ?? 0, right = action.right ?? 0
+                    guard abs(down) <= 1000, abs(right) <= 1000 else { throw PaddockError("scroll is at most 1,000 lines") }
+                    try vm.scroll(x: x, y: y, down: down, right: right)
+                default:
+                    throw PaddockError("input is click, type, key or scroll")
+                }
+                responder.finish(ServeResponse(exit: 0).line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
+    }
+
     /// Saves the screen of a VM this serve handed out as a PNG at the request's result path.
     private func screenshot(_ request: ServeRequest?, _ responder: Responder) {
         guard assigned, let vm, let current, let request, request.vm == current.name else {
@@ -270,9 +342,10 @@ final class WarmPool {
         replaceCurrent()
     }
 
-    /// Waits for the guest agent to answer over vsock and for the guest's network, and for
-    /// paddock-session too if the source has it, so the desktop is up; then returns the guest's
-    /// address for the workload. A restored guest still holds the lease it had when its state was
+    /// Waits for the guest agent to answer over vsock and for the guest's network, and, if the
+    /// source has paddock-session, for the helper to answer and loginwindow to finish the login,
+    /// so the desktop takes input; then returns the guest's address for the workload. Saving the
+    /// slot's state any earlier would hand out every restore mid-login. A restored guest still holds the lease it had when its state was
     /// saved, so its lease is found at once, but its network comes back about 1.5 s after its agent.
     private func waitUntilReady(_ vm: HeadlessVM) async throws -> String {
         guard try await vm.agentVersion(within: Self.timeout) != nil else {
@@ -284,9 +357,15 @@ final class WarmPool {
         if sessionHelper == nil {
             sessionHelper = await vm.hasSessionHelper()
         }
-        if sessionHelper == true, try await vm.sessionHelperVersion(within: Self.sessionTimeout) == nil {
-            throw PaddockError("'\(vm.bundle.name)' has paddock-session installed, but it didn't answer within "
-                + "\(DurationFormat.short(Self.sessionTimeout)); turn on automatic login in the golden image")
+        if sessionHelper == true {
+            guard try await vm.sessionHelperVersion(within: Self.sessionTimeout) != nil else {
+                throw PaddockError("'\(vm.bundle.name)' has paddock-session installed, but it didn't answer within "
+                    + "\(DurationFormat.short(Self.sessionTimeout)); turn on automatic login in the golden image")
+            }
+            guard try await vm.desktopReady(within: Self.sessionTimeout) else {
+                throw PaddockError("loginwindow in '\(vm.bundle.name)' still covered the screen after "
+                    + "\(DurationFormat.short(Self.sessionTimeout)); turn off the screen lock in the golden image")
+            }
         }
         guard let ip = try await vm.leasedAddress(within: Self.timeout) else {
             throw PaddockError("'\(vm.bundle.name)' got no DHCP lease within \(DurationFormat.short(Self.timeout))")
