@@ -15,11 +15,13 @@ struct Bench: AsyncParsableCommand {
                        DNS server
               session  until paddock-session answers in the guest's desktop session, if the
                        source has it installed
-            start, running, agent, network and session count from when paddock begins
-            configuring the clone.
+              desktop  until paddock-session says loginwindow has finished the login, so the
+                       desktop takes input
+            start, running, agent, network, session and desktop count from when paddock
+            begins configuring the clone.
 
-            With --restore, paddock first boots one clone until its agent answers, then
-            pauses it and saves its state. Each run clones that saved VM, keeping its
+            With --restore, paddock first boots one clone until it is ready, the last step
+            above, then pauses it and saves its state. Each run clones that saved VM, keeping its
             identity, and times these steps in place of start and running:
               restore  until the saved state is loaded into the paused clone
               resume   until the VM is running again
@@ -74,10 +76,11 @@ final class BenchRunner: NSObject {
         var agent: Duration?    // until the guest agent answers over vsock
         var network: Duration?  // until the guest has an IPv4 address and DNS server
         var session: Duration?  // until paddock-session answers, when the source has it
+        var desktop: Duration?  // until loginwindow has finished the login, when the source has it
         var expectsSession = false
 
-        /// The last step a guest needs: the session helper if it has one, else the network.
-        var ready: Duration? { expectsSession ? session : network }
+        /// The last step a guest needs: the desktop if it has the session helper, else the network.
+        var ready: Duration? { expectsSession ? desktop : network }
     }
 
     private let settings: Settings
@@ -147,8 +150,8 @@ final class BenchRunner: NSObject {
         }
     }
 
-    /// Cold-boots a clone of `source` until its agent answers, then pauses it and saves its state
-    /// into the clone's bundle, which every restore run is cloned from.
+    /// Cold-boots a clone of `source` until it is ready, then pauses it and saves its state into
+    /// the clone's bundle, which every restore run is cloned from.
     private func saveBootedClone(of source: VMBundle) async throws -> VMBundle {
         let bundle = try home.bundle(named: "\(source.name.prefix(40))-saved-\(Self.shortID())")
         clone = bundle
@@ -226,6 +229,12 @@ final class BenchRunner: NSObject {
                     if try await vm.sessionHelperVersion(within: timeout) != nil {
                         sample.session = ContinuousClock.now - bootStarted
                         report("session", sample.session, "paddock-session answered: the desktop session is up")
+                        if try await vm.desktopReady(within: timeout) {
+                            sample.desktop = ContinuousClock.now - bootStarted
+                            report("desktop", sample.desktop, "loginwindow has finished the login")
+                        } else {
+                            report("desktop", nil, "loginwindow still covered the screen after \(settings.timeout) s")
+                        }
                     } else {
                         report("session", nil, "paddock-session didn't answer within \(settings.timeout) s; turn on automatic login in '\(source.name)'")
                     }
@@ -305,7 +314,7 @@ final class BenchRunner: NSObject {
         }
         rows += [("agent", samples.compactMap(\.agent)), ("network", samples.compactMap(\.network))]
         if samples.contains(where: \.expectsSession) {
-            rows.append(("session", samples.compactMap(\.session)))
+            rows += [("session", samples.compactMap(\.session)), ("desktop", samples.compactMap(\.desktop))]
         }
         for (step, values) in rows {
             guard let summary = TimingSummary(values) else {

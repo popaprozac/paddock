@@ -26,6 +26,10 @@ do {
         switch request?.op {
         case "health":
             responder.finish(GuestAgent.Response(version: SessionHelper.version).line)
+        case "state":
+            let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]
+            responder.send(lines: SessionHelper.state(onScreen: windows).map { GuestAgent.Response(output: $0).line })
+            responder.finish(GuestAgent.Response(exit: 0).line)
         case "axtree":
             guard AXIsProcessTrusted() else {
                 return responder.finish(GuestAgent.Response(

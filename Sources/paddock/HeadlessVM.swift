@@ -161,7 +161,7 @@ final class HeadlessVM: NSObject {
 
     /// Whether the guest has paddock-session installed, asked through its agent.
     func hasSessionHelper() async -> Bool {
-        if let state = await agentState() {
+        if let state = await state() {
             return state.contains("session-helper")
         }
         return (try? await runInGuest("test -x \(SessionHelper.installedPath)", output: { _ in })) == 0
@@ -172,6 +172,23 @@ final class HeadlessVM: NSObject {
     /// desktop session is up. Like the agent's, the answer can't be trusted beyond that.
     func sessionHelperVersion(within timeout: Duration) async throws -> String? {
         try await version(at: SessionHelper.port, within: timeout)
+    }
+
+    /// Waits until paddock-session says loginwindow has finished the login, so the desktop takes
+    /// clicks and keys, or returns false after `timeout`. Checks every 100 ms. A helper before
+    /// 0.2.0 can't say, so for one the wait ends at once, as it did before.
+    func desktopReady(within timeout: Duration) async throws -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if let failure { throw failure }
+            if let state = await state(at: SessionHelper.port, name: "paddock-session") {
+                if state.contains("desktop") { return true }
+            } else if withoutState.contains(SessionHelper.port) {
+                return true
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return false
     }
 
     /// Asks the listener on `port` for its version every 100 ms until it answers or `timeout` passes.
@@ -195,7 +212,7 @@ final class HeadlessVM: NSObject {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if let failure { throw failure }
-            if let state = await agentState() {
+            if let state = await state() {
                 if state.contains("network") { return true }
             } else if (try? await runInGuest(check, output: { _ in })) == 0 {
                 return true  // an agent before 0.4.0, checked through a command
@@ -205,21 +222,23 @@ final class HeadlessVM: NSObject {
         return false
     }
 
-    private var agentHasState = true  // false once an agent before 0.4.0 has refused `state`
+    /// Ports whose listener refused `state`: an agent before 0.4.0, a session helper before 0.2.0.
+    private var withoutState: Set<UInt32> = []
 
-    /// What the agent says holds in the guest, or nil if it can't say: it is unreachable, or
-    /// older than the `state` request, which costs a sudo and a login shell per check instead.
-    private func agentState() async -> Set<String>? {
-        guard agentHasState else { return nil }
+    /// What the agent, or the listener on `port`, says holds in the guest, or nil if it can't
+    /// say: it is unreachable, or older than the `state` request. An agent that old costs a sudo
+    /// and a login shell per check instead.
+    private func state(at port: UInt32 = GuestAgent.port, name: String = "the guest agent") async -> Set<String>? {
+        guard !withoutState.contains(port) else { return nil }
         do {
-            let lines = try await withAgent { fd in
+            let lines = try await withAgent(port: port, name: name) { fd in
                 var lines: [String] = []
                 _ = try GuestAgent.askStreaming(GuestAgent.Request(op: "state"), over: fd) { lines.append($0) }
                 return lines
             }
             return Set(lines)
         } catch let error as PaddockError where error.message.contains("unknown request") {
-            agentHasState = false
+            withoutState.insert(port)
             return nil
         } catch {
             return nil

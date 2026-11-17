@@ -316,9 +316,10 @@ final class WarmPool {
         replaceCurrent()
     }
 
-    /// Waits for the guest agent to answer over vsock and for the guest's network, and for
-    /// paddock-session too if the source has it, so the desktop is up; then returns the guest's
-    /// address for the workload. A restored guest still holds the lease it had when its state was
+    /// Waits for the guest agent to answer over vsock and for the guest's network, and, if the
+    /// source has paddock-session, for the helper to answer and loginwindow to finish the login,
+    /// so the desktop takes input; then returns the guest's address for the workload. Saving the
+    /// slot's state any earlier would hand out every restore mid-login. A restored guest still holds the lease it had when its state was
     /// saved, so its lease is found at once, but its network comes back about 1.5 s after its agent.
     private func waitUntilReady(_ vm: HeadlessVM) async throws -> String {
         guard try await vm.agentVersion(within: Self.timeout) != nil else {
@@ -330,9 +331,15 @@ final class WarmPool {
         if sessionHelper == nil {
             sessionHelper = await vm.hasSessionHelper()
         }
-        if sessionHelper == true, try await vm.sessionHelperVersion(within: Self.sessionTimeout) == nil {
-            throw PaddockError("'\(vm.bundle.name)' has paddock-session installed, but it didn't answer within "
-                + "\(DurationFormat.short(Self.sessionTimeout)); turn on automatic login in the golden image")
+        if sessionHelper == true {
+            guard try await vm.sessionHelperVersion(within: Self.sessionTimeout) != nil else {
+                throw PaddockError("'\(vm.bundle.name)' has paddock-session installed, but it didn't answer within "
+                    + "\(DurationFormat.short(Self.sessionTimeout)); turn on automatic login in the golden image")
+            }
+            guard try await vm.desktopReady(within: Self.sessionTimeout) else {
+                throw PaddockError("loginwindow in '\(vm.bundle.name)' still covered the screen after "
+                    + "\(DurationFormat.short(Self.sessionTimeout)); turn off the screen lock in the golden image")
+            }
         }
         guard let ip = try await vm.leasedAddress(within: Self.timeout) else {
             throw PaddockError("'\(vm.bundle.name)' got no DHCP lease within \(DurationFormat.short(Self.timeout))")

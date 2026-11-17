@@ -66,8 +66,14 @@ logs in to the guest, where the accessibility API can see apps. It listens only 
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.1.0"}` |
+| `{"op":"health"}` | `{"version":"0.2.0"}` |
 | `{"op":"axtree"}` | `{"output":"..."}` for each line of the focused app's accessibility tree as JSON, then `{"exit":0}` |
+| `{"op":"state"}` | `{"output":"desktop"}` once loginwindow has no window on screen, then `{"exit":0}` |
+
+After a login, loginwindow covers the screen with a snapshot of the desktop until the Dock reports
+the desktop ready, which took 3 s to over 20 s in testing. Until then screenshots show the
+snapshot, and a click lands on loginwindow, which keeps the keyboard focus afterwards. `state`
+reads only the owners of on-screen windows, which needs no permission.
 
 Each element of the tree has its role, its subrole, title, value, description and identifier when
 it has them, whether it is enabled and focused, its frame as x, y, width and height in screen
@@ -102,8 +108,10 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
    - Stop sleep and the display turning off: `sudo pmset -a sleep 0 displaysleep 0`.
    - Turn off the screen lock in System Settings > Lock Screen.
    - Allow `paddock-session` in System Settings > Privacy & Security > Accessibility. macOS asks
-     when the installer starts it. paddock-session is signed ad hoc, so a rebuilt one needs
-     allowing again.
+     when the installer starts it. macOS keeps the grant for a rebuilt helper only if it has the
+     same signature: `scripts/build.sh` signs it with the code-signing certificate named in
+     `PADDOCK_SIGNING_IDENTITY`, `paddock local signing` by default, and ad hoc if there is none,
+     in which case every rebuilt helper needs allowing again.
 4. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
    shut down; doing it a second time forces the VM off.
 
@@ -115,7 +123,7 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock run <name>` | Boots a VM in a window. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
-| `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers too, which means the desktop session is up. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
+| `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
 | `paddock acquire [--allow names]` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](#the-userspace-network)); `--allow` against a `serve` on NAT fails. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
@@ -245,15 +253,16 @@ it.
 | agent | From the same moment as start until `paddock-guestd` answers a health check over vsock, checked every 100 ms. Runs alongside the lease check. |
 | network | From the same moment as start until the guest reports, through its agent's `state` request, an IPv4 address on `en0` and an IPv4 DNS server, checked every 100 ms once the agent answers. An agent before 0.4.0 is asked through a command instead, which takes seconds while the guest's user is logging in. |
 | session | From the same moment as start until `paddock-session` answers a health check over vsock, checked every 100 ms once the network is up. Only when the source has the helper installed; it starts when the user logs in, so it needs automatic login. |
+| desktop | From the same moment as start until `paddock-session` says, through its `state` request, that loginwindow has finished the login, checked every 100 ms once the helper answers. A helper before 0.2.0 can't say, so the step ends as soon as it answers. |
 
-Each run also prints clone to ready, the total from cloning to the last step: session when the
+Each run also prints clone to ready, the total from cloning to the last step: desktop when the
 source has `paddock-session`, network otherwise. A run whose agent never answers or that never
 reaches its last step fails. The lease check reads the host's
 lease file and the agent and network checks go over vsock, so nothing in the guest listens on
 the network for paddock. Each vsock connection gives up after 2 s if Virtualization.framework
 hasn't called back, which now and then it never does, and the next check tries again.
 
-With `--restore`, bench first cold-boots one clone until its network step, pauses it and saves its
+With `--restore`, bench first cold-boots one clone until its last step, pauses it and saves its
 memory and device state (printed as save, with the file size, and left out of the summary).
 Each run then clones that saved VM and replaces start and running with:
 
@@ -265,6 +274,7 @@ Each run then clones that saved VM and replaces start and running with:
 | agent | From the same moment as restore until `paddock-guestd` answers over vsock. The guest keeps the address it leased before it was saved, so there is no running step. |
 | network | From the same moment as restore until the guest reports its IPv4 address and DNS server again. A restored guest renegotiates its network after it resumes, so this comes after the agent answers. Its IPv6 DNS server stays listed throughout, so only IPv4 counts. |
 | session | From the same moment as restore until `paddock-session` answers, as above. |
+| desktop | From the same moment as restore until `paddock-session` says loginwindow has finished the login, as above. |
 
 Restored clones share one identity, so only one can run at a time.
 
@@ -305,10 +315,6 @@ Restored clones share one identity, so only one can run at a time.
   address. Each starts with its clock behind by the time since `serve` saved
   the slot's state, until macOS corrects it once the guest's network is back: from Apple's time
   servers on NAT, and from paddock-net on the userspace network.
-- A VM can be handed out while loginwindow is still finishing the login: it covers the screen
-  with a snapshot of the desktop until the Dock reports the desktop ready, which took 3 s to over
-  20 s in testing. Until then screenshots show the snapshot, and a click lands on loginwindow,
-  which keeps the keyboard focus afterwards.
 - Apple's macOS license permits macOS VMs for development and testing.
 
 ## License
