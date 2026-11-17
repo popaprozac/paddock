@@ -139,7 +139,10 @@ final class HeadlessVM: NSObject {
 
     /// Whether the guest has paddock-session installed, asked through its agent.
     func hasSessionHelper() async -> Bool {
-        (try? await runInGuest("test -x \(SessionHelper.installedPath)", output: { _ in })) == 0
+        if let state = await agentState() {
+            return state.contains("session-helper")
+        }
+        return (try? await runInGuest("test -x \(SessionHelper.installedPath)", output: { _ in })) == 0
     }
 
     /// Waits for paddock-session to answer a health check over vsock and returns its version, or
@@ -170,10 +173,35 @@ final class HeadlessVM: NSObject {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if let failure { throw failure }
-            if (try? await runInGuest(check, output: { _ in })) == 0 { return true }
+            if let state = await agentState() {
+                if state.contains("network") { return true }
+            } else if (try? await runInGuest(check, output: { _ in })) == 0 {
+                return true  // an agent before 0.4.0, checked through a command
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
         return false
+    }
+
+    private var agentHasState = true  // false once an agent before 0.4.0 has refused `state`
+
+    /// What the agent says holds in the guest, or nil if it can't say: it is unreachable, or
+    /// older than the `state` request, which costs a sudo and a login shell per check instead.
+    private func agentState() async -> Set<String>? {
+        guard agentHasState else { return nil }
+        do {
+            let lines = try await withAgent { fd in
+                var lines: [String] = []
+                _ = try GuestAgent.askStreaming(GuestAgent.Request(op: "state"), over: fd) { lines.append($0) }
+                return lines
+            }
+            return Set(lines)
+        } catch let error as PaddockError where error.message.contains("unknown request") {
+            agentHasState = false
+            return nil
+        } catch {
+            return nil
+        }
     }
 
     /// Runs `command` in the guest through its agent over vsock, passing each output line to

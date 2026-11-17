@@ -55,15 +55,36 @@ import Testing
     /// Runs `command` through `handle` over a real socket, the way the agent serves it, and
     /// returns the answer lines.
     func run(_ command: String?) throws -> [GuestAgent.Response] {
+        try answers(to: GuestAgent.Request(op: "run", command: command))
+    }
+
+    /// Sends `request` through `handle` over a real socket and returns the answer lines.
+    func answers(to request: GuestAgent.Request) throws -> [GuestAgent.Response] {
         let path = "/tmp/paddock-test-\(UUID().uuidString.prefix(8)).sock"
         let server = try LineServer(path: path, queue: DispatchQueue(label: "guest-agent-tests")) { line, responder in
             GuestAgent.handle(line, runAs: nil, files: NSTemporaryDirectory(), responder: responder)
         }
         defer { server.stop() }
-        let request = String(decoding: try JSONEncoder().encode(GuestAgent.Request(op: "run", command: command)), as: UTF8.self)
+        let line = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
         var answers: [GuestAgent.Response] = []
-        try LineClient.stream(request, to: path) { answers.append(try decode($0)); return true }
+        try LineClient.stream(line, to: path) { answers.append(try decode($0)); return true }
         return answers
+    }
+
+    @Test func stateListsWhatHoldsThenExits() throws {
+        let answers = try answers(to: GuestAgent.Request(op: "state"))
+        #expect(answers.last == GuestAgent.Response(exit: 0))
+        let held = answers.dropLast().compactMap(\.output)
+        #expect(held.count == answers.count - 1)
+        #expect(Set(held).isSubset(of: ["network", "session-helper"]))
+    }
+
+    @Test func stateChecksAddressesWithoutAShell() {
+        #expect(GuestAgent.hasIPv4Address(on: "lo0"))
+        #expect(!GuestAgent.hasIPv4Address(on: "no-such-interface"))
+        #expect(GuestAgent.isIPv4Address("192.168.127.1"))
+        #expect(!GuestAgent.isIPv4Address("fe80::1c1d:d3ff:fe9d:c064"))
+        #expect(!GuestAgent.isIPv4Address("dns.example"))
     }
 
     @Test func runStreamsOutputThenTheExitStatus() throws {

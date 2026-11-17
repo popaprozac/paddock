@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SystemConfiguration
 
 /// The protocol between the host and paddock-guestd, the agent inside each macOS guest.
 ///
@@ -10,6 +11,8 @@ import Foundation
 ///     {"op":"run","command":"ls"}           ->  {"output":"..."} per line, then {"exit":0}
 ///     {"op":"put","name":"a","size":N} + N bytes  ->  {"exit":0}
 ///     {"op":"get","name":"a"}               ->  {"chunk":n} + n bytes, repeated, then {"exit":0}
+///     {"op":"state"}                        ->  {"output":"network"} and {"output":"session-helper"}
+///                                               when they hold, then {"exit":0}
 ///
 /// `put` and `get` work on files in the workload account's `~/paddock` folder.
 /// The host treats every answer as untrusted: the workload runs as admin and can replace the
@@ -17,14 +20,14 @@ import Foundation
 public enum GuestAgent {
     /// The vsock port the agent listens on inside the guest.
     public static let port: UInt32 = 52525
-    public static let version = "0.3.1"
+    public static let version = "0.4.0"
 
     /// Output lines longer than this are split, so every answer line stays well under the
     /// 64 KB a reader accepts even after JSON escaping.
     static let outputChunk = 8 * 1024
 
     public struct Request: Codable, Equatable, Sendable {
-        public var op: String  // "health", "run", "put" or "get"
+        public var op: String  // "health", "run", "put", "get" or "state"
         public var command: String?
         public var name: String?
         public var size: Int64?
@@ -91,6 +94,11 @@ public enum GuestAgent {
                 return responder.finish(Response(error: "get needs a plain file name").line)
             }
             work = { get(name, from: files, as: user, to: responder) }
+        case "state":
+            work = {
+                responder.send(lines: state().map { Response(output: $0).line })
+                return Response(exit: 0)
+            }
         default:
             return responder.finish(answer(line))
         }
@@ -112,9 +120,9 @@ public enum GuestAgent {
         return response.line
     }
 
-    /// Runs `command` with stdin closed, passes each line of its combined stdout and stderr to
-    /// `output`, and returns its exit status, or an error if it couldn't start.
-    /// Passes the command's output to `output` as lines, all those that arrive together at once.
+    /// Runs `command` with stdin closed, passes its combined stdout and stderr to `output` as
+    /// lines, all those that arrive together at once, and returns its exit status, or an error if
+    /// it couldn't start.
     static func run(_ command: String, as user: String?, output: ([String]) -> Void) -> Response {
         let pipe = Pipe()
         let process: Process
@@ -152,6 +160,48 @@ public enum GuestAgent {
         }
         process.waitUntilExit()
         return Response(exit: process.terminationStatus)
+    }
+
+    /// What the host waits for before handing the guest out: "network" once en0 has an IPv4
+    /// address and the guest an IPv4 DNS server, and "session-helper" if paddock-session is
+    /// installed. The agent checks itself, without sudo or a login shell, which take seconds
+    /// each while the guest's user is logging in. Only IPv4 counts for DNS: a restored guest's
+    /// IPv6 DNS server stays listed through the restore.
+    static func state() -> [String] {
+        var lines: [String] = []
+        if hasIPv4Address(on: "en0") && hasIPv4DNSServer() {
+            lines.append("network")
+        }
+        if FileManager.default.isExecutableFile(atPath: SessionHelper.installedPath) {
+            lines.append("session-helper")
+        }
+        return lines
+    }
+
+    static func hasIPv4Address(on interface: String) -> Bool {
+        var first: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&first) == 0 else { return false }
+        defer { freeifaddrs(first) }
+        var current = first
+        while let entry = current {
+            if String(cString: entry.pointee.ifa_name) == interface, entry.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_INET) {
+                return true
+            }
+            current = entry.pointee.ifa_next
+        }
+        return false
+    }
+
+    static func hasIPv4DNSServer() -> Bool {
+        let dns = SCDynamicStoreCopyValue(nil, "State:/Network/Global/DNS" as CFString) as? [String: Any]
+        let servers = dns?["ServerAddresses"] as? [String] ?? []
+        return servers.contains { isIPv4Address($0) }
+    }
+
+    /// Whether `text` is a dotted IPv4 address.
+    static func isIPv4Address(_ text: String) -> Bool {
+        var address = in_addr()
+        return inet_pton(AF_INET, text, &address) == 1
     }
 
     /// Starts `arguments` as `user` through sudo, in that account's home folder, or as this

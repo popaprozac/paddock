@@ -39,10 +39,11 @@ lines back:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.3.1"}` |
+| `{"op":"health"}` | `{"version":"0.4.0"}` |
 | `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
 | `{"op":"put","name":"...","size":N}` followed by N bytes | `{"exit":0}` once the file is stored |
 | `{"op":"get","name":"..."}` | `{"chunk":n}` followed by n bytes, repeated, then `{"exit":0}` |
+| `{"op":"state"}` | `{"output":"network"}` once en0 has an IPv4 address and the guest an IPv4 DNS server, `{"output":"session-helper"}` if `paddock-session` is installed, then `{"exit":0}` |
 
 `run` uses a login shell (`zsh -l`) as the account with uid 501, the one created in Setup
 Assistant, in its home folder, with stdin closed. Output lines over 8 KB are split. `put` and
@@ -209,7 +210,7 @@ it.
 | start | Building and validating the VM configuration, creating the VM and starting it, until Virtualization.framework reports it running. |
 | running | From the same moment as start until the guest holds a DHCP lease in `/var/db/dhcpd_leases`, checked every 100 ms. |
 | agent | From the same moment as start until `paddock-guestd` answers a health check over vsock, checked every 100 ms. Runs alongside the lease check. |
-| network | From the same moment as start until the guest reports, through its agent, an IPv4 address on `en0` and an IPv4 DNS server, checked every 100 ms once the agent answers. |
+| network | From the same moment as start until the guest reports, through its agent's `state` request, an IPv4 address on `en0` and an IPv4 DNS server, checked every 100 ms once the agent answers. An agent before 0.4.0 is asked through a command instead, which takes seconds while the guest's user is logging in. |
 | session | From the same moment as start until `paddock-session` answers a health check over vsock, checked every 100 ms once the network is up. Only when the source has the helper installed; it starts when the user logs in, so it needs automatic login. |
 
 Each run also prints clone to ready, the total from cloning to the last step: session when the
