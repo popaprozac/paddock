@@ -100,7 +100,16 @@ paddock bench golden --runs 3 # clone, boot headless, time each step, delete the
 
 While Setup Assistant is open in `paddock run`, set up the guest the way every clone should be:
 
-1. Create the user account.
+1. Create the user account. With macOS 27 on this Mac and in the VM, paddock can create it on
+   the VM's first boot, in place of Setup Assistant, with automatic login and Remote Login on:
+
+   ```bash
+   paddock run golden --provision bench   # asks for the account's password on the terminal
+   ```
+
+   The license agreement and a welcome screen still appear once; the rest of Setup Assistant
+   doesn't. macOS reads this only on the first boot after `paddock install`. paddock refuses
+   this Mac's own user name, which provisioning is reported to fail on.
 2. Install the guest agent. Boot with the staged `guest` folder shared, then run its installer
    in the guest's Terminal:
 
@@ -138,7 +147,7 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | Command | What it does |
 | --- | --- |
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
-| `paddock run <name>` | Boots a VM in a window. |
+| `paddock run <name> [--share folder] [--provision account [--full-name name]]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
 | `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |

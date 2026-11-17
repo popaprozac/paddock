@@ -68,6 +68,7 @@ struct Install: AsyncParsableCommand {
         let minutes = Double((ContinuousClock.now - started).components.seconds) / 60
         print("Installed '\(name)' in \(String(format: "%.1f", minutes)) min at \(bundle.url.path)")
         print("Next: paddock run \(name)   (finish Setup Assistant once; this becomes the golden image)")
+        print("  or, with macOS 27: paddock run \(name) --provision <account>   (creates the account, no Setup Assistant)")
     }
 
     private func resolveRestoreImage(home: PaddockHome) async throws -> URL {

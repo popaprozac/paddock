@@ -12,6 +12,11 @@ struct Run: ParsableCommand {
 
             --share mounts a host folder read-only in the guest at /Volumes/My Shared Files, \
             for example the 'guest' folder build.sh stages with the guest agent's installer.
+
+            --provision creates the user account on the VM's first boot after 'paddock install', \
+            in place of Setup Assistant, with automatic login and Remote Login on. It asks for the \
+            account's password on the terminal and keeps it nowhere. It needs macOS 27 on this \
+            Mac and in the VM, and macOS ignores it on any later boot.
             """)
 
     @Argument(help: "VM to boot.")
@@ -19,6 +24,12 @@ struct Run: ParsableCommand {
 
     @Option(help: "Host folder to mount read-only in the guest.")
     var share: String?
+
+    @Option(help: "Short name of the account to create on the VM's first boot.")
+    var provision: String?
+
+    @Option(help: "Full name of that account; defaults to its short name.")
+    var fullName: String?
 
     func validate() throws {
         try BundleName.validate(name)
@@ -28,13 +39,55 @@ struct Run: ParsableCommand {
                 throw ValidationError("--share needs an existing folder: \(share)")
             }
         }
+        if fullName != nil && provision == nil {
+            throw ValidationError("--full-name goes with --provision")
+        }
+        // Reported on Apple's developer forums for macOS 27: provisioning an account with the
+        // host user's name fails, and Setup Assistant appears instead.
+        if let provision, provision == NSUserName() {
+            throw ValidationError("give the VM's account a name other than this Mac's user, '\(provision)'")
+        }
     }
 
     /// Runs on the main thread before any run loop starts; see `Entry`.
     func run() throws {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
         let sharing = share.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
-        try MainActor.assumeIsolated { try VMWindow.show(bundle, sharing: sharing) }
+        var provisioning: NSObject?
+        if let provision {
+            guard #available(macOS 27, *) else { throw PaddockError("--provision needs macOS 27 on this Mac") }
+            provisioning = try Self.provisioning(username: provision, fullName: fullName ?? provision)
+        }
+        try MainActor.assumeIsolated { [provisioning] in try VMWindow.show(bundle, sharing: sharing, provisioning: provisioning) }
+    }
+
+    /// Guest provisioning for `username`, with a password read from the terminal without echo,
+    /// twice, so a typo can't lock the account.
+    @available(macOS 27, *)
+    private static func provisioning(username: String, fullName: String) throws -> VZMacGuestProvisioningOptions {
+        let password = try readPassword("Password for '\(username)' in the VM: ")
+        guard try readPassword("Again: ") == password else {
+            throw PaddockError("the two passwords differ")
+        }
+        let options = VZMacGuestProvisioningOptions()
+        options.fullName = fullName
+        options.username = username
+        options.password = password
+        options.logsInAutomatically = true
+        options.enablesRemoteLogin = true
+        try options.validate()
+        return options
+    }
+
+    private static func readPassword(_ prompt: String) throws -> String {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        defer { buffer.withUnsafeMutableBytes { _ = memset_s($0.baseAddress, $0.count, 0, $0.count) } }
+        guard readpassphrase(prompt, &buffer, buffer.count, RPP_REQUIRE_TTY) != nil else {
+            throw PaddockError("--provision needs a terminal to read the password from")
+        }
+        let password = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        guard !password.isEmpty else { throw PaddockError("the password can't be empty") }
+        return password
     }
 }
 
@@ -48,10 +101,13 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var interrupt: (any DispatchSourceSignal)?
     private var shutdownRequested = false
 
-    static func show(_ bundle: VMBundle, sharing: URL?) throws {
+    private let provisioning: NSObject?  // VZMacGuestProvisioningOptions, which needs macOS 27
+
+    static func show(_ bundle: VMBundle, sharing: URL?, provisioning: NSObject? = nil) throws {
         let lock = try BundleLock(bundle: bundle)
         let configuration = try VMConfiguration.make(bundle: bundle, config: try bundle.readConfig(), sharing: sharing)
-        let controller = VMWindow(bundle: bundle, lock: lock, machine: VZVirtualMachine(configuration: configuration))
+        let controller = VMWindow(bundle: bundle, lock: lock, machine: VZVirtualMachine(configuration: configuration),
+                                  provisioning: provisioning)
 
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -59,10 +115,11 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         app.run()  // Never returns: the controller exits when the guest stops.
     }
 
-    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine) {
+    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, provisioning: NSObject?) {
         self.bundle = bundle
         self.lock = lock
         self.machine = machine
+        self.provisioning = provisioning
         super.init()
         machine.delegate = self
     }
@@ -87,12 +144,21 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         interrupt = onInterrupt { [weak self] in self?.requestShutdown() }
 
-        machine.start { result in
-            if case .failure(let error) = result {
+        let options = VZMacOSVirtualMachineStartOptions()
+        if #available(macOS 27, *), let provisioning = provisioning as? VZMacGuestProvisioningOptions {
+            do {
+                try options.setGuestProvisioning(provisioning)
+            } catch {
+                Self.exit(1, "Couldn't provision '\(bundle.name)': \(error.localizedDescription)")
+            }
+        }
+        machine.start(options: options) { error in
+            if let error {
                 Self.exit(1, "Couldn't start '\(self.bundle.name)': \(error.localizedDescription)")
             }
         }
-        print("Booted '\(bundle.name)'. Shut down from the Apple menu in the VM when you are done.")
+        print("Booted '\(bundle.name)'" + (provisioning == nil ? "" : ", creating its account")
+            + ". Shut down from the Apple menu in the VM when you are done.")
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
