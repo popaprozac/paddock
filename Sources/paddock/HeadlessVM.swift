@@ -143,17 +143,34 @@ final class HeadlessVM: NSObject {
     }
 
     /// Opens a vsock connection to the agent and returns a descriptor the caller owns, so the
-    /// blocking exchange can run off the main actor. Nil if nothing in the guest is listening.
+    /// blocking exchange can run off the main actor. Nil if nothing in the guest is listening, or
+    /// if Virtualization.framework hasn't called back within 2 s: now and then it never does.
     private func connectToAgent() async -> Int32? {
         guard let device = machine.socketDevices.first as? VZVirtioSocketDevice else { return nil }
+        let once = Once()
         return await withCheckedContinuation { continuation in
             device.connect(toPort: GuestAgent.port) { result in
-                guard case .success(let connection) = result else {
-                    return continuation.resume(returning: nil)
+                MainActor.assumeIsolated {
+                    var fd: Int32?
+                    if case .success(let connection) = result {
+                        let copy = dup(connection.fileDescriptor)
+                        connection.close()
+                        fd = copy >= 0 ? copy : nil
+                    }
+                    guard !once.done else {
+                        if let fd { close(fd) }  // too late: the caller has moved on
+                        return
+                    }
+                    once.done = true
+                    continuation.resume(returning: fd)
                 }
-                let fd = dup(connection.fileDescriptor)
-                connection.close()
-                continuation.resume(returning: fd >= 0 ? fd : nil)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                MainActor.assumeIsolated {
+                    guard !once.done else { return }
+                    once.done = true
+                    continuation.resume(returning: nil)
+                }
             }
         }
     }
@@ -200,4 +217,10 @@ extension HeadlessVM: @preconcurrency VZVirtualMachineDelegate {
         self.failure = failure
         onFailure?(failure)
     }
+}
+
+/// Whether a continuation was resumed, for two callbacks that race to resume it on the main actor.
+@MainActor
+private final class Once {
+    var done = false
 }
