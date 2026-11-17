@@ -2,6 +2,7 @@ import ArgumentParser
 import Dispatch
 import Foundation
 import MCP
+import os
 import PaddockCore
 
 struct MCPCommand: AsyncParsableCommand {
@@ -117,7 +118,9 @@ actor AgentSession {
             try await input(vm, InputAction(kind: "scroll", x: point.x, y: point.y, down: down, right: right))
             return [Self.text("Scrolled \(lines) lines at \(x), \(y).")]
         case "run_command":
-            return [Self.text(try await run(try arguments.string("command")))]
+            let timeout = try arguments.int("timeout", default: 120)
+            guard (1...3600).contains(timeout) else { throw PaddockError("timeout is 1 to 3,600 seconds") }
+            return [Self.text(try await run(try arguments.string("command"), timeout: timeout))]
         default:
             throw PaddockError("paddock has no tool named \(tool)")
         }
@@ -175,30 +178,28 @@ actor AgentSession {
     }
 
     /// Runs `command` in the VM and returns its output, its last lines if it is long, and its
-    /// exit status.
-    private func run(_ command: String) async throws -> String {
+    /// exit status, or what it printed by `timeout` seconds if it hasn't finished by then.
+    /// shortcut: a command past its time limit goes on running in the VM, since the guest agent
+    /// can't stop one; the VM is wiped on release. Give the agent a way to stop it if that matters.
+    private func run(_ command: String, timeout: Int) async throws -> String {
         let vm = try heldVM().vm
-        let limit = 20_000
-        let (output, cut, status) = try await blocking { () -> (String, Bool, Int32?) in
-            var output = "", count = 0, cut = false
-            var status: Int32?
-            try ServeClient.stream(ServeRequest(op: "exec", vm: vm, command: command)) { response in
-                if let line = response.output {
-                    output += line + "\n"
-                    count += line.count + 1
-                    if count > 2 * limit {  // trimmed now and then, so a long run never holds much
-                        output = lastLines(of: output, within: limit)
-                        count = output.count
-                        cut = true
-                    }
+        let output = CommandOutput()
+        let status: Int32?
+        do {
+            status = try await blocking(seconds: timeout) { () -> Int32? in
+                var status: Int32?
+                try ServeClient.stream(ServeRequest(op: "exec", vm: vm, command: command)) { response in
+                    if let line = response.output { output.append(line) }
+                    status = response.exit ?? status
+                    return status == nil
                 }
-                status = response.exit ?? status
-                return status == nil
+                return status
             }
-            return count > limit ? (lastLines(of: output, within: limit), true, status) : (output, cut, status)
+        } catch is TimedOut {
+            return output.text + "[still running after \(timeout) s, so paddock stopped waiting; it may go on running in the VM]"
         }
         guard let status else { throw PaddockError("paddock serve closed the connection before the command finished") }
-        return (cut ? "[output cut to its last \(limit) characters]\n" : "") + output + "[exit status \(status)]"
+        return output.text + "[exit status \(status)]"
     }
 
     private func input(_ vm: String, _ action: InputAction) async throws {
@@ -266,9 +267,13 @@ actor AgentSession {
              ], required: ["x", "y", "direction"])),
         Tool(name: "run_command", description: """
             Run a shell command in the VM, in a login shell as its user in their home folder, \
-            and get its output and exit status. Long output is cut to its end.
+            and get its output and exit status. Long output is cut to its end. A command still \
+            running after timeout seconds returns what it printed so far and goes on running.
             """,
-             inputSchema: schema(["command": ["type": "string"]], required: ["command"])),
+             inputSchema: schema([
+                 "command": ["type": "string"],
+                 "timeout": ["type": "integer", "description": "Seconds to wait, 1 to 3600; defaults to 120."],
+             ], required: ["command"])),
         Tool(name: "release", description: "Hand the VM back. paddock wipes it and the session can acquire another.",
              inputSchema: schema([:]), annotations: .init(destructiveHint: true)),
     ]
@@ -319,11 +324,51 @@ private func lastLines(of text: String, within limit: Int) -> String {
     return String(tail[tail.index(after: newline)...])
 }
 
+/// What a command has printed, cut to its last 20,000 characters, from the start of a line, once
+/// it is longer, shared by the thread that reads it and the session that returns it.
+private final class CommandOutput: Sendable {
+    private static let limit = 20_000
+    private let state = OSAllocatedUnfairLock(initialState: (text: "", count: 0, cut: false))
+
+    func append(_ line: String) {
+        state.withLock { output in
+            output.text += line + "\n"
+            output.count += line.count + 1
+            if output.count > 2 * Self.limit {  // trimmed now and then, so a long run never holds much
+                output.text = lastLines(of: output.text, within: Self.limit)
+                output.count = output.text.count
+                output.cut = true
+            }
+        }
+    }
+
+    var text: String {
+        state.withLock { output in
+            guard output.cut || output.count > Self.limit else { return output.text }
+            return "[output cut to its last \(Self.limit) characters]\n" + lastLines(of: output.text, within: Self.limit)
+        }
+    }
+}
+
+private struct TimedOut: Error {}
+
 /// Runs blocking socket work on a thread of its own: an acquire can wait minutes for the slot,
 /// and a command as long as it runs, which would otherwise hold one of Swift concurrency's few
-/// threads.
-private func blocking<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread.detachNewThread { continuation.resume(with: Result { try work() }) }
+/// threads. With `seconds`, it throws TimedOut once they pass, leaving the work to finish alone.
+private func blocking<T: Sendable>(seconds: Int? = nil, _ work: @escaping @Sendable () throws -> T) async throws -> T {
+    let pending = OSAllocatedUnfairLock<CheckedContinuation<T, any Error>?>(initialState: nil)
+    let finish: @Sendable (Result<T, any Error>) -> Void = { result in
+        let continuation = pending.withLock { continuation in
+            defer { continuation = nil }
+            return continuation
+        }
+        continuation?.resume(with: result)
+    }
+    return try await withCheckedThrowingContinuation { continuation in
+        pending.withLock { $0 = continuation }
+        Thread.detachNewThread { finish(Result { try work() }) }
+        if let seconds {
+            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(seconds)) { finish(.failure(TimedOut())) }
+        }
     }
 }

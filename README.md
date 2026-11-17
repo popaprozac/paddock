@@ -104,15 +104,24 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 
    The installer prints `paddock-guestd is running` when the agent is up, and
    `paddock-session is running` when the session helper is.
-3. For screenshots and accessibility trees, give every clone a desktop that stays up:
+3. Give every clone a desktop that stays up and commands that never wait for a prompt. These
+   are security settings, so they are yours to make (see
+   [What a golden image allows](#what-a-golden-image-allows)):
    - Turn on automatic login for the user in System Settings > Users & Groups.
    - Stop sleep and the display turning off: `sudo pmset -a sleep 0 displaysleep 0`.
-   - Turn off the screen lock in System Settings > Lock Screen.
+   - In System Settings > Lock Screen, set "Start Screen Saver when inactive" and "Require
+     password after screen saver begins or display is turned off" to Never.
    - Allow `paddock-session` in System Settings > Privacy & Security > Accessibility. macOS asks
-     when the installer starts it. macOS keeps the grant for a rebuilt helper only if it has the
-     same signature: `scripts/build.sh` signs it with the code-signing certificate named in
-     `PADDOCK_SIGNING_IDENTITY`, `paddock local signing` by default, and ad hoc if there is none,
-     in which case every rebuilt helper needs allowing again.
+     when the installer starts it.
+   - Add `/usr/local/libexec/paddock-guestd` in System Settings > Privacy & Security > Full Disk
+     Access. Without it, a command that touches Desktop, Documents or Downloads waits for a
+     prompt that nobody answers.
+
+   macOS keeps both grants for rebuilt binaries only if they have the same signature:
+   `scripts/build.sh` signs both with the code-signing certificate named in
+   `PADDOCK_SIGNING_IDENTITY`, `paddock local signing` by default, and ad hoc if there is none,
+   in which case every rebuild needs granting again. `serve` checks these settings in the
+   clone it boots for its slot and warns about each one that is missing.
 4. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
    shut down; doing it a second time forces the VM off.
 
@@ -219,7 +228,7 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 | `screenshot` | The VM's screen as a PNG. |
 | `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
 | `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). |
-| `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. |
+| `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. After `timeout` seconds, 120 by default and at most 3,600, it returns what the command printed so far, and the command goes on running in the VM. |
 | `release` | Hands the VM back to `serve`, which wipes it. |
 
 - A session holds one VM at a time. When the client closes stdin, or stops the server with
@@ -230,6 +239,28 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
   the accessibility tree included, and the server converts them for the guest.
 - What the tools return from the guest, its screen, tree and command output, is whatever the
   workload in the VM put there. An agent should trust it no more than the workload.
+
+## What a golden image allows
+
+A golden image set up as above gives up some of macOS's protections so that its VMs run with
+nobody watching. They are the guest's protections, not this Mac's: the VM is the boundary
+between a workload and the host, and every VM is wiped when it is released.
+
+| Setting | What it allows |
+| --- | --- |
+| Automatic login | macOS keeps the account's password in `/etc/kcpassword`, obfuscated but reversible, so anyone with a copy of the image can recover it. |
+| No screen lock, screen saver or sleep | Whoever has the screen has the session: paddock's screenshots and input, by design. |
+| Accessibility for `paddock-session` | It can read and drive the interface of every app in the session; `axtree` reads only the focused app's. |
+| Full Disk Access for `paddock-guestd` | Commands it runs, through `exec`, `task` and `run_command`, can read and change every file in the guest, other apps' data included. |
+
+- Give the golden image's account a password used nowhere else, and sign it in to nothing:
+  every workload can read what the image holds.
+- The grants are made by hand, once, in the golden image, so SIP stays on. paddock needs no
+  Screen Recording permission, since it reads the screen on the host.
+- A grant belongs to a binary's signature, so a workload that replaces `paddock-session` or
+  `paddock-guestd` with its own binary doesn't get it. paddock treats both as untrusted anyway.
+- `serve` warns about each setting missing from the clone it boots for its slot, with what to
+  change. It doesn't change them itself.
 
 ## The userspace network
 

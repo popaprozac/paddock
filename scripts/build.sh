@@ -37,14 +37,17 @@ if ! command -v go >/dev/null; then
 fi
 (cd "$root/paddock-net" && go build -trimpath -o "$(dirname "$bin")/paddock-net" .) >&2
 
-# paddock-session needs Accessibility in the guest, which macOS grants per signature. Signed with
-# a stable certificate, a rebuilt helper keeps the grant; signed ad hoc, every build needs it again.
+# In the guest, paddock-session needs Accessibility and paddock-guestd Full Disk Access, which
+# macOS grants per signature. Signed with a stable certificate, rebuilt binaries keep the grants;
+# signed ad hoc, every build needs them granted again.
 identity="${PADDOCK_SIGNING_IDENTITY:-paddock local signing}"
 if security find-identity -p codesigning | grep -qF "\"$identity\""; then
-  codesign --force --sign "$identity" "$(dirname "$bin")/paddock-session" >&2
+  for name in paddock-session paddock-guestd; do
+    codesign --force --sign "$identity" "$(dirname "$bin")/$name" >&2
+  done
 else
-  echo "note: no '$identity' code-signing certificate, so paddock-session is signed ad hoc;" \
-    "allow it in golden's Accessibility settings again after every build" >&2
+  echo "note: no '$identity' code-signing certificate, so paddock-session and paddock-guestd are" \
+    "signed ad hoc; grant them Accessibility and Full Disk Access in golden again after every build" >&2
 fi
 
 # Stage the guest agent with its launchd job and installer, for 'paddock run --share'.

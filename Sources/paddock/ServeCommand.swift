@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import os
 import PaddockCore
 
 struct Serve: AsyncParsableCommand {
@@ -101,6 +102,8 @@ final class WarmPool {
         try await vm.start()
         let ip = try await waitUntilReady(vm)
         let booted = ContinuousClock.now - started
+        await warnAboutSource(vm, source)
+        let saveStarted = ContinuousClock.now
         try await vm.pauseAndSave()
         await vm.stop()
         self.vm = nil
@@ -109,7 +112,30 @@ final class WarmPool {
         let attributes = try? FileManager.default.attributesOfItem(atPath: bundle.savedStateURL.path)
         let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
         print("  booted at \(ip) in \(DurationFormat.short(booted)), "
-            + "saved \(ByteFormat.gigabytes(size)) of state in \(DurationFormat.short(ContinuousClock.now - started - booted))")
+            + "saved \(ByteFormat.gigabytes(size)) of state in \(DurationFormat.short(ContinuousClock.now - saveStarted))")
+    }
+
+    /// Prints what in `source` breaks VMs that nobody watches, found in its freshly booted clone:
+    /// see SourceCheck. serve carries on, since the VMs still work until the setting bites.
+    private func warnAboutSource(_ vm: HeadlessVM, _ source: VMBundle) async {
+        let output = OSAllocatedUnfairLock(initialState: [String]())
+        guard (try? await vm.runInGuest(SourceCheck.command) { line in output.withLock { $0.append(line) } }) == 0 else {
+            return print("  warning: couldn't check '\(source.name)' for settings that break unattended VMs")
+        }
+        var problems = SourceCheck.problems(in: output.withLock { $0 })
+        if sessionHelper == true {
+            do {
+                try await vm.accessibilityTree { _ in }
+            } catch let error as PaddockError where error.message.contains("Accessibility") {
+                problems.append("paddock-session lacks Accessibility, so axtree fails: allow it in System Settings > "
+                    + "Privacy & Security > Accessibility")
+            } catch {}
+        }
+        guard !problems.isEmpty else { return }
+        print("  warning: '\(source.name)' isn't set up for VMs that nobody watches; change it in the golden image:")
+        for problem in problems {
+            print("    - \(problem)")
+        }
     }
 
     /// Restores a fresh clone of the slot's saved state and waits until its agent answers.
