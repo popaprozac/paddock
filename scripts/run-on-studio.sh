@@ -24,7 +24,8 @@ if [[ -n $(git status --porcelain) ]]; then
 fi
 
 here=$(mktemp -d)
-# One SSH connection for every step, so a password is asked for once.
+# One SSH connection for every step, so a password is asked for once. Files go through it with
+# cat rather than scp, which doesn't reuse the connection.
 ssh_options=(-o ControlMaster=auto -o "ControlPath=$here/ssh" -o ControlPersist=60)
 remote=""
 vm=""
@@ -49,7 +50,7 @@ quote() {
 
 git bundle create -q "$here/in.bundle" HEAD
 remote=$(ssh "${ssh_options[@]}" "$host" 'mktemp -d')
-scp -q "${ssh_options[@]}" "$here/in.bundle" "$host:$remote/in.bundle"
+ssh "${ssh_options[@]}" "$host" "cat > $remote/in.bundle" < "$here/in.bundle"
 
 vm=$(ssh "${ssh_options[@]}" "$host" "$paddock acquire" | sed -n "s/^Assigned '\([^']*\)'.*/\1/p")
 if [[ -z $vm ]]; then
@@ -64,9 +65,9 @@ ssh "${ssh_options[@]}" "$host" \
 
 if ssh "${ssh_options[@]}" "$host" "test -f $remote/out.bundle"; then
   branch="paddock/$(date +%Y%m%d-%H%M%S)"
-  scp -q "${ssh_options[@]}" "$host:$remote/out.bundle" "$here/out.bundle"
+  ssh "${ssh_options[@]}" "$host" "cat $remote/out.bundle" > "$here/out.bundle"
   git fetch -q "$here/out.bundle" "HEAD:refs/heads/$branch"
   echo "New commits on branch $branch:" >&2
-  git log --oneline "HEAD..$branch" >&2
+  git --no-pager log --oneline "HEAD..$branch" >&2
 fi
 exit "$status"
