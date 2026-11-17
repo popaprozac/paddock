@@ -6,27 +6,34 @@ import Foundation
 /// The agent listens only on vsock, so nothing on the VM network can reach it. Each
 /// connection carries one request line of JSON and gets one or more answer lines back:
 ///
-///     {"op":"health"}                ->  {"version":"0.2.0"}
-///     {"op":"run","command":"ls"}    ->  {"output":"..."} per line, then {"exit":0}
+///     {"op":"health"}                       ->  {"version":"0.3.0"}
+///     {"op":"run","command":"ls"}           ->  {"output":"..."} per line, then {"exit":0}
+///     {"op":"put","name":"a","size":N} + N bytes  ->  {"exit":0}
+///     {"op":"get","name":"a"}               ->  {"chunk":n} + n bytes, repeated, then {"exit":0}
 ///
+/// `put` and `get` work on files in the workload account's `~/paddock` folder.
 /// The host treats every answer as untrusted: the workload runs as admin and can replace the
 /// agent.
 public enum GuestAgent {
     /// The vsock port the agent listens on inside the guest.
     public static let port: UInt32 = 52525
-    public static let version = "0.2.0"
+    public static let version = "0.3.0"
 
     /// Output lines longer than this are split, so every answer line stays well under the
     /// 64 KB a reader accepts even after JSON escaping.
     static let outputChunk = 8 * 1024
 
     public struct Request: Codable, Equatable, Sendable {
-        public var op: String  // "health" or "run"
+        public var op: String  // "health", "run", "put" or "get"
         public var command: String?
+        public var name: String?
+        public var size: Int64?
 
-        public init(op: String, command: String? = nil) {
+        public init(op: String, command: String? = nil, name: String? = nil, size: Int64? = nil) {
             self.op = op
             self.command = command
+            self.name = name
+            self.size = size
         }
 
         var line: String {
@@ -37,12 +44,16 @@ public enum GuestAgent {
     public struct Response: Codable, Equatable, Sendable {
         public var version: String?
         public var output: String?
+        public var chunk: Int?
         public var exit: Int32?
         public var error: String?
 
-        public init(version: String? = nil, output: String? = nil, exit: Int32? = nil, error: String? = nil) {
+        public init(
+            version: String? = nil, output: String? = nil, chunk: Int? = nil, exit: Int32? = nil, error: String? = nil
+        ) {
             self.version = version
             self.output = output
+            self.chunk = chunk
             self.exit = exit
             self.error = error
         }
@@ -58,18 +69,34 @@ public enum GuestAgent {
         getpwuid(501).map { String(cString: $0.pointee.pw_name) }
     }
 
-    /// Answers one request on `responder`: `run` streams from a background thread, everything
-    /// else answers at once. `run` uses a login shell as `user`, which needs the agent to run as
-    /// root; with no user it uses a plain shell as the agent's own user, as the tests do.
-    public static func handle(_ line: String, runAs user: String?, responder: Responder) {
-        guard let request = try? JSONDecoder().decode(Request.self, from: Data(line.utf8)),
-              request.op == "run", let command = request.command else {
+    /// Answers one request on `responder`. `run`, `put` and `get` work on their own thread as
+    /// `user`, through sudo, which needs the agent to run as root; with no user they run as the
+    /// agent's own user, as the tests do. `files` is the folder `put` and `get` use.
+    public static func handle(_ line: String, runAs user: String?, files: String, responder: Responder) {
+        guard let request = try? JSONDecoder().decode(Request.self, from: Data(line.utf8)) else {
             return responder.finish(answer(line))
         }
-        // A command can run for a long time, so it gets its own thread.
+        let work: @Sendable () -> Response
+        switch request.op {
+        case "run":
+            guard let command = request.command else { return responder.finish(answer(line)) }
+            work = { run(command, as: user) { responder.send(Response(output: $0).line) } }
+        case "put":
+            guard let name = request.name, isFileName(name), let size = request.size, (0...maxFileSize).contains(size) else {
+                return responder.finish(Response(error: "put needs a plain file name and a size up to \(maxFileSize) bytes").line)
+            }
+            work = { put(name, size: size, into: files, as: user, from: responder) }
+        case "get":
+            guard let name = request.name, isFileName(name) else {
+                return responder.finish(Response(error: "get needs a plain file name").line)
+            }
+            work = { get(name, from: files, as: user, to: responder) }
+        default:
+            return responder.finish(answer(line))
+        }
+        // Commands and file transfers can take a long time, so each gets its own thread.
         Thread.detachNewThread {
-            let result = run(command, as: user) { responder.send(Response(output: $0).line) }
-            responder.finish(result.line)
+            responder.finish(work().line)
         }
     }
 
@@ -88,22 +115,13 @@ public enum GuestAgent {
     /// Runs `command` with stdin closed, passes each line of its combined stdout and stderr to
     /// `output`, and returns its exit status, or an error if it couldn't start.
     static func run(_ command: String, as user: String?, output: (String) -> Void) -> Response {
-        let process = Process()
-        if let user {
-            guard let account = getpwnam(user) else { return Response(error: "no user '\(user)' in the guest") }
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            process.arguments = ["-u", user, "-H", "/bin/zsh", "-lc", command]
-            process.currentDirectoryURL = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
-        } else {
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-c", command]
-        }
         let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        process.standardInput = FileHandle.nullDevice
+        let process: Process
         do {
-            try process.run()
+            process = try launch(user == nil ? ["/bin/zsh", "-c", command] : ["/bin/zsh", "-lc", command], as: user) {
+                $0.standardOutput = pipe
+                $0.standardError = pipe
+            }
         } catch {
             return Response(error: "can't start the command: \(error.localizedDescription)")
         }
@@ -129,6 +147,25 @@ public enum GuestAgent {
         }
         process.waitUntilExit()
         return Response(exit: process.terminationStatus)
+    }
+
+    /// Starts `arguments` as `user` through sudo, in that account's home folder, or as this
+    /// process when `user` is nil. Stdin is closed unless `configure` sets it.
+    static func launch(_ arguments: [String], as user: String?, configure: (Process) -> Void) throws -> Process {
+        let process = Process()
+        if let user {
+            guard let account = getpwnam(user) else { throw PaddockError("no user '\(user)' in the guest") }
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            process.arguments = ["-u", user, "-H"] + arguments
+            process.currentDirectoryURL = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
+        } else {
+            process.executableURL = URL(fileURLWithPath: arguments[0])
+            process.arguments = Array(arguments.dropFirst())
+        }
+        process.standardInput = FileHandle.nullDevice
+        configure(process)
+        try process.run()
+        return process
     }
 
     /// Sends `request` over `fd`, a connection to the agent, and returns its answer. The answer
@@ -159,7 +196,7 @@ public enum GuestAgent {
         throw PaddockError("the guest agent stopped answering before the command finished")
     }
 
-    private static func checked(_ answer: String) throws -> Response {
+    static func checked(_ answer: String) throws -> Response {
         guard let response = try? JSONDecoder().decode(Response.self, from: Data(answer.utf8)) else {
             throw PaddockError("unreadable answer from the guest agent")
         }

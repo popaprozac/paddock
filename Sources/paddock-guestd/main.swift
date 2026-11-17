@@ -6,12 +6,12 @@ import PaddockCore
 // protocol. launchd runs it as root from /Library/LaunchDaemons and restarts it if it exits.
 setvbuf(stdout, nil, _IOLBF, 0)
 do {
-    guard let user = GuestAgent.workloadUser() else {
+    guard let user = GuestAgent.workloadUser(), let files = GuestAgent.filesDirectory(for: user) else {
         throw PaddockError("no user with uid 501 to run commands as; finish Setup Assistant first")
     }
     let fd = try GuestAgent.listen(port: GuestAgent.port)
     let server = LineServer(listening: fd, queue: .main) { line, responder in
-        GuestAgent.handle(line, runAs: user, responder: responder)
+        GuestAgent.handle(line, runAs: user, files: files, responder: responder)
     }
     print("paddock-guestd \(GuestAgent.version) listening on vsock port \(GuestAgent.port), running commands as '\(user)'")
     withExtendedLifetime(server) { dispatchMain() }

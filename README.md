@@ -32,11 +32,16 @@ lines back:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.2.0"}` |
+| `{"op":"health"}` | `{"version":"0.3.0"}` |
 | `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
+| `{"op":"put","name":"...","size":N}` followed by N bytes | `{"exit":0}` once the file is stored |
+| `{"op":"get","name":"..."}` | `{"chunk":n}` followed by n bytes, repeated, then `{"exit":0}` |
 
 `run` uses a login shell (`zsh -l`) as the account with uid 501, the one created in Setup
-Assistant, in its home folder, with stdin closed. Output lines over 8 KB are split.
+Assistant, in its home folder, with stdin closed. Output lines over 8 KB are split. `put` and
+`get` work on files in that account's `~/paddock` folder, named by one plain path component, up
+to 4 GiB; the account itself reads and writes them, never the root agent, and stored files are
+readable only by it. The host refuses a `get` larger than it asked for and deletes a partial file.
 
 ## Make a golden image and benchmark it
 

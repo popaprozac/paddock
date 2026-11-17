@@ -57,7 +57,7 @@ import Testing
     func run(_ command: String?) throws -> [GuestAgent.Response] {
         let path = "/tmp/paddock-test-\(UUID().uuidString.prefix(8)).sock"
         let server = try LineServer(path: path, queue: DispatchQueue(label: "guest-agent-tests")) { line, responder in
-            GuestAgent.handle(line, runAs: nil, responder: responder)
+            GuestAgent.handle(line, runAs: nil, files: NSTemporaryDirectory(), responder: responder)
         }
         defer { server.stop() }
         let request = String(decoding: try JSONEncoder().encode(GuestAgent.Request(op: "run", command: command)), as: UTF8.self)
@@ -91,7 +91,7 @@ import Testing
         defer { close(host) }
         Thread.detachNewThread {
             if let line = UnixSocket.readLine(guest) {
-                GuestAgent.handle(line, runAs: nil, responder: Responder(fd: guest))
+                GuestAgent.handle(line, runAs: nil, files: NSTemporaryDirectory(), responder: Responder(fd: guest))
             }
         }
         var output: [String] = []

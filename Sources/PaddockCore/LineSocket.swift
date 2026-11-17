@@ -105,6 +105,22 @@ public final class Responder: @unchecked Sendable {
         }
     }
 
+    /// Sends a line and then raw bytes as one piece, for answers that carry binary data.
+    public func send(_ line: String, then bytes: Data) {
+        finished.withLock { finished in
+            if !finished {
+                UnixSocket.writeLine(line, to: fd)
+                _ = UnixSocket.writeAll(bytes, to: fd)
+            }
+        }
+    }
+
+    /// Reads up to `count` raw bytes the client sent after its request line. Nil once the
+    /// client stops sending or the read times out.
+    public func receive(upTo count: Int) -> Data? {
+        UnixSocket.read(upTo: count, from: fd)
+    }
+
     /// Sends a last line, if given, and closes the connection. Later calls do nothing.
     public func finish(_ line: String? = nil) {
         finished.withLock { finished in
@@ -202,7 +218,7 @@ enum UnixSocket {
         var line: [UInt8] = []
         var byte: UInt8 = 0
         while line.count < limit {
-            guard read(fd, &byte, 1) == 1 else { return nil }
+            guard Darwin.read(fd, &byte, 1) == 1 else { return nil }
             if byte == UInt8(ascii: "\n") {
                 return String(decoding: line, as: UTF8.self)
             }
@@ -212,13 +228,37 @@ enum UnixSocket {
     }
 
     static func writeLine(_ line: String, to fd: Int32) {
-        let bytes = Array((line + "\n").utf8)
-        var sent = 0
-        while sent < bytes.count {
-            let count = bytes[sent...].withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-            guard count > 0 else { return }
-            sent += count
+        _ = writeAll(Data((line + "\n").utf8), to: fd)
+    }
+
+    /// Writes all of `data`; false if the peer went away first.
+    static func writeAll(_ data: Data, to fd: Int32) -> Bool {
+        data.withUnsafeBytes { buffer in
+            var sent = 0
+            while sent < buffer.count {
+                let count = write(fd, buffer.baseAddress! + sent, buffer.count - sent)
+                guard count > 0 else { return false }
+                sent += count
+            }
+            return true
         }
+    }
+
+    /// Reads whatever has arrived, up to `count` bytes. Nil at end of stream or on a timeout.
+    static func read(upTo count: Int, from fd: Int32) -> Data? {
+        var buffer = [UInt8](repeating: 0, count: count)
+        let received = Darwin.read(fd, &buffer, count)
+        return received > 0 ? Data(buffer[..<received]) : nil
+    }
+
+    /// Reads exactly `count` bytes. Nil if the stream ends or times out first.
+    static func readExactly(_ count: Int, from fd: Int32) -> Data? {
+        var data = Data(capacity: count)
+        while data.count < count {
+            guard let chunk = read(upTo: count - data.count, from: fd) else { return nil }
+            data.append(chunk)
+        }
+        return data
     }
 
     static func error(_ action: String) -> PaddockError {
