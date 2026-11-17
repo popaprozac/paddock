@@ -33,6 +33,15 @@ func (h *dnsHandler) answer(r *dns.Msg) *dns.Msg {
 	}
 	q := r.Question[0]
 	name := normalize(q.Name)
+	if q.Qclass == dns.ClassINET && name == timeServer {
+		if q.Qtype == dns.TypeA { // the gateway answers NTP; see ntp.go
+			m.Answer = append(m.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP(gatewayIP).To4(),
+			})
+		}
+		return m
+	}
 	if q.Qclass != dns.ClassINET || !h.policy.Load().allows(name) {
 		h.logf("deny dns %s: not on the list", name)
 		// An SOA with a TTL of 0 tells resolvers not to cache the answer (RFC 2308), so a name

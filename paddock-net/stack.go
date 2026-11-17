@@ -6,9 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 
-	"github.com/containers/gvisor-tap-vsock/pkg/services/dhcp"
 	"github.com/containers/gvisor-tap-vsock/pkg/tap"
-	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/miekg/dns"
 	log "github.com/sirupsen/logrus"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -31,21 +29,11 @@ const (
 	nic        = 1
 )
 
-// newNetwork builds the guest's network from gvisor-tap-vsock's switch and DHCP server, with
-// paddock-net's own DNS and TCP handling in place of its forwarders, which would carry anything
+// newNetwork builds the guest's network on gvisor-tap-vsock's switch, with paddock-net's own
+// DHCP, DNS and TCP handling in place of its services and forwarders, which would carry anything
 // anywhere. It follows gvisor-tap-vsock's virtualnetwork.New (Apache 2.0). The returned switch
 // accepts the VM's frames; p holds the policy in force.
 func newNetwork(mac string, p *atomic.Pointer[policy], logf func(string, ...any)) (*tap.Switch, error) {
-	ipPool, err := tap.NewIPPool(subnet)
-	if err != nil {
-		return nil, err
-	}
-	if err := ipPool.Reserve(gatewayIP, gatewayMAC); err != nil {
-		return nil, err
-	}
-	if err := ipPool.Reserve(guestIP, mac); err != nil {
-		return nil, err
-	}
 	endpoint, err := tap.NewLinkEndpoint(false, mtu, gatewayMAC, gatewayIP, nil)
 	if err != nil {
 		return nil, err
@@ -58,7 +46,7 @@ func newNetwork(mac string, p *atomic.Pointer[policy], logf func(string, ...any)
 	if err != nil {
 		return nil, err
 	}
-	// The only transport handler is TCP's: datagrams to anything but the gateway's DNS and
+	// The only transport handler is TCP's: datagrams to anything but the gateway's DNS, NTP and
 	// DHCP find no endpoint and are dropped, and pings never leave the host.
 	f := &forwarder{policy: p, dial: hostDialer.DialContext, logf: logf}
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcp.NewForwarder(s, 0, 128, f.handle).HandlePacket)
@@ -66,16 +54,14 @@ func newNetwork(mac string, p *atomic.Pointer[policy], logf func(string, ...any)
 	if err := serveDNS(s, &dnsHandler{policy: p, lookup: lookupIPv4, logf: logf}); err != nil {
 		return nil, fmt.Errorf("DNS: %w", err)
 	}
-	dhcpServer, err := dhcp.New(&types.Configuration{
-		MTU:              mtu,
-		Subnet:           subnet,
-		GatewayIP:        gatewayIP,
-		DHCPStaticLeases: map[string]string{guestIP: mac},
-	}, s, ipPool)
+	ntpConn, err := gonet.DialUDP(s, &tcpip.FullAddress{NIC: nic, Addr: gateway(), Port: 123}, nil, ipv4.ProtocolNumber)
 	if err != nil {
+		return nil, fmt.Errorf("NTP: %w", err)
+	}
+	go serveNTP(ntpConn)
+	if err := serveDHCP(s, mac); err != nil {
 		return nil, fmt.Errorf("DHCP: %w", err)
 	}
-	go func() { log.Error(dhcpServer.Serve()) }()
 	return networkSwitch, nil
 }
 
