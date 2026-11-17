@@ -6,7 +6,7 @@ import Foundation
 /// The agent listens only on vsock, so nothing on the VM network can reach it. Each
 /// connection carries one request line of JSON and gets one or more answer lines back:
 ///
-///     {"op":"health"}                       ->  {"version":"0.3.0"}
+///     {"op":"health"}                       ->  {"version":"0.3.1"}
 ///     {"op":"run","command":"ls"}           ->  {"output":"..."} per line, then {"exit":0}
 ///     {"op":"put","name":"a","size":N} + N bytes  ->  {"exit":0}
 ///     {"op":"get","name":"a"}               ->  {"chunk":n} + n bytes, repeated, then {"exit":0}
@@ -17,7 +17,7 @@ import Foundation
 public enum GuestAgent {
     /// The vsock port the agent listens on inside the guest.
     public static let port: UInt32 = 52525
-    public static let version = "0.3.0"
+    public static let version = "0.3.1"
 
     /// Output lines longer than this are split, so every answer line stays well under the
     /// 64 KB a reader accepts even after JSON escaping.
@@ -58,7 +58,7 @@ public enum GuestAgent {
             self.error = error
         }
 
-        var line: String {
+        public var line: String {
             (try? JSONEncoder().encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
         }
     }
@@ -80,7 +80,7 @@ public enum GuestAgent {
         switch request.op {
         case "run":
             guard let command = request.command else { return responder.finish(answer(line)) }
-            work = { run(command, as: user) { responder.send(Response(output: $0).line) } }
+            work = { run(command, as: user) { responder.send(lines: $0.map { Response(output: $0).line }) } }
         case "put":
             guard let name = request.name, isFileName(name), let size = request.size, (0...maxFileSize).contains(size) else {
                 return responder.finish(Response(error: "put needs a plain file name and a size up to \(maxFileSize) bytes").line)
@@ -114,7 +114,8 @@ public enum GuestAgent {
 
     /// Runs `command` with stdin closed, passes each line of its combined stdout and stderr to
     /// `output`, and returns its exit status, or an error if it couldn't start.
-    static func run(_ command: String, as user: String?, output: (String) -> Void) -> Response {
+    /// Passes the command's output to `output` as lines, all those that arrive together at once.
+    static func run(_ command: String, as user: String?, output: ([String]) -> Void) -> Response {
         let pipe = Pipe()
         let process: Process
         do {
@@ -127,8 +128,9 @@ public enum GuestAgent {
         }
 
         var pending: [UInt8] = []
+        var lines: [String] = []
         func emit(_ bytes: ArraySlice<UInt8>) {
-            output(String(decoding: bytes, as: UTF8.self))
+            lines.append(String(decoding: bytes, as: UTF8.self))
         }
         let reader = pipe.fileHandleForReading
         while case let chunk = reader.availableData, !chunk.isEmpty {
@@ -141,9 +143,12 @@ public enum GuestAgent {
                 emit(pending[..<outputChunk])
                 pending.removeSubrange(..<outputChunk)
             }
+            output(lines)
+            lines.removeAll(keepingCapacity: true)
         }
         if !pending.isEmpty {
             emit(pending[...])
+            output(lines)
         }
         process.waitUntilExit()
         return Response(exit: process.terminationStatus)
@@ -182,9 +187,16 @@ public enum GuestAgent {
     /// Asks the agent over `fd` to run `command`, passes each output line to `output` as it
     /// arrives and returns the command's exit status. Waits as long as the command runs.
     public static func askToRun(_ command: String, over fd: Int32, output: (String) -> Void) throws -> Int32 {
+        try askStreaming(Request(op: "run", command: command), over: fd, output: output)
+    }
+
+    /// Sends `request` over `fd`, passes each `output` line of the answer to `output` and returns
+    /// the `exit` status that ends it. Waits as long as the answer takes.
+    public static func askStreaming(_ request: Request, over fd: Int32, output: (String) -> Void) throws -> Int32 {
         UnixSocket.configure(fd, readTimeout: nil)
-        UnixSocket.writeLine(Request(op: "run", command: command).line, to: fd)
-        while let answer = UnixSocket.readLine(fd) {
+        UnixSocket.writeLine(request.line, to: fd)
+        var reader = LineReader(fd: fd)
+        while let answer = reader.readLine() {
             let response = try checked(answer)
             if let exit = response.exit {
                 return exit
@@ -193,7 +205,7 @@ public enum GuestAgent {
                 output(text)
             }
         }
-        throw PaddockError("the guest agent stopped answering before the command finished")
+        throw PaddockError("the guest agent stopped answering before it finished")
     }
 
     static func checked(_ answer: String) throws -> Response {
@@ -201,7 +213,7 @@ public enum GuestAgent {
             throw PaddockError("unreadable answer from the guest agent")
         }
         if let error = response.error {
-            throw PaddockError("the guest agent refused: \(error.prefix(200))")
+            throw PaddockError("the guest refused: \(error.prefix(200))")
         }
         return response
     }

@@ -98,9 +98,18 @@ public final class Responder: @unchecked Sendable {
 
     /// Sends one line. Does nothing once finished.
     public func send(_ line: String) {
+        send(lines: [line])
+    }
+
+    /// Sends lines in one write. A guest answering line by line over vsock sends a packet per
+    /// line, and tens of thousands of small packets stall Virtualization.framework's vsock for
+    /// good; written together, the same data goes in a few large packets. Does nothing once
+    /// finished.
+    public func send(lines: [String]) {
+        guard !lines.isEmpty else { return }
         finished.withLock { finished in
             if !finished {
-                UnixSocket.writeLine(line, to: fd)
+                _ = UnixSocket.writeAll(Data((lines.joined(separator: "\n") + "\n").utf8), to: fd)
             }
         }
     }
@@ -160,7 +169,48 @@ public enum LineClient {
         let fd = try UnixSocket.connect(path)
         defer { close(fd) }
         UnixSocket.writeLine(line, to: fd)
-        while let answer = UnixSocket.readLine(fd), try onLine(answer) {}
+        var reader = LineReader(fd: fd)
+        while let answer = reader.readLine(), try onLine(answer) {}
+    }
+}
+
+/// Reads lines from a socket in blocks of up to 64 KB instead of a system call per byte, for
+/// answers of many lines.
+struct LineReader {
+    let fd: Int32
+    private var buffer: [UInt8] = []
+    private var start = 0  // where the unread part of `buffer` begins
+
+    init(fd: Int32) {
+        self.fd = fd
+    }
+
+    /// The next line without its newline, or nil at the end of the stream, on a read timeout or
+    /// error, or when a line runs past `limit` bytes.
+    mutating func readLine(limit: Int = 64 * 1024) -> String? {
+        var searched = start
+        while true {
+            if let newline = buffer[searched...].firstIndex(of: UInt8(ascii: "\n")) {
+                let line = String(decoding: buffer[start..<newline], as: UTF8.self)
+                start = newline + 1
+                if start == buffer.count {
+                    buffer.removeAll(keepingCapacity: true)
+                    start = 0
+                }
+                return line
+            }
+            guard buffer.count - start < limit else { return nil }
+            searched = buffer.count
+            if start > 0 {
+                buffer.removeSubrange(..<start)
+                searched -= start
+                start = 0
+            }
+            var block = [UInt8](repeating: 0, count: 64 * 1024)
+            let count = Darwin.read(fd, &block, block.count)
+            guard count > 0 else { return nil }
+            buffer.append(contentsOf: block[..<count])
+        }
     }
 }
 
