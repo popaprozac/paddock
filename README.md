@@ -2,9 +2,17 @@
 
 An open-source macOS sandbox fleet for AI agents, CI and remote development on Apple silicon.
 
-This repository is at MVP step 1: a host agent spike that drives Virtualization.framework
-directly to install macOS, boot it, make copy-on-write clones and time how fast a clone becomes
-usable. It has no Tart or Lume dependency.
+This repository is the MVP: a host agent that drives Virtualization.framework directly, with no
+Tart or Lume dependency. On one Mac it can:
+
+- install macOS and make APFS copy-on-write clones of a VM;
+- keep a warm VM ready and hand it out in under a millisecond, then restore a saved state for
+  the next one in about 6 s;
+- run commands and git tasks in a guest through an agent that listens only on vsock;
+- limit a guest's network to the names its session allows;
+- read a guest's screen on the host, and its accessibility tree in the guest.
+
+There is no control plane yet: each Mac runs its own `paddock serve`.
 
 ## Requirements
 
