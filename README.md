@@ -114,10 +114,13 @@ the guest agent from the `guest` folder `scripts/build.sh` stages, turns off sle
 and the screen saver, turns Remote Login off for good and shuts the guest down. From then on
 nothing reaches the guest over the network.
 
-macOS still shows its license agreement and a welcome screen at the next boot, and the
-Accessibility and Full Disk Access grants in step 3 below are yours to make. The app paddock runs
-in, such as Terminal, needs Local Network access in System Settings > Privacy & Security to reach
-the guest over SSH.
+macOS still shows its license agreement and a welcome screen at the next boot. Accepting the
+license finishes Setup Assistant, which turns automatic login off, so turn it on again in System
+Settings > Users & Groups in that boot. The Accessibility and Full Disk Access grants in step 3
+below are yours to make too.
+
+The app paddock runs in, such as Terminal, needs Local Network access in System Settings >
+Privacy & Security to reach the guest over SSH.
 
 To set up a guest by hand instead, while Setup Assistant is open in `paddock run`:
 
@@ -287,7 +290,7 @@ between a workload and the host, and every VM is wiped when it is released.
 
 | Setting | What it allows |
 | --- | --- |
-| Automatic login | macOS keeps the account's password in `/etc/kcpassword`, obfuscated but reversible, so anyone with a copy of the image can recover it. |
+| Automatic login | macOS keeps the account's password in `/etc/kcpassword`, obfuscated but reversible, so anyone with root in the guest or a copy of the image can recover it. It is the same file however automatic login is turned on, and it doesn't work with FileVault on. |
 | No screen saver or sleep | Whoever has the screen has the session: paddock's screenshots and input, by design. |
 | Accessibility for `paddock-session` | It can read and drive the interface of every app in the session; `axtree` reads only the focused app's. |
 | Full Disk Access for `paddock-guestd` | Commands it runs, through `exec`, `task` and `run_command`, can read and change every file in the guest, other apps' data included. |
@@ -300,6 +303,17 @@ between a workload and the host, and every VM is wiped when it is released.
   `paddock-guestd` with its own binary doesn't get it. paddock treats both as untrusted anyway.
 - `serve` warns about each setting missing from the clone it boots for its slot, with what to
   change. It doesn't change them itself.
+
+`paddock build` adds these, all during the image's first boot:
+
+- Remote Login is on from the first boot until the build turns it off, about a minute later,
+  for good. paddock uses SSH nowhere else.
+- It doesn't check the guest's SSH host key: the guest was created moments earlier on this
+  Mac's private network, so there is no earlier key to check against.
+- The password goes from your terminal into paddock's memory, to ssh through a socket only you
+  can reach, and to sudo in the guest over that SSH connection. It is never written to a file
+  on this Mac, put in an environment variable or on a command line. In the guest, once you turn
+  on automatic login, it is in `/etc/kcpassword`.
 
 ## The userspace network
 

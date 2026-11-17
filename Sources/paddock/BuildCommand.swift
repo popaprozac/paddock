@@ -14,8 +14,9 @@ struct Build: AsyncParsableCommand {
             and shuts the guest down. From then on nothing reaches the guest over the network.
 
             Then boot it once with 'paddock run <vm>' to click through the license agreement and \
-            the welcome screen, which macOS still shows, and to grant paddock-session \
-            Accessibility and paddock-guestd Full Disk Access. paddock needs macOS 27 on this Mac \
+            the welcome screen, which macOS still shows, to turn on automatic login again in \
+            System Settings > Users & Groups, since Setup Assistant turns it off as it finishes, \
+            and to grant paddock-session Accessibility and paddock-guestd Full Disk Access. paddock needs macOS 27 on this Mac \
             and in the VM, and Local Network access for the app it runs in, to reach the guest.
             """)
 
@@ -78,14 +79,20 @@ enum GoldenBuild {
         print("""
             Built '\(name)'. Boot it once to finish:
               paddock run \(name)
-            then click through the license agreement and the welcome screen, allow paddock-session in \
-            System Settings > Privacy & Security > Accessibility when macOS asks, add \
+            then click through the license agreement and the welcome screen, turn on automatic login \
+            for '\(account)' in System Settings > Users & Groups, allow paddock-session in System \
+            Settings > Privacy & Security > Accessibility when macOS asks, add \
             /usr/local/libexec/paddock-guestd under Full Disk Access, and shut down from the Apple menu.
             """)
     }
 
     /// Runs as root through sudo, from the shared guest folder. Remote Login goes off last, and the
     /// guest shuts itself down so its settings are on disk, not lost to a forced power-off.
+    ///
+    /// It leaves automatic login alone. Provisioning turns it on only if Setup Assistant finishes
+    /// on the first boot, which this build ends early, and whatever the build sets, Setup Assistant
+    /// turns off when the license is accepted on a later boot. Marking Setup Assistant done
+    /// (`/var/db/.AppleSetupDone`) doesn't stop it showing the license on macOS 27.
     static let setupScript = """
         set -euo pipefail
         echo "installing the guest agent"
