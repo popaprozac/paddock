@@ -34,6 +34,44 @@ public enum FrameImage {
         return image
     }
 
+    /// Reads the image in the file at `url`, such as a PNG `writePNG` wrote.
+    public static func read(_ url: URL) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw PaddockError("can't read an image from \(url.path)")
+        }
+        return image
+    }
+
+    /// `image` redrawn at `width` x `height`, smoothed.
+    public static func scaled(_ image: CGImage, width: Int, height: Int) throws -> CGImage {
+        guard let context = CGContext(
+                  data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+                  bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else {
+            throw PaddockError("can't scale a \(image.width)x\(image.height) image to \(width)x\(height)")
+        }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let scaled = context.makeImage() else {
+            throw PaddockError("can't scale a \(image.width)x\(image.height) image to \(width)x\(height)")
+        }
+        return scaled
+    }
+
+    /// `image` encoded as a PNG.
+    public static func pngData(_ image: CGImage) throws -> Data {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, "public.png" as CFString, 1, nil) else {
+            throw PaddockError("can't encode a PNG")
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw PaddockError("can't encode a PNG")
+        }
+        return data as Data
+    }
+
     /// Writes `image` to `url` as a PNG, replacing any file there.
     public static func writePNG(_ image: CGImage, to url: URL) throws {
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {

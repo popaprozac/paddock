@@ -11,7 +11,8 @@ Tart or Lume dependency. On one Mac it can:
 - run commands and git tasks in a guest through an agent that listens only on vsock;
 - limit a guest's network to the names its session allows;
 - read a guest's screen on the host, and its accessibility tree in the guest;
-- click, type, press keys and scroll in a guest from the host.
+- click, type, press keys and scroll in a guest from the host;
+- give an agent all of that as an MCP server, `paddock mcp`.
 
 There is no control plane yet: each Mac runs its own `paddock serve`.
 
@@ -134,6 +135,7 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | `paddock key <vm> <combination>...` | Presses key combinations in turn, such as `cmd+s`, `cmd+shift+z` or `return`. |
 | `paddock scroll <vm> <x> <y> [--down n] [--up n] [--right n] [--left n]` | Scrolls by about n lines at a point of the guest's screen. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
+| `paddock mcp` | Serves `serve`'s VMs to an agent as an MCP server on stdin and stdout (see [Agents over MCP](#agents-over-mcp)). |
 
 These commands reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its owner can
 open. Each connection carries one request line of JSON and gets one or more answer lines back;
@@ -198,6 +200,36 @@ or the accessibility tree to see the result.
   faster: typing 500 characters with no pause between key events, 163 arrived in testing.
 - `scroll` directions are the content's with macOS's default natural scrolling. A golden image
   that turns natural scrolling off scrolls the other way.
+
+## Agents over MCP
+
+`paddock mcp` is an MCP server that an agent's client starts and talks to over stdin and stdout.
+It reaches `serve` through its socket, like the other commands, so it runs on the Mac that runs
+`serve`. From another Mac, start it through ssh, which must log in without a prompt, with a key:
+an MCP client can't answer a password prompt. In Claude Code, for example:
+
+```bash
+claude mcp add paddock -- ~/code/paddock/.build/out/Products/Release/paddock mcp                 # on the Mac
+claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/Release/paddock mcp  # from another
+```
+
+| Tool | What it does |
+| --- | --- |
+| `acquire` | Takes the warm VM from `serve`, waiting while the slot fills. `allow` lists the names it may reach on the userspace network. |
+| `screenshot` | The VM's screen as a PNG. |
+| `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
+| `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). |
+| `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. |
+| `release` | Hands the VM back to `serve`, which wipes it. |
+
+- A session holds one VM at a time. When the client closes stdin, or stops the server with
+  SIGINT, SIGTERM or SIGHUP, as a dropped ssh connection does, the server releases the VM it
+  holds.
+- Screenshots are scaled to fit 1280x800, keeping the screen's shape: 1920x1200 becomes
+  1280x800. Every coordinate the tools take or return is in the screenshot's pixels, frames in
+  the accessibility tree included, and the server converts them for the guest.
+- What the tools return from the guest, its screen, tree and command output, is whatever the
+  workload in the VM put there. An agent should trust it no more than the workload.
 
 ## The userspace network
 

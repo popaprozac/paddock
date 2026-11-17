@@ -7,7 +7,7 @@ struct Paddock: AsyncParsableCommand {
         commandName: "paddock",
         abstract: "macOS sandboxes on Apple silicon: install, run, clone, benchmark and serve VMs.",
         version: "0.1.0",
-        subcommands: [Install.self, Run.self, Clone.self, Bench.self, Serve.self, Acquire.self, Exec.self, RunTask.self, Screenshot.self, AXTreeCommand.self, Click.self, TypeText.self, Key.self, Scroll.self, Release.self]
+        subcommands: [Install.self, Run.self, Clone.self, Bench.self, Serve.self, Acquire.self, Exec.self, RunTask.self, Screenshot.self, AXTreeCommand.self, Click.self, TypeText.self, Key.self, Scroll.self, Release.self, MCPCommand.self]
     )
 }
 
