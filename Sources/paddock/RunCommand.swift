@@ -42,10 +42,8 @@ struct Run: ParsableCommand {
         if fullName != nil && provision == nil {
             throw ValidationError("--full-name goes with --provision")
         }
-        // Reported on Apple's developer forums for macOS 27: provisioning an account with the
-        // host user's name fails, and Setup Assistant appears instead.
-        if let provision, provision == NSUserName() {
-            throw ValidationError("give the VM's account a name other than this Mac's user, '\(provision)'")
+        if let provision {
+            do { try Provisioning.validate(account: provision) } catch let error as PaddockError { throw ValidationError(error.message) }
         }
     }
 
@@ -56,38 +54,10 @@ struct Run: ParsableCommand {
         var provisioning: NSObject?
         if let provision {
             guard #available(macOS 27, *) else { throw PaddockError("--provision needs macOS 27 on this Mac") }
-            provisioning = try Self.provisioning(username: provision, fullName: fullName ?? provision)
+            let password = try Provisioning.readPassword(for: provision)
+            provisioning = try Provisioning.options(account: provision, fullName: fullName ?? provision, password: password)
         }
         try MainActor.assumeIsolated { [provisioning] in try VMWindow.show(bundle, sharing: sharing, provisioning: provisioning) }
-    }
-
-    /// Guest provisioning for `username`, with a password read from the terminal without echo,
-    /// twice, so a typo can't lock the account.
-    @available(macOS 27, *)
-    private static func provisioning(username: String, fullName: String) throws -> VZMacGuestProvisioningOptions {
-        let password = try readPassword("Password for '\(username)' in the VM: ")
-        guard try readPassword("Again: ") == password else {
-            throw PaddockError("the two passwords differ")
-        }
-        let options = VZMacGuestProvisioningOptions()
-        options.fullName = fullName
-        options.username = username
-        options.password = password
-        options.logsInAutomatically = true
-        options.enablesRemoteLogin = true
-        try options.validate()
-        return options
-    }
-
-    private static func readPassword(_ prompt: String) throws -> String {
-        var buffer = [CChar](repeating: 0, count: 1024)
-        defer { buffer.withUnsafeMutableBytes { _ = memset_s($0.baseAddress, $0.count, 0, $0.count) } }
-        guard readpassphrase(prompt, &buffer, buffer.count, RPP_REQUIRE_TTY) != nil else {
-            throw PaddockError("--provision needs a terminal to read the password from")
-        }
-        let password = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        guard !password.isEmpty else { throw PaddockError("the password can't be empty") }
-        return password
     }
 }
 

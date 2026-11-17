@@ -20,15 +20,16 @@ final class HeadlessVM: NSObject {
     var onFailure: ((PaddockError) -> Void)?
 
     /// With `userspaceNetwork`, the VM's network is its own paddock-net process, which stops with
-    /// this object, instead of macOS's shared NAT.
-    init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false) throws {
+    /// this object, instead of macOS's shared NAT. `sharing` mounts a host folder read-only in the
+    /// guest at /Volumes/My Shared Files.
+    init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false, sharing: URL? = nil) throws {
         lock = try BundleLock(bundle: bundle)
         network = userspaceNetwork
             ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress,
                                    controlPath: bundle.url.appendingPathComponent("net.sock").path)
             : nil
         machine = VZVirtualMachine(configuration: try VMConfiguration.make(
-            bundle: bundle, config: config, network: network?.attachment))
+            bundle: bundle, config: config, sharing: sharing, network: network?.attachment))
         self.bundle = bundle
         self.config = config
         super.init()
@@ -37,6 +38,26 @@ final class HeadlessVM: NSObject {
 
     func start() async throws {
         try await perform("start the clone") { machine.start(completionHandler: $0) }
+    }
+
+    /// Starts a VM that has never booted, with guest provisioning: see Provisioning.
+    @available(macOS 27, *)
+    func start(provisioning: VZMacGuestProvisioningOptions) async throws {
+        let options = VZMacOSVirtualMachineStartOptions()
+        try options.setGuestProvisioning(provisioning)
+        try await perform("start the VM") { done in
+            machine.start(options: options) { error in done(error.map { .failure($0) } ?? .success(())) }
+        }
+    }
+
+    /// Waits for the guest to shut itself down; false if it is still running after `timeout`.
+    func waitUntilStopped(within timeout: Duration) async throws -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if machine.state == .stopped { return true }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        return machine.state == .stopped
     }
 
     /// Loads the bundle's saved state. The VM is paused afterwards; `resume()` runs it.

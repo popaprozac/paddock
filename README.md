@@ -98,7 +98,28 @@ paddock run golden            # finish Setup Assistant in the window
 paddock bench golden --runs 3 # clone, boot headless, time each step, delete the clone
 ```
 
-While Setup Assistant is open in `paddock run`, set up the guest the way every clone should be:
+With macOS 27 on this Mac and in the VM, `paddock build` does most of the setup below with no
+one at the keyboard:
+
+```bash
+paddock install golden
+paddock build golden --account bench   # asks for the account's password
+paddock run golden                     # once: the license, a welcome screen and two grants
+```
+
+`build` boots the new VM once, and macOS creates the account, with automatic login and Remote
+Login on, in place of Setup Assistant. paddock logs in over SSH once with the password, which it
+keeps only in memory and hands to ssh through a socket only you can reach. As root, it installs
+the guest agent from the `guest` folder `scripts/build.sh` stages, turns off sleep, display sleep
+and the screen saver, turns Remote Login off for good and shuts the guest down. From then on
+nothing reaches the guest over the network.
+
+macOS still shows its license agreement and a welcome screen at the next boot, and the
+Accessibility and Full Disk Access grants in step 3 below are yours to make. The app paddock runs
+in, such as Terminal, needs Local Network access in System Settings > Privacy & Security to reach
+the guest over SSH.
+
+To set up a guest by hand instead, while Setup Assistant is open in `paddock run`:
 
 1. Create the user account. With macOS 27 on this Mac and in the VM, paddock can create it on
    the VM's first boot, in place of Setup Assistant, with automatic login and Remote Login on:
@@ -148,6 +169,7 @@ While Setup Assistant is open in `paddock run`, set up the guest the way every c
 | --- | --- |
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name> [--share folder] [--provision account [--full-name name]]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`. |
+| `paddock build <name> --account <account> [--full-name name] [--guest folder]` | Sets up a VM that `install` just made, on its first boot, with no one at the keyboard: creates the account, installs the guest agent and turns off what would stop unattended VMs (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
 | `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |

@@ -236,7 +236,7 @@ final class BenchRunner: NSObject {
                             report("desktop", nil, "loginwindow still covered the screen after \(settings.timeout) s")
                         }
                     } else {
-                        report("session", nil, "paddock-session didn't answer within \(settings.timeout) s; turn on automatic login in '\(source.name)'")
+                        report("session", nil, "paddock-session didn't answer within \(settings.timeout) s; turn on automatic login in '\(source.name)', and boot it once to finish Setup Assistant")
                     }
                 }
                 if let ready = sample.ready {
