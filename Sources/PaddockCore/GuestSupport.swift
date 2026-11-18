@@ -1,14 +1,17 @@
 /// Which macOS versions paddock sets up in a guest, and how. paddock's guest helpers run on
-/// macOS 14 and later, which anyone can set up by hand; `build` sets up 26 and later by itself.
+/// macOS 14 and later, which anyone can set up by hand; `build` sets up 15 and later by itself.
 public enum GuestSupport {
     /// The oldest macOS the guest agent and session helper run on.
     public static let minimumGuest = 14
     /// The first macOS whose guests take Virtualization's guest provisioning.
     public static let provisioning = 27
+    /// The oldest macOS `build` sets up offline from Recovery, as it does every release below
+    /// `provisioning`: the latest three releases, with 27.
+    public static let offline = 15
     /// The versions `build` has set up end to end, then `grant` and `serve`, as the README's
     /// table lists them. Apple changes first-boot setup between point releases, so another version
     /// is tried but not promised.
-    public static let tested: Set<String> = ["26.6.2", "27.2.1"]
+    public static let tested: Set<String> = ["15.6.1", "26.6.2", "27.2.1"]
 
     /// How `build` gets through a guest's first boot.
     public enum FirstBoot: Equatable, Sendable {
@@ -33,9 +36,9 @@ public enum GuestSupport {
         if major >= provisioning {
             return .provisioning
         }
-        guard major >= 26 else {
-            throw PaddockError("paddock build sets up macOS 26 and later, not \(version); set this one up by hand "
-                + "in 'paddock run' instead (see the README)")
+        guard major >= offline else {
+            throw PaddockError("paddock build sets up macOS \(offline) and later, not \(version); set this one up "
+                + "by hand in 'paddock run' instead (see the README)")
         }
         guard acceptsLicense else {
             throw PaddockError("building macOS \(version) needs license: accept, since paddock sets it up from Recovery "

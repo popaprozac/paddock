@@ -15,13 +15,15 @@ import Testing
         #expect(try GuestSupport.firstBoot(macOS: "28.0", acceptsLicense: true) == .provisioning)
     }
 
-    @Test func setsUpMacOS26OfflineOnlyWithTheLicenseAccepted() throws {
+    @Test func setsUpMacOS15And26OfflineOnlyWithTheLicenseAccepted() throws {
         #expect(try GuestSupport.firstBoot(macOS: "26.6.2", acceptsLicense: true) == .offline)
+        #expect(try GuestSupport.firstBoot(macOS: "15.6.1", acceptsLicense: true) == .offline)
         #expect(failure("26.6.2", license: false).contains("needs license: accept"))
+        #expect(failure("15.6.1", license: false).contains("needs license: accept"))
     }
 
     @Test func leavesOlderVersionsToSetUpByHand() {
-        #expect(failure("15.6.1", license: true).contains("set this one up by hand"))
+        #expect(failure("14.7.6", license: true).contains("set this one up by hand"))
         #expect(failure("Tahoe", license: true) == "can't tell which macOS 'Tahoe' is")
     }
 
