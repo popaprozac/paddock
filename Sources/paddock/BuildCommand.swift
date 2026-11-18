@@ -20,19 +20,19 @@ struct Build: AsyncParsableCommand {
             you accept Apple's license (apple.com/legal/sla) for the image, and paddock reads the \
             guest's screen and clicks through the license and the welcome screen, nothing else.
 
-            macOS 26 doesn't create the account, so paddock boots the VM in macOS Recovery first \
+            macOS 15 and 26 don't create the account, so paddock boots the VM in macOS Recovery first \
             and types a script into its Terminal that writes the account, automatic login and the \
             guest agent, and marks Setup Assistant done. The first boot then logs in by itself, \
             and paddock turns off sleep, display sleep and the screen saver through the guest \
-            agent. Remote Login is never on. This way never shows Apple's license, so a macOS 26 \
-            image file needs 'license: accept', and the account's password and full name can only \
+            agent. Remote Login is never on. This way never shows Apple's license, so a macOS 15 or \
+            26 image file needs 'license: accept', and the account's password and full name can only \
             use characters on a US keyboard.
 
             With 'grants: recovery', 'paddock grant' then writes the two grants from macOS \
             Recovery. Last, paddock boots the image once more, runs the steps through the guest \
             agent, each in zsh with set -e, checks the image as serve does and shuts it down.
 
-            paddock needs macOS 27 on this Mac and macOS 26 or later in the VM, and for macOS 27 \
+            paddock needs macOS 27 on this Mac and macOS 15 or later in the VM, and for macOS 27 \
             in the VM, Local Network access for the app it runs in, to reach the guest.
             """)
 
@@ -251,7 +251,7 @@ enum GoldenBuild {
         }
     }
 
-    /// A macOS 26 guest before its first boot, which ignores provisioning: paddock boots it in
+    /// A macOS 15 or 26 guest before its first boot, which ignores provisioning: paddock boots it in
     /// Recovery and types OfflineSetup's script into Terminal, after the password into `read -rs`,
     /// so the password is never on screen or in the script. The guest halts once the account,
     /// automatic login and the guest agent are written.

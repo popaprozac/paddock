@@ -107,13 +107,13 @@ paddock run golden            # finish Setup Assistant in the window
 paddock bench golden --runs 3 # clone, boot headless, time each step, delete the clone
 ```
 
-With macOS 27 on this Mac and macOS 26 or 27 in the VM, `paddock build` makes a golden image from
-an image file, with no one at the keyboard. `paddock init golden.yaml` writes a commented one to
-start from, with `--template minimal` (the default: the latest macOS, for your own agents and for
+With macOS 27 on this Mac and macOS 15, 26 or 27 in the VM, `paddock build` makes a golden image
+from an image file, with no one at the keyboard. `paddock init golden.yaml` writes a commented one
+to start from, with `--template minimal` (the default: the latest macOS, for your own agents and for
 you), `ci` (a pinned macOS plus the tools CI jobs need) or `managed` (a pinned macOS, with a person
-making the privacy grants in the image, so paddock never writes the privacy database). Templates
-are starting points: any file can take any setting. None accepts Apple's license for you: its
-license line ships commented out.
+making the privacy grants in the image, so paddock never writes the privacy database). Templates are
+starting points: any file can take any setting. None accepts Apple's license for you: its license
+line ships commented out.
 A file with every key looks like this:
 
 ```yaml
@@ -161,18 +161,18 @@ finishes on the first boot and macOS turns on automatic login itself. It clicks 
 other page, such as one asking to share analytics, stops the build and saves a screenshot of it.
 It is never a default.
 
-macOS 26 ignores provisioning, so `build` sets it up offline instead. Right after the install, it
-boots the VM in macOS Recovery, opens Terminal as `grant` does, types the password into
-`read -rs`, which doesn't show it, then types a script that writes the account, automatic login,
-the guest agent from the `guest` folder, and the records that tell Setup Assistant, and the pages
-it shows each account at its first login, that they are done. The account is an admin, and gets a
-Secure Token and owns the disk at its first login, as one Setup Assistant creates does. On the
-first boot the account logs in by itself; paddock checks that the desktop, not Setup Assistant, is
-in front, then turns off sleep, display sleep, the screen saver and automatic updates through the
-guest agent. Remote Login is never on. Setup Assistant never shows, so neither does Apple's
-license: a macOS 26 image file needs `license: accept`, and you accept the license for the image
-when you build it. paddock types the password and the account's full name into the guest, so they
-can only use characters on a US keyboard.
+macOS 15 and 26 ignore provisioning, so `build` sets them up offline instead. Right after the
+install, it boots the VM in macOS Recovery, opens Terminal as `grant` does, types the password into
+`read -rs`, which doesn't show it, then types a script that writes the account, automatic login, the
+guest agent from the `guest` folder, and the records that tell Setup Assistant, and the pages it
+shows each account at its first login, that they are done. The account is an admin, and gets a
+Secure Token and owns the disk at its first login, as one Setup Assistant creates does. On the first
+boot the account logs in by itself; paddock checks that the desktop, not Setup Assistant, is in
+front, then turns off sleep, display sleep, the screen saver and automatic updates through the guest
+agent. Remote Login is never on. Setup Assistant never shows, so neither does Apple's license: a
+macOS 15 or 26 image file needs `license: accept`, and you accept the license for the image when you
+build it. paddock types the password and the account's full name into the guest, so they can only
+use characters on a US keyboard.
 
 With `grants: recovery`, `paddock grant` then writes the Accessibility and Full Disk Access grants
 from macOS Recovery (see [What a golden image allows](#what-a-golden-image-allows)). With
@@ -196,7 +196,8 @@ served:
 | --- | --- | --- |
 | 27 | macOS creates the account; paddock finishes over SSH | 27.2.1 |
 | 26 | Offline, from Recovery; needs `license: accept` | 26.6.2 |
-| 14 to 25 | Not by `build`: set it up by hand, below | |
+| 15 | Offline, from Recovery; needs `license: accept` | 15.6.1 |
+| 14 | Not by `build`: set it up by hand, below | |
 
 Apple changes first-boot setup between point releases. `build` tries a version that isn't in the
 table, and says so; if that build stops, set the image up by hand.
@@ -252,7 +253,7 @@ To set up a guest by hand instead, while Setup Assistant is open in `paddock run
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`, on a macOS 27 or later guest (older guests ignore it); `--recovery` starts it in macOS Recovery. |
 | `paddock init <file> [--template minimal\|ci\|managed]` | Writes a commented starter image file for `build`. |
-| `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27 on this Mac and macOS 26 or later in the VM. |
+| `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27 on this Mac and macOS 15 or later in the VM. |
 | `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](#what-a-golden-image-allows)). |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
@@ -397,7 +398,7 @@ between a workload and the host, and every VM is wiped when it is released.
   on this Mac, put in an environment variable or on a command line. In the guest, once you turn
   on automatic login, it is in `/etc/kcpassword`.
 
-On macOS 26, in Recovery before its first boot:
+On macOS 15 and 26, in Recovery before its first boot:
 
 - The password goes from your terminal into paddock's memory and, as key presses, into
   `read -rs` in Recovery's Terminal, which doesn't show it. The script typed after it passes it
@@ -424,8 +425,8 @@ On macOS 26, in Recovery before its first boot:
   off in every VM they make, where a workload could then grant itself more, such as Screen
   Recording.
 - Apple doesn't document that database's format, and a macOS release could change it. paddock
-  writes it as macOS 26 and 27 do. If a release changes it, `grant` fails, or `serve` warns that a
-  grant is missing. Allowing the two once in System Settings, in the golden image, is the
+  writes it as macOS 15, 26 and 27 do. If a release changes it, `grant` fails, or `serve` warns
+  that a grant is missing. Allowing the two once in System Settings, in the golden image, is the
   supported way.
 - Recovery asks for no password, because the VM's disk isn't encrypted with FileVault. Anyone who
   can read and write the image's files on this Mac can change the image anyway.

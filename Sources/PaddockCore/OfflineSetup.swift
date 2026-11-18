@@ -1,8 +1,8 @@
-/// What `paddock build` writes into a macOS 26 image from Recovery, before its first boot, in place
-/// of Setup Assistant, which ignores provisioning on 26: the account, the guest agent, automatic
-/// login, and the per-user Setup Assistant's record of pages already seen, so the first boot logs
-/// in to the desktop by itself. Found by a spike on 26.6.2; the per-user keys are the ones that
-/// Setup Assistant wrote there after a login by hand.
+/// What `paddock build` writes into a macOS 15 or 26 image from Recovery, before its first boot, in
+/// place of Setup Assistant, since provisioning starts with 27: the account, the guest agent,
+/// automatic login, and the per-user Setup Assistant's record of pages already seen, so the first
+/// boot logs in to the desktop by itself. Found by a spike on 26.6.2, and works unchanged on
+/// 15.6.1; the per-user keys are the ones that Setup Assistant wrote there after a login by hand.
 public enum OfflineSetup {
     /// The account's user ID: the first account on a fresh install, as Setup Assistant makes it.
     public static let userID = 501
