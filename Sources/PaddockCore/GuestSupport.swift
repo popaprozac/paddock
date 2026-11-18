@@ -6,7 +6,7 @@ public enum GuestSupport {
     /// The first macOS whose guests take Virtualization's guest provisioning.
     public static let provisioning = 27
     /// The versions `build` has set up end to end, then `grant` and `serve`, as the README's
-    /// table lists them. Apple changes Setup Assistant between point releases, so another version
+    /// table lists them. Apple changes first-boot setup between point releases, so another version
     /// is tried but not promised.
     public static let tested: Set<String> = ["27.2.1"]
 
@@ -14,8 +14,9 @@ public enum GuestSupport {
     public enum FirstBoot: Equatable, Sendable {
         /// macOS creates the account in place of Setup Assistant; paddock installs the agent over SSH.
         case provisioning
-        /// paddock clicks through Setup Assistant, typing the account, and installs the agent in Terminal.
-        case setupAssistant
+        /// paddock writes the account and the agent from Recovery (OfflineSetup), and Setup Assistant
+        /// never shows.
+        case offline
     }
 
     /// The major version of a macOS version string such as "26.6.2", or nil if it has none.
@@ -23,8 +24,8 @@ public enum GuestSupport {
         version.split(separator: ".").first.flatMap { Int($0) }
     }
 
-    /// How `build` sets up a guest of macOS `version`, or why it can't. Setup Assistant shows the
-    /// license before the account can log in, so clicking through it needs `license: accept`.
+    /// How `build` sets up a guest of macOS `version`, or why it can't. Setting up offline skips
+    /// Setup Assistant and the license it shows, so it needs `license: accept`.
     public static func firstBoot(macOS version: String, acceptsLicense: Bool) throws -> FirstBoot {
         guard let major = major(version) else {
             throw PaddockError("can't tell which macOS '\(version)' is")
@@ -37,9 +38,9 @@ public enum GuestSupport {
                 + "in 'paddock run' instead (see the README)")
         }
         guard acceptsLicense else {
-            throw PaddockError("building macOS \(version) needs license: accept, since its Setup Assistant shows the "
-                + "license before the account can log in; or set it up by hand in 'paddock run' (see the README)")
+            throw PaddockError("building macOS \(version) needs license: accept, since paddock sets it up from Recovery "
+                + "and skips Setup Assistant, license included; or set it up by hand in 'paddock run' (see the README)")
         }
-        return .setupAssistant
+        return .offline
     }
 }

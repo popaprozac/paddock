@@ -15,8 +15,8 @@ import Testing
         #expect(try GuestSupport.firstBoot(macOS: "28.0", acceptsLicense: true) == .provisioning)
     }
 
-    @Test func clicksThroughMacOS26OnlyWithTheLicenseAccepted() throws {
-        #expect(try GuestSupport.firstBoot(macOS: "26.6.2", acceptsLicense: true) == .setupAssistant)
+    @Test func setsUpMacOS26OfflineOnlyWithTheLicenseAccepted() throws {
+        #expect(try GuestSupport.firstBoot(macOS: "26.6.2", acceptsLicense: true) == .offline)
         #expect(failure("26.6.2", license: false).contains("needs license: accept"))
     }
 
