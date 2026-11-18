@@ -404,6 +404,9 @@ final class HeadlessVM: NSObject {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                 call { continuation.resume(with: $0) }
             }
+        } catch let error as VZError where error.code == .virtualMachineLimitExceeded {
+            throw PaddockError("couldn't \(action): macOS runs at most two VMs at once, and two are running "
+                + "already, such as another serve slot, paddock run, Tart or UTM: stop one, or use 'paddock serve --slots 1'")
         } catch {
             throw PaddockError("couldn't \(action): \(error.localizedDescription)")
         }

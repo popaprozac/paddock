@@ -4,29 +4,37 @@ import PaddockCore
 
 struct Serve: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Keep a warm clone of a VM running headless, ready to hand out.",
+        abstract: "Keep warm clones of a VM running headless, ready to hand out.",
         discussion: """
-            serve clones the source into one slot with its own machine identifier and MAC
-            address, boots it until its guest agent answers and saves its state. It then restores a fresh
-            clone of that saved state and keeps it running. If the warm VM stops, serve
-            restores another. 'paddock acquire' takes the warm VM and 'paddock release'
-            hands it back to be wiped and replaced; they reach serve through a socket in
-            the paddock home that only you can open. Press Ctrl-C to stop serve and delete
-            the slot's VMs.
+            serve keeps a warm VM in each of its slots, two by default, which is as many VMs as \
+            macOS runs at once. It clones the source into each slot with the slot's own machine \
+            identifier and MAC address, boots it until its guest agent answers and saves its \
+            state, both slots at the same time. Each slot then restores a fresh clone of its \
+            saved state and keeps it running; if that VM stops, the slot restores another. \
+            'paddock acquire' takes a warm VM and 'paddock release' hands it back to be wiped \
+            and replaced; they reach serve through a socket in the paddock home that only you \
+            can open. A slot that can't start stays empty, with the reason, and the other keeps \
+            serving. Press Ctrl-C to stop serve and delete the slots' VMs.
             """)
 
     @Argument(help: "VM to clone, usually the golden image, with the guest agent installed.")
     var source: String
 
-    @Flag(help: "Give the slot's VMs their own userspace network (paddock-net) instead of the shared NAT.")
+    @Option(help: "Warm VMs to keep, 1 or 2. Use 1 on a Mac that also runs another VM.")
+    var slots = 2
+
+    @Flag(help: "Give each VM its own userspace network (paddock-net) instead of the shared NAT.")
     var userspace = false
 
     func validate() throws {
         try BundleName.validate(source)
+        guard (1...2).contains(slots) else {
+            throw ValidationError("--slots is 1 or 2: macOS runs at most two VMs at once")
+        }
     }
 
     func run() async throws {
-        try await WarmPool.serve(source: source, userspaceNetwork: userspace)
+        try await WarmPool.serve(source: source, slots: slots, userspaceNetwork: userspace)
     }
 }
 
@@ -71,43 +79,73 @@ final class WarmPool {
     private var interrupt: (any DispatchSourceSignal)?
     private var stopping = false
     private var sessionHelper: Bool?  // whether the source has paddock-session, asked once
+    private var checkedSource = false  // the first slot to boot checks the source for both
 
-    static func serve(source: String, userspaceNetwork: Bool) async throws {
-        let pool = WarmPool(source: source, userspaceNetwork: userspaceNetwork)
+    static func serve(source: String, slots: Int, userspaceNetwork: Bool) async throws {
+        let pool = WarmPool(source: source, slots: slots, userspaceNetwork: userspaceNetwork)
         defer { withExtendedLifetime(pool) {} }
         try await pool.run(source: source)
     }
 
     private let userspaceNetwork: Bool
 
-    private init(source: String, userspaceNetwork: Bool) {
-        slots = [Slot(number: 1, source: source)]
+    private init(source: String, slots: Int, userspaceNetwork: Bool) {
+        self.slots = (1...slots).map { Slot(number: $0, source: source) }
         self.userspaceNetwork = userspaceNetwork
     }
 
-    /// Prepares the slot, fills it and serves until Ctrl-C, which exits the process.
+    /// Prepares the slots at the same time, fills them and serves until Ctrl-C, which exits the
+    /// process. Fails only if no slot could start.
     private func run(source name: String) async throws {
         let source = try home.bundle(named: name)
+        warnAboutMemory(source)
         // Listen before booting anything: a second serve fails here, and an acquire made
         // during startup waits for the first warm VM.
         server = try LineServer(path: home.socketURL.path, queue: .main) { [weak self] line, responder in
             MainActor.assumeIsolated { self?.handle(line, responder) }
         }
         interrupt = onInterrupt { [weak self] in self?.shutDown() }
-        let slot = slots[0]
+        await withTaskGroup(of: Void.self) { group in
+            for slot in slots {
+                group.addTask { await self.prepare(slot, from: source) }
+            }
+        }
+        let reasons = slots.compactMap { slot in slot.emptyReason.map { "slot \(slot.number): \($0)" } }
+        if reasons.count == slots.count {
+            server?.stop()
+            throw PaddockError(reasons.joined(separator: "; "))
+        }
+        while true {
+            try await Task.sleep(for: .seconds(3600))
+        }
+    }
+
+    /// Boots and saves the slot's clone of `source`, then fills the slot. A slot that can't start
+    /// stays empty with the reason, and the others serve on.
+    private func prepare(_ slot: Slot, from source: VMBundle) async {
         do {
             print("Preparing slot \(slot.number) from '\(source.name)': boot a clone once and save its state")
             try await saveBootedClone(of: source, in: slot)
             try await refill(slot)
         } catch {
-            server?.stop()
             await discardCurrent(of: slot)
             removeSaved(of: slot)
-            throw error
+            slot.emptyReason = error.localizedDescription
+            print("Slot \(slot.number) is empty: \(error.localizedDescription)")
+            if slots.allSatisfy({ $0.emptyReason != nil }) {
+                answerWaiting(with: "no slot could start: \(error.localizedDescription)")
+            }
         }
-        while true {
-            try await Task.sleep(for: .seconds(3600))
-        }
+    }
+
+    /// Warns when the slots' VMs together would leave this Mac little memory of its own.
+    private func warnAboutMemory(_ source: VMBundle) {
+        guard let memory = try? source.readConfig().memorySize else { return }
+        let total = ProcessInfo.processInfo.physicalMemory, wanted = UInt64(slots.count) * memory
+        // shortcut: a fixed 8 GB for macOS and its apps; tune once hosts run other workloads.
+        guard wanted + (8 << 30) > total else { return }
+        print("  warning: \(slots.count) VMs of \(memory >> 30) GB leave this Mac \(Int64(total >> 30) - Int64(wanted >> 30)) GB "
+            + "of its \(total >> 30) GB; use fewer slots or give '\(source.name)' less memory if the host slows down")
     }
 
     /// Boots a clone of `source` with the slot's fresh identity until its agent answers, then
@@ -122,7 +160,10 @@ final class WarmPool {
         try await vm.start()
         let ip = try await waitUntilReady(vm)
         let booted = ContinuousClock.now - started
-        await warnAboutSource(vm, source)
+        if !checkedSource {
+            checkedSource = true
+            await warnAboutSource(vm, source)
+        }
         let saveStarted = ContinuousClock.now
         try await vm.pauseAndSave()
         await vm.stop()
@@ -131,7 +172,7 @@ final class WarmPool {
         slot.saved = bundle
         let attributes = try? FileManager.default.attributesOfItem(atPath: bundle.savedStateURL.path)
         let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
-        print("  booted at \(ip) in \(DurationFormat.short(booted)), "
+        print("  slot \(slot.number) booted at \(ip) in \(DurationFormat.short(booted)), "
             + "saved \(ByteFormat.gigabytes(size)) of state in \(DurationFormat.short(ContinuousClock.now - saveStarted))")
     }
 
@@ -441,7 +482,7 @@ final class WarmPool {
     private func shutDown() {
         guard !stopping else { Darwin.exit(130) }
         stopping = true
-        print("\nStopping; deleting slot 1's VMs. Press Ctrl-C again to quit now.")
+        print("\nStopping; deleting \(slots.count == 1 ? "slot 1's" : "the slots'") VMs. Press Ctrl-C again to quit now.")
         server?.stop()
         answerWaiting(with: "paddock serve stopped")
         Task {
