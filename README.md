@@ -107,7 +107,11 @@ paddock bench golden --runs 3 # clone, boot headless, time each step, delete the
 ```
 
 With macOS 27 on this Mac and in the VM, `paddock build` makes a golden image from an image file,
-with no one at the keyboard:
+with no one at the keyboard. `paddock init golden.yaml` writes a commented one to start from, with
+`--template minimal` (the default: the latest macOS, for your own agents and for you), `ci` (a
+pinned macOS plus the tools CI jobs need) or `managed` (for a Mac fleet under MDM, with the grants
+from an MDM profile). None accepts Apple's license for you: its license line ships commented out.
+A file with every key looks like this:
 
 ```yaml
 # golden.yaml
@@ -217,6 +221,7 @@ To set up a guest by hand instead, while Setup Assistant is open in `paddock run
 | --- | --- |
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`; `--recovery` starts it in macOS Recovery. |
+| `paddock init <file> [--template minimal\|ci\|managed]` | Writes a commented starter image file for `build`. |
 | `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27. |
 | `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](#what-a-golden-image-allows)). |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |

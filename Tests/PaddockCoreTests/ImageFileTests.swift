@@ -84,4 +84,26 @@ import Yams
             == "steps[0].run: is empty")
         #expect(failure("from: { macos: latest }\naccount: { name: bench }\nname: ../golden").hasPrefix("name: invalid VM name"))
     }
+
+    @Test func everyTemplateIsAValidFileThatLeavesTheLicenseToItsReader() throws {
+        for template in ImageTemplate.allCases {
+            let file = try decode(template.text)
+            #expect(!file.acceptsLicense, "\(template)")
+            #expect(file.steps.isEmpty, "\(template)")
+            #expect(template.text.contains("# license: accept"), "\(template)")
+        }
+        #expect(try decode(ImageTemplate.minimal.text).from == .latest)
+        #expect(try decode(ImageTemplate.ci.text).grants == .recovery)
+        #expect(try decode(ImageTemplate.managed.text).grants == .managed)
+    }
+
+    /// The commented example steps, uncommented, make a valid file.
+    @Test func templateExamplesDecodeWhenUncommented() throws {
+        let uncommented = ImageTemplate.minimal.text.replacingOccurrences(of: "# share:", with: "share:")
+            .replacingOccurrences(of: "# steps:", with: "steps:")
+            .replacingOccurrences(of: "#   ", with: "  ")
+        let file = try decode(uncommented)
+        #expect(file.share == "installers")
+        #expect(file.steps.map(\.user) == [.root, .user])
+    }
 }
