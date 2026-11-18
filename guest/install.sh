@@ -8,6 +8,12 @@ if [[ $EUID -ne 0 ]]; then
   echo "error: run with sudo" >&2
   exit 1
 fi
+# paddock-guestd and paddock-session are built for macOS 14 and later, and won't start on older.
+major="$(sw_vers -productVersion | cut -d. -f1)"
+if (( major < 14 )); then
+  echo "error: paddock's guest agent needs macOS 14 or later, and this is $(sw_vers -productVersion)" >&2
+  exit 1
+fi
 here="$(cd "$(dirname "$0")" && pwd)"
 
 install -d -m 755 /usr/local/libexec

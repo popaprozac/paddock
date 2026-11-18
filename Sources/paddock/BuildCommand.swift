@@ -18,13 +18,22 @@ struct Build: AsyncParsableCommand {
             once to install the guest agent and session helper and turn off sleep, display sleep \
             and the screen saver, then turns Remote Login off for good. With 'license: accept' \
             you accept Apple's license (apple.com/legal/sla) for the image, and paddock reads the \
-            guest's screen and clicks through the license and the welcome screen, nothing else. \
+            guest's screen and clicks through the license and the welcome screen, nothing else.
+
+            macOS 26 doesn't create the account, so paddock boots the VM in macOS Recovery first \
+            and types a script into its Terminal that writes the account, automatic login and the \
+            guest agent, and marks Setup Assistant done. The first boot then logs in by itself, \
+            and paddock turns off sleep, display sleep and the screen saver through the guest \
+            agent. Remote Login is never on. This way never shows Apple's license, so a macOS 26 \
+            image file needs 'license: accept', and the account's password and full name can only \
+            use characters on a US keyboard.
+
             With 'grants: recovery', 'paddock grant' then writes the two grants from macOS \
             Recovery. Last, paddock boots the image once more, runs the steps through the guest \
             agent, each in zsh with set -e, checks the image as serve does and shuts it down.
 
-            paddock needs macOS 27 on this Mac and in the VM, and Local Network access for the \
-            app it runs in, to reach the guest.
+            paddock needs macOS 27 on this Mac and macOS 26 or later in the VM, and for macOS 27 \
+            in the VM, Local Network access for the app it runs in, to reach the guest.
             """)
 
     @Argument(help: "Image file (YAML).")
@@ -36,8 +45,35 @@ struct Build: AsyncParsableCommand {
     func run() async throws {
         guard #available(macOS 27, *) else { throw PaddockError("paddock build needs macOS 27 on this Mac") }
         let plan = try ImageBuild.Plan(file: URL(fileURLWithPath: (file as NSString).expandingTildeInPath), guest: guest)
-        let password = try Provisioning.readPassword(for: plan.image.account.name)
-        try await ImageBuild.run(plan, password: password)
+        let version = try await plan.macOSVersion()
+        let firstBoot: GuestSupport.FirstBoot
+        do {
+            firstBoot = try GuestSupport.firstBoot(macOS: version, acceptsLicense: plan.image.acceptsLicense)
+        } catch let error as PaddockError {
+            throw PaddockError("\(plan.file.lastPathComponent): \(error.message)")
+        }
+        let account = plan.image.account
+        // An offline setup types the account into Recovery's Terminal, on its US keyboard.
+        if firstBoot == .offline {
+            do {
+                _ = try KeyInput.strokes(typing: OfflineSetup.recoveryScript(account: account.name,
+                                                                             fullName: account.fullName ?? account.name))
+            } catch {
+                throw PaddockError("\(plan.file.lastPathComponent): a macOS \(version) build types account.fullName "
+                    + "into the guest, so it can only use characters on a US keyboard")
+            }
+        }
+        if !GuestSupport.tested.contains(version) {
+            print("macOS \(version) hasn't been tested with paddock build; trying it.")
+        }
+        let password = try Provisioning.readPassword(for: account.name)
+        if firstBoot == .offline {
+            do { _ = try KeyInput.strokes(typing: password) } catch {
+                throw PaddockError("a macOS \(version) build types the password into the guest, so it can only use "
+                    + "characters on a US keyboard")
+            }
+        }
+        try await ImageBuild.run(plan, version: version, firstBoot: firstBoot, password: password)
     }
 }
 
@@ -107,11 +143,19 @@ enum ImageBuild {
                 throw PaddockError("VM '\(name)' already exists at \(bundle.url.path); delete it or set name: in the file")
             }
         }
+
+        /// The macOS this file installs: its restore image's, or the latest this Mac supports.
+        func macOSVersion() async throws -> String {
+            if let ipsw {
+                return try await RestoreImages.load(from: URL(fileURLWithPath: ipsw)).version
+            }
+            return try await RestoreImages.fetchLatestSupported().version
+        }
     }
 
     @available(macOS 27, *)
-    static func run(_ plan: Plan, password: String) async throws {
-        let image = plan.image, account = image.account.name
+    static func run(_ plan: Plan, version: String, firstBoot: GuestSupport.FirstBoot, password: String) async throws {
+        let image = plan.image, account = image.account.name, fullName = image.account.fullName ?? account
         let started = ContinuousClock.now
         try await Install.install(
             name: plan.name, ipsw: plan.ipsw, cpus: image.vm.cpus ?? VMSizing.defaultCPUCount,
@@ -119,10 +163,17 @@ enum ImageBuild {
             diskSize: image.vm.disk.map(UInt64.init) ?? VMSizing.defaultDiskSize >> 30)
         let problems: [String]?
         do {
-            let provisioning = try Provisioning.options(account: account, fullName: image.account.fullName ?? account,
-                                                        password: password)
-            try await GoldenBuild.run(name: plan.name, account: account, password: password, provisioning: provisioning,
-                                      guest: plan.guest, acceptLicense: image.acceptsLicense)
+            switch firstBoot {
+            case .provisioning:
+                let provisioning = try Provisioning.options(account: account, fullName: fullName, password: password)
+                try await GoldenBuild.run(name: plan.name, account: account, password: password,
+                                          provisioning: provisioning, guest: plan.guest,
+                                          acceptLicense: image.acceptsLicense)
+            case .offline:
+                try await GoldenBuild.writeOffline(name: plan.name, account: account, fullName: fullName,
+                                                   password: password, guest: plan.guest)
+                try await GoldenBuild.firstBootOffline(name: plan.name, account: account)
+            }
             if image.grants == .recovery {
                 try await RecoveryGrant.run(name: plan.name)
             }
@@ -130,6 +181,10 @@ enum ImageBuild {
         } catch {
             let bundle = try? PaddockHome.fromEnvironment().bundle(named: plan.name)
             print("The build stopped; '\(plan.name)' is left at \(bundle?.url.path ?? plan.name) to look at. Delete it to build again.")
+            if !GuestSupport.tested.contains(version) {
+                print("macOS \(version) isn't tested yet and may set up differently: set the image up by hand in "
+                    + "'paddock run' instead (see the README).")
+            }
             throw error
         }
 
@@ -150,7 +205,7 @@ enum ImageBuild {
         }
         if image.grants == .managed {
             left.append("allow paddock-session under Accessibility and /usr/local/libexec/paddock-guestd under Full Disk "
-                + "Access, in System Settings > Privacy & Security or with an MDM profile, or run 'paddock grant \(plan.name)'")
+                + "Access in System Settings > Privacy & Security, booted with 'paddock run \(plan.name)', or run 'paddock grant \(plan.name)'")
         }
         if left.isEmpty {
             print("  Ready to serve: paddock serve \(plan.name)")
@@ -167,11 +222,8 @@ enum GoldenBuild {
     static func run(name: String, account: String, password: String, provisioning: VZMacGuestProvisioningOptions,
                     guest: URL, acceptLicense: Bool) async throws {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
-        let vm = try HeadlessVM(bundle: bundle, config: try bundle.readConfig(), sharing: guest)
-        // Attached before the first frame, so a failed build can show what the guest's screen says.
-        try? vm.attachScreen()
         print("Booting '\(name)' and creating the account '\(account)'")
-        try await vm.start(provisioning: provisioning)
+        let vm = try await HeadlessVM.started(bundle: bundle, sharing: guest) { try await $0.start(provisioning: provisioning) }
         do {
             guard let address = try await vm.leasedAddress(within: .seconds(120)) else {
                 throw PaddockError("'\(name)' got no DHCP lease within 120 s")
@@ -179,7 +231,8 @@ enum GoldenBuild {
             print("  guest at \(address); waiting for Remote Login")
             try await GuestSSH.waitForLogin(at: address, within: .seconds(120))
             print("  logging in as '\(account)' to install the guest agent and turn off what would stop unattended VMs")
-            try await GuestSSH.runAsRoot(setupScript, account: account, password: password, at: address)
+            try await GuestSSH.runAsRoot(setupScript(account: account, installingAgent: true), account: account,
+                                         password: password, at: address)
             if acceptLicense {
                 print("  accepting the macOS license and finishing Setup Assistant, as the image file's license: accept says")
                 try await SetupAssistant.clickThrough(vm, within: .seconds(300))
@@ -198,23 +251,105 @@ enum GoldenBuild {
         }
     }
 
-    /// Runs as root through sudo, from the shared guest folder: installs the guest agent and turns
-    /// off what would stop unattended VMs. Remote Login stays on for `finishScript`.
+    /// A macOS 26 guest before its first boot, which ignores provisioning: paddock boots it in
+    /// Recovery and types OfflineSetup's script into Terminal, after the password into `read -rs`,
+    /// so the password is never on screen or in the script. The guest halts once the account,
+    /// automatic login and the guest agent are written.
+    static func writeOffline(name: String, account: String, fullName: String, password: String,
+                             guest: URL) async throws {
+        let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
+        print("Booting '\(name)' in macOS Recovery to write the account '\(account)' and the guest agent")
+        let vm = try await HeadlessVM.started(bundle: bundle, sharing: guest) { try await $0.startInRecovery() }
+        do {
+            try await RecoveryGrant.openTerminal(vm)
+            print("  writing the account, automatic login and the guest agent")
+            try await vm.press(KeyInput.strokes(typing: "read -rs P\n"))
+            try await Task.sleep(for: .milliseconds(500))
+            try await vm.press(KeyInput.strokes(typing: password + "\n"))
+            try await vm.press(KeyInput.strokes(typing: OfflineSetup.recoveryScript(account: account, fullName: fullName)))
+            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
+                throw PaddockError("'\(name)' didn't shut down after the setup typed in Recovery's Terminal, so a step failed")
+            }
+        } catch {
+            await vm.saveScreen(as: "paddock-build-\(name)")
+            await vm.stop()
+            throw error
+        }
+    }
+
+    /// The first boot after `writeOffline`: the account logs in by itself, paddock checks that
+    /// Setup Assistant stayed away, turns off what would stop unattended VMs through the guest
+    /// agent, and has the guest shut down. Remote Login is never on.
+    static func firstBootOffline(name: String, account: String) async throws {
+        let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
+        print("Booting '\(name)' to log in as '\(account)' and turn off what would stop unattended VMs")
+        let vm = try await HeadlessVM.started(bundle: bundle, sharing: nil) { try await $0.start() }
+        do {
+            guard try await vm.agentVersion(within: .seconds(180)) != nil else {
+                throw PaddockError("the guest agent in '\(name)' didn't answer within 180 s")
+            }
+            // paddock-session starts when the account logs in to the desktop.
+            guard try await vm.sessionHelperVersion(within: .seconds(120)) != nil,
+                  try await vm.desktopReady(within: .seconds(60)) else {
+                throw PaddockError("'\(account)' didn't log in to the desktop by itself")
+            }
+            // The per-user Setup Assistant covers the desktop moments after the login, if it starts
+            // at all, so the desktop must be in front, with Finder's menu bar, and no Setup
+            // Assistant running.
+            try await Task.sleep(for: .seconds(10))
+            let (lines, screen) = try await vm.readScreen()
+            let setupAssistant = try await vm.runInGuest("pgrep -f '/Setup Assistant.app/'", output: { _ in }) == 0
+            guard ScreenText.showsFinder(in: lines, screen: screen), !setupAssistant else {
+                throw PaddockError("'\(account)' logged in, but Setup Assistant or something else covers the desktop: "
+                    + "this macOS may ask for something the offline setup doesn't write")
+            }
+            print("  '\(account)' is logged in")
+            let script = setupScript(account: account, installingAgent: false) + """
+
+                echo "shutting down"
+                sync
+                (sleep 2; shutdown -h now) </dev/null >/dev/null 2>&1 &
+                """
+            let status = try await vm.runInGuest(script, asRoot: true) { print("    \($0)") }
+            guard status == 0 else {
+                throw PaddockError("the guest's setup failed with status \(status)")
+            }
+            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
+                throw PaddockError("'\(name)' didn't shut down within 120 s of its setup")
+            }
+        } catch {
+            await vm.saveScreen(as: "paddock-build-\(name)")
+            await vm.stop()
+            throw error
+        }
+    }
+
+    /// Runs as root: installs the guest agent from the shared guest folder if `installingAgent`,
+    /// turns off what would stop unattended VMs, and turns off automatic updates. On macOS 27 it
+    /// runs over SSH, and Remote Login stays on for `finishScript`.
     ///
-    /// Neither script touches automatic login. Provisioning turns it on once Setup Assistant
+    /// On 27 neither script touches automatic login. Provisioning turns it on once Setup Assistant
     /// finishes, which takes the license agreement: with `license: accept` the build clicks
     /// through it in between. Otherwise the owner accepts it on a later boot, and Setup Assistant,
     /// finishing then, turns automatic login off. Writing it here doesn't survive that, and marking
     /// Setup Assistant done (`/var/db/.AppleSetupDone`) doesn't stop macOS 27 showing the license.
-    static let setupScript = """
+    static func setupScript(account: String, installingAgent: Bool) -> String {
+        let install = installingAgent ? "echo \"installing the guest agent\"\nbash \"/Volumes/My Shared Files/install.sh\"\n" : ""
+        return """
         set -euo pipefail
-        echo "installing the guest agent"
-        bash "/Volumes/My Shared Files/install.sh"
-        echo "turning off sleep, display sleep and the screen saver"
+        \(install)echo "turning off sleep, display sleep and the screen saver"
         pmset -a sleep 0 displaysleep 0
         defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0
-        sudo -u "$SUDO_USER" defaults -currentHost write com.apple.screensaver idleTime 0
+        sudo -u \(account) defaults -currentHost write com.apple.screensaver idleTime 0
+        # An image's macOS is pinned and its clones are wiped, so updates would only download in
+        # every clone. Security data updates (XProtect and the like) stay on.
+        echo "turning off automatic macOS and App Store updates"
+        defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false
+        defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
+        defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false
+        defaults write /Library/Preferences/com.apple.commerce AutoUpdate -bool false
         """
+    }
 
     /// Turns Remote Login off for good and has the guest shut itself down, so its settings are on
     /// disk, not lost to a forced power-off.

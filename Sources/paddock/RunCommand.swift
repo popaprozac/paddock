@@ -63,6 +63,12 @@ struct Run: ParsableCommand {
         var provisioning: NSObject?
         if let provision {
             guard #available(macOS 27, *) else { throw PaddockError("--provision needs macOS 27 on this Mac") }
+            // An older guest ignores provisioning and shows Setup Assistant in full, as on macOS 26.6.
+            if let version = try bundle.readConfig().os?.version, let major = GuestSupport.major(version),
+               major < GuestSupport.provisioning {
+                throw PaddockError("'\(name)' has macOS \(version), and only macOS \(GuestSupport.provisioning) and later "
+                    + "guests take provisioning; run it without --provision and go through Setup Assistant")
+            }
             let password = try Provisioning.readPassword(for: provision)
             provisioning = try Provisioning.options(account: provision, fullName: fullName ?? provision, password: password)
         }
