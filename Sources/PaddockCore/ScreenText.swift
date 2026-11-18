@@ -28,4 +28,10 @@ public struct ScreenText: Equatable, Sendable {
         }
         return nil
     }
+
+    /// Whether the screen shows the desktop with Finder in front: Finder's name in the menu bar,
+    /// which recognition may read as one line with the menus after it.
+    public static func showsFinder(in lines: [ScreenText], screen: CGSize) -> Bool {
+        lines.contains { $0.frame.maxY < screen.height * 0.04 && $0.string.hasPrefix("Finder") }
+    }
 }
