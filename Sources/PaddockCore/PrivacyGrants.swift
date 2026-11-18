@@ -25,8 +25,8 @@ public enum PrivacyGrants {
     /// Lines for Recovery's Terminal (bash 3.2, as root): one command, each line ending in `&&`,
     /// so the VM halts only if every step worked. For each helper, it compiles the binary's
     /// designated requirement into the code requirement TCC stores, so the permission belongs to
-    /// that signed binary, then writes the row with the values macOS writes when the owner allows
-    /// it in System Settings. It also removes every permission of the `revoked` clients. The
+    /// that signed binary (codesign prints an ad-hoc signature's, a cdhash, after "# "), then
+    /// writes the row with the values macOS writes when the owner allows it in System Settings. It also removes every permission of the `revoked` clients. The
     /// installed system's tools run from Recovery, which has no sqlite3. Assumes the volumes'
     /// default names.
     public static func recoveryScript(_ grants: [Grant] = helpers) -> String {
@@ -34,7 +34,7 @@ public enum PrivacyGrants {
         var rows = revoked.map { "delete from access where client = '\($0)';" }
         for (index, grant) in grants.enumerated() {
             let csreq = "/tmp/paddock-\(index).csreq"
-            lines.append(#""$M/codesign" -d -r- "$D\#(grant.helper)" | sed -n 's/^designated => //p' | "$M/csreq" -r- -b \#(csreq)"#)
+            lines.append(#""$M/codesign" -d -r- "$D\#(grant.helper)" | sed -n 's/^# designated => //p; s/^designated => //p' | "$M/csreq" -r- -b \#(csreq)"#)
             rows.append("insert or replace into access (service, client, client_type, auth_value, auth_reason, "
                 + "auth_version, csreq, indirect_object_identifier_type, flags) values ('\(grant.service)', "
                 + "'\(grant.helper)', 1, 2, 4, 1, readfile('\(csreq)'), 0, 0);")
