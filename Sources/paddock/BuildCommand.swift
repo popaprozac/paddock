@@ -36,6 +36,16 @@ struct Build: AsyncParsableCommand {
     func run() async throws {
         guard #available(macOS 27, *) else { throw PaddockError("paddock build needs macOS 27 on this Mac") }
         let plan = try ImageBuild.Plan(file: URL(fileURLWithPath: (file as NSString).expandingTildeInPath), guest: guest)
+        let version = try await plan.macOSVersion()
+        let firstBoot: GuestSupport.FirstBoot
+        do {
+            firstBoot = try GuestSupport.firstBoot(macOS: version, acceptsLicense: plan.image.acceptsLicense)
+        } catch let error as PaddockError {
+            throw PaddockError("\(plan.file.lastPathComponent): \(error.message)")
+        }
+        guard firstBoot == .provisioning else {
+            throw PaddockError("building macOS \(version) isn't written yet: set it up by hand in 'paddock run' for now")
+        }
         let password = try Provisioning.readPassword(for: plan.image.account.name)
         try await ImageBuild.run(plan, password: password)
     }
@@ -106,6 +116,14 @@ enum ImageBuild {
             guard !FileManager.default.fileExists(atPath: bundle.url.path) else {
                 throw PaddockError("VM '\(name)' already exists at \(bundle.url.path); delete it or set name: in the file")
             }
+        }
+
+        /// The macOS this file installs: its restore image's, or the latest this Mac supports.
+        func macOSVersion() async throws -> String {
+            if let ipsw {
+                return try await RestoreImages.load(from: URL(fileURLWithPath: ipsw)).version
+            }
+            return try await RestoreImages.fetchLatestSupported().version
         }
     }
 
@@ -198,8 +216,9 @@ enum GoldenBuild {
         }
     }
 
-    /// Runs as root through sudo, from the shared guest folder: installs the guest agent and turns
-    /// off what would stop unattended VMs. Remote Login stays on for `finishScript`.
+    /// Runs as root through sudo, from the shared guest folder: installs the guest agent, turns off
+    /// what would stop unattended VMs, and turns off automatic updates. Remote Login stays on for
+    /// `finishScript`.
     ///
     /// Neither script touches automatic login. Provisioning turns it on once Setup Assistant
     /// finishes, which takes the license agreement: with `license: accept` the build clicks
@@ -214,6 +233,13 @@ enum GoldenBuild {
         pmset -a sleep 0 displaysleep 0
         defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0
         sudo -u "$SUDO_USER" defaults -currentHost write com.apple.screensaver idleTime 0
+        # An image's macOS is pinned and its clones are wiped, so updates would only download in
+        # every clone. Security data updates (XProtect and the like) stay on.
+        echo "turning off automatic macOS and App Store updates"
+        defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false
+        defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
+        defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false
+        defaults write /Library/Preferences/com.apple.commerce AutoUpdate -bool false
         """
 
     /// Turns Remote Login off for good and has the guest shut itself down, so its settings are on

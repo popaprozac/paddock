@@ -43,7 +43,8 @@ It is Go, on [gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock),
 in `paddock-net/`. Run its checks with `go vet ./...` and `go test ./...` there.
 
 The script also puts `paddock-guestd`, the agent that runs inside each guest, in a `guest`
-folder next to the binary, with its launchd job and `install.sh`. The agent listens only on
+folder next to the binary, with its launchd job and `install.sh`, which needs macOS 14 or later in
+the guest. The agent listens only on
 vsock port 52525 and answers only the host: a process in the guest can reach the guest's own
 vsock ports, so the agent closes, unread, any connection that doesn't come from the host's vsock
 address (CID 2), and logs it. An image whose agent is older than 0.5.1, or whose
@@ -145,7 +146,8 @@ It installs macOS into a new VM and boots it once, and macOS creates the account
 login and Remote Login on, in place of Setup Assistant. paddock logs in over SSH once with the
 password, which it keeps only in memory and hands to ssh through a socket only you can reach. As
 root, it installs the guest agent from the `guest` folder `scripts/build.sh` stages, turns off
-sleep, display sleep and the screen saver, and turns Remote Login off for good. From then on
+sleep, display sleep, the screen saver and automatic macOS and App Store updates, since the
+image's version is pinned and its clones are wiped, and turns Remote Login off for good. From then on
 nothing reaches the guest over the network.
 
 Without `license: accept`, macOS still shows its license agreement and a welcome screen at the
@@ -222,7 +224,7 @@ To set up a guest by hand instead, while Setup Assistant is open in `paddock run
 | Command | What it does |
 | --- | --- |
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
-| `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`; `--recovery` starts it in macOS Recovery. |
+| `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`, on a macOS 27 or later guest (older guests ignore it); `--recovery` starts it in macOS Recovery. |
 | `paddock init <file> [--template minimal\|ci\|managed]` | Writes a commented starter image file for `build`. |
 | `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27. |
 | `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](#what-a-golden-image-allows)). |
