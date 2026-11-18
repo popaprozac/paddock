@@ -8,7 +8,7 @@ public enum GuestSupport {
     /// The versions `build` has set up end to end, then `grant` and `serve`, as the README's
     /// table lists them. Apple changes first-boot setup between point releases, so another version
     /// is tried but not promised.
-    public static let tested: Set<String> = ["27.2.1"]
+    public static let tested: Set<String> = ["26.6.2", "27.2.1"]
 
     /// How `build` gets through a guest's first boot.
     public enum FirstBoot: Equatable, Sendable {
