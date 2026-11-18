@@ -179,7 +179,7 @@ To set up a guest by hand instead, while Setup Assistant is open in `paddock run
 | Command | What it does |
 | --- | --- |
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
-| `paddock run <name> [--share folder] [--provision account [--full-name name]]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`. |
+| `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`; `--recovery` starts it in macOS Recovery. |
 | `paddock build <name> --account <account> [--full-name name] [--guest folder] [--accept-macos-license]` | Sets up a VM that `install` just made, on its first boot, with no one at the keyboard: creates the account, installs the guest agent and turns off what would stop unattended VMs (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27. |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |

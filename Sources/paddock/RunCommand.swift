@@ -17,6 +17,9 @@ struct Run: ParsableCommand {
             in place of Setup Assistant, with automatic login and Remote Login on. It asks for the \
             account's password on the terminal and keeps it nowhere. It needs macOS 27 on this \
             Mac and in the VM, and macOS ignores it on any later boot.
+
+            --recovery starts the VM in macOS Recovery instead, where Terminal (in the Utilities \
+            menu) can run csrutil.
             """)
 
     @Argument(help: "VM to boot.")
@@ -31,6 +34,9 @@ struct Run: ParsableCommand {
     @Option(help: "Full name of that account; defaults to its short name.")
     var fullName: String?
 
+    @Flag(help: "Start in macOS Recovery.")
+    var recovery = false
+
     func validate() throws {
         try BundleName.validate(name)
         if let share {
@@ -41,6 +47,9 @@ struct Run: ParsableCommand {
         }
         if fullName != nil && provision == nil {
             throw ValidationError("--full-name goes with --provision")
+        }
+        if recovery && provision != nil {
+            throw ValidationError("--provision needs a normal first boot, not --recovery")
         }
         if let provision {
             do { try Provisioning.validate(account: provision) } catch let error as PaddockError { throw ValidationError(error.message) }
@@ -57,7 +66,9 @@ struct Run: ParsableCommand {
             let password = try Provisioning.readPassword(for: provision)
             provisioning = try Provisioning.options(account: provision, fullName: fullName ?? provision, password: password)
         }
-        try MainActor.assumeIsolated { [provisioning] in try VMWindow.show(bundle, sharing: sharing, provisioning: provisioning) }
+        try MainActor.assumeIsolated { [provisioning] in
+            try VMWindow.show(bundle, sharing: sharing, provisioning: provisioning, recovery: recovery)
+        }
     }
 }
 
@@ -72,12 +83,13 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var shutdownRequested = false
 
     private let provisioning: NSObject?  // VZMacGuestProvisioningOptions, which needs macOS 27
+    private let recovery: Bool
 
-    static func show(_ bundle: VMBundle, sharing: URL?, provisioning: NSObject? = nil) throws {
+    static func show(_ bundle: VMBundle, sharing: URL?, provisioning: NSObject? = nil, recovery: Bool = false) throws {
         let lock = try BundleLock(bundle: bundle)
         let configuration = try VMConfiguration.make(bundle: bundle, config: try bundle.readConfig(), sharing: sharing)
         let controller = VMWindow(bundle: bundle, lock: lock, machine: VZVirtualMachine(configuration: configuration),
-                                  provisioning: provisioning)
+                                  provisioning: provisioning, recovery: recovery)
 
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -85,11 +97,12 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         app.run()  // Never returns: the controller exits when the guest stops.
     }
 
-    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, provisioning: NSObject?) {
+    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, provisioning: NSObject?, recovery: Bool) {
         self.bundle = bundle
         self.lock = lock
         self.machine = machine
         self.provisioning = provisioning
+        self.recovery = recovery
         super.init()
         machine.delegate = self
     }
@@ -115,6 +128,7 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         interrupt = onInterrupt { [weak self] in self?.requestShutdown() }
 
         let options = VZMacOSVirtualMachineStartOptions()
+        options.startUpFromMacOSRecovery = recovery
         if #available(macOS 27, *), let provisioning = provisioning as? VZMacGuestProvisioningOptions {
             do {
                 try options.setGuestProvisioning(provisioning)
@@ -128,6 +142,7 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         print("Booted '\(bundle.name)'" + (provisioning == nil ? "" : ", creating its account")
+            + (recovery ? " in macOS Recovery" : "")
             + ". Shut down from the Apple menu in the VM when you are done.")
     }
 
