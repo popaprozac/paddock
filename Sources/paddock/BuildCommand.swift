@@ -20,7 +20,8 @@ struct Build: AsyncParsableCommand {
             --accept-macos-license, you accept Apple's license (apple.com/legal/sla) for the image \
             instead: the build reads the guest's screen and clicks through the license agreement \
             and the welcome screen on the first boot, so Setup Assistant finishes with automatic \
-            login on, and only the two grants are left. It clicks nothing else; any other page \
+            login on, and only the two grants are left, which 'paddock grant' can write instead. \
+            It clicks nothing else; any other page \
             stops the build, with a screenshot of it. paddock needs macOS 27 on this Mac \
             and in the VM, and Local Network access for the app it runs in, to reach the guest.
             """)
@@ -94,12 +95,7 @@ enum GoldenBuild {
                 throw PaddockError("'\(name)' didn't shut down within 120 s of its setup")
             }
         } catch {
-            if let image = try? await vm.screenshot() {
-                let url = FileManager.default.temporaryDirectory.appendingPathComponent("paddock-build-\(name).png")
-                if (try? FrameImage.writePNG(image, to: url)) != nil {
-                    print("  the guest's screen when the build failed: \(url.path)")
-                }
-            }
+            await vm.saveScreen(as: "paddock-build-\(name)")
             await vm.stop()
             throw error
         }
@@ -109,6 +105,7 @@ enum GoldenBuild {
             then \(acceptLicense ? "" : "click through the license agreement and the welcome screen, turn on automatic login for '\(account)' in System Settings > Users & Groups, ")allow \
             paddock-session in System Settings > Privacy & Security > Accessibility when macOS asks, add \
             /usr/local/libexec/paddock-guestd under Full Disk Access, and shut down from the Apple menu.
+            Or leave the two grants to 'paddock grant \(name)', which writes them from macOS Recovery with SIP on.
             """)
     }
 

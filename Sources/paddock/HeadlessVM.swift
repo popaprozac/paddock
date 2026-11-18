@@ -50,6 +50,15 @@ final class HeadlessVM: NSObject {
         }
     }
 
+    /// Starts the VM in macOS Recovery.
+    func startInRecovery() async throws {
+        let options = VZMacOSVirtualMachineStartOptions()
+        options.startUpFromMacOSRecovery = true
+        try await perform("start the VM in macOS Recovery") { done in
+            machine.start(options: options) { error in done(error.map { .failure($0) } ?? .success(())) }
+        }
+    }
+
     /// Waits for the guest to shut itself down; false if it is still running after `timeout`.
     func waitUntilStopped(within timeout: Duration) async throws -> Bool {
         let deadline = ContinuousClock.now + timeout

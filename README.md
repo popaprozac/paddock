@@ -117,7 +117,8 @@ nothing reaches the guest over the network.
 macOS still shows its license agreement and a welcome screen at the next boot. Accepting the
 license finishes Setup Assistant, which turns automatic login off, so turn it on again in System
 Settings > Users & Groups in that boot. The Accessibility and Full Disk Access grants in step 3
-below are yours to make too.
+below are yours to make too, or `paddock grant golden` writes them once the VM is shut down (see
+[What a golden image allows](#what-a-golden-image-allows)).
 
 With `--accept-macos-license`, you accept Apple's
 [macOS Software License Agreement](https://www.apple.com/legal/sla/) for the image when you build
@@ -181,6 +182,7 @@ To set up a guest by hand instead, while Setup Assistant is open in `paddock run
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`; `--recovery` starts it in macOS Recovery. |
 | `paddock build <name> --account <account> [--full-name name] [--guest folder] [--accept-macos-license]` | Sets up a VM that `install` just made, on its first boot, with no one at the keyboard: creates the account, installs the guest agent and turns off what would stop unattended VMs (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27. |
+| `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](#what-a-golden-image-allows)). |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
 | `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
@@ -305,8 +307,9 @@ between a workload and the host, and every VM is wiped when it is released.
 
 - Give the golden image's account a password used nowhere else, and sign it in to nothing:
   every workload can read what the image holds.
-- The grants are made by hand, once, in the golden image, so SIP stays on. paddock needs no
-  Screen Recording permission, since it reads the screen on the host.
+- The grants are made once, in the golden image, by hand or with `paddock grant`, and SIP stays
+  on either way. paddock needs no Screen Recording permission, since it reads the screen on the
+  host.
 - A grant belongs to a binary's signature, so a workload that replaces `paddock-session` or
   `paddock-guestd` with its own binary doesn't get it. paddock treats both as untrusted anyway.
 - `serve` warns about each setting missing from the clone it boots for its slot, with what to
@@ -322,6 +325,23 @@ between a workload and the host, and every VM is wiped when it is released.
   can reach, and to sudo in the guest over that SSH connection. It is never written to a file
   on this Mac, put in an environment variable or on a command line. In the guest, once you turn
   on automatic login, it is in `/etc/kcpassword`.
+
+`paddock grant` writes the two grants from macOS Recovery instead of System Settings:
+
+- It boots the image in Recovery, clicks Options and Continue at the startup screen, which it
+  finds by reading the screen, opens Terminal with its shortcut and types one command. That
+  command compiles each helper's code requirement from the binary in the image and writes the
+  same row into the image's privacy database,
+  `/Library/Application Support/com.apple.TCC/TCC.db`, that System Settings writes when you
+  allow it. Then it halts the VM.
+- SIP stays on in the image and every clone. Scripts that turn SIP off to write grants leave it
+  off in every VM they make, where a workload could then grant itself more, such as Screen
+  Recording.
+- Apple doesn't document that database's format, and a macOS release could change it. paddock
+  writes it as macOS 27 does. If a release changes it, `grant` fails, or `serve` warns that a
+  grant is missing. System Settings, or an MDM profile (PPPC), is the supported way.
+- Recovery asks for no password, because the VM's disk isn't encrypted with FileVault. Anyone who
+  can read and write the image's files on this Mac can change the image anyway.
 
 ## The userspace network
 
