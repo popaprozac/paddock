@@ -211,7 +211,7 @@ To set up a guest by hand instead, while Setup Assistant is open in `paddock run
    `scripts/build.sh` signs both with the code-signing certificate named in
    `PADDOCK_SIGNING_IDENTITY`, `paddock local signing` by default, and ad hoc if there is none,
    in which case every rebuild needs granting again. `serve` checks these settings in the
-   clone it boots for its slot and warns about each one that is missing.
+   first clone it boots and warns about each one that is missing.
 4. Shut down from the Apple menu. Closing the window or pressing Ctrl-C also asks the guest to
    shut down; doing it a second time forces the VM off.
 
@@ -226,8 +226,8 @@ To set up a guest by hand instead, while Setup Assistant is open in `paddock run
 | `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](#what-a-golden-image-allows)). |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
-| `paddock serve <source> [--userspace]` | Keeps one warm clone of the source running headless. At startup it boots a clone with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from that state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If the warm VM stops, serve restores another. Ctrl-C stops it and deletes the slot's VMs. |
-| `paddock acquire [--allow names]` | Takes the warm VM from `serve` and prints its name and address, waiting while the slot fills. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](#the-userspace-network)); `--allow` against a `serve` on NAT fails. |
+| `paddock serve <source> [--slots 2] [--userspace]` | Keeps a warm clone of the source running headless in each of its slots: two by default, as many VMs as macOS runs at once, or one with `--slots 1` on a Mac that also runs another VM. At startup it boots a clone in each slot, at the same time, with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from its slot's state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If a warm VM stops, its slot restores another. A slot that can't start, for example because another VM is already running, stays empty with the reason, and the other serves on. serve warns when its VMs together would leave the Mac little memory. Ctrl-C stops it and deletes the slots' VMs. |
+| `paddock acquire [--allow names]` | Takes a warm VM from `serve` and prints its name and address, waiting while the slots fill. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](#the-userspace-network)); `--allow` against a `serve` on NAT fails. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
 | `paddock screenshot <vm> [-o file.png]` | Saves the screen of a VM that `acquire` handed out as a PNG, `<vm>.png` in the current folder by default. `serve` reads the VM's framebuffer on this Mac, so the guest grants nothing and runs nothing (see [Screenshots](#screenshots)). |
@@ -317,7 +317,7 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 
 | Tool | What it does |
 | --- | --- |
-| `acquire` | Takes the warm VM from `serve`, waiting while the slot fills. `allow` lists the names it may reach on the userspace network. |
+| `acquire` | Takes a warm VM from `serve`, waiting while the slots fill. `allow` lists the names it may reach on the userspace network. |
 | `screenshot` | The VM's screen as a PNG. |
 | `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
 | `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). |
@@ -353,7 +353,7 @@ between a workload and the host, and every VM is wiped when it is released.
   host.
 - A grant belongs to a binary's signature, so a workload that replaces `paddock-session` or
   `paddock-guestd` with its own binary doesn't get it. paddock treats both as untrusted anyway.
-- `serve` warns about each setting missing from the clone it boots for its slot, with what to
+- `serve` warns about each setting missing from the first clone it boots, with what to
   change. It doesn't change them itself.
 
 `paddock build` adds these, all during the image's first boot:
@@ -500,8 +500,8 @@ Restored clones share one identity, so only one can run at a time.
   ```bash
   sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default.plist bootpd -dict DHCPLeaseTimeSecs -int 600
   ```
-- `serve` has one slot with one identity, so every VM it hands out has the same MAC address and IP
-  address. Each starts with its clock behind by the time since `serve` saved
+- Each of `serve`'s slots has one identity, so every VM a slot hands out has the same MAC address
+  and IP address. Each starts with its clock behind by the time since `serve` saved
   the slot's state, until macOS corrects it once the guest's network is back: from Apple's time
   servers on NAT, and from paddock-net on the userspace network.
 - Clones always have macOS's screen lock on, whatever the golden image says: macOS keeps that
