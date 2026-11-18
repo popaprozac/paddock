@@ -30,24 +30,43 @@ struct Serve: AsyncParsableCommand {
     }
 }
 
-/// One slot that always holds a warm VM: a clone restored from the slot's own saved state.
+/// A slot that always holds a warm VM: a clone restored from the slot's own saved state.
 ///
 /// A saved state only restores with the machine identifier and MAC address it was saved with,
 /// so the slot keeps one identity, and its VMs run one at a time.
+@MainActor
+final class Slot {
+    let number: Int
+    let name: String
+    var saved: VMBundle?    // the slot's paused VM, cloned for every refill
+    var current: VMBundle?  // the clone that is booting, restoring or warm
+    var vm: HeadlessVM?
+    var warmAddress: String?  // set once the current VM's agent answers
+    var assigned = false      // the current VM has been handed out
+    var emptyReason: String?  // why the slot holds no VM, after a refill failed
+
+    init(number: Int, source: String) {
+        self.number = number
+        name = "\(source.prefix(40))-slot\(number)-\(WarmPool.shortID())"
+    }
+
+    /// The VM this slot handed out as `name`, if it did.
+    func handedOut(_ name: String?) -> (vm: HeadlessVM, bundle: VMBundle)? {
+        guard assigned, let vm, let current, name == current.name else { return nil }
+        return (vm, current)
+    }
+}
+
+/// Serves warm VMs from its slots to `paddock acquire` and the requests that follow, through a
+/// socket in the paddock home.
 @MainActor
 final class WarmPool {
     private static let timeout: Duration = .seconds(300)
     private static let sessionTimeout: Duration = .seconds(120)
 
     private let home = PaddockHome.fromEnvironment()
-    private let slotName: String
-    private var saved: VMBundle?    // the slot's paused VM, cloned for every refill
-    private var current: VMBundle?  // the clone that is booting, restoring or warm
-    private var vm: HeadlessVM?
-    private var warmAddress: String?  // set once the current VM's agent answers
-    private var assigned = false      // the current VM has been handed out
+    private let slots: [Slot]
     private var waiting: [(responder: Responder, allow: [String])] = []  // acquires that came in before a VM was warm
-    private var emptyReason: String?  // why the slot holds no VM, after a refill failed
     private var server: LineServer?
     private var interrupt: (any DispatchSourceSignal)?
     private var stopping = false
@@ -62,7 +81,7 @@ final class WarmPool {
     private let userspaceNetwork: Bool
 
     private init(source: String, userspaceNetwork: Bool) {
-        slotName = "\(source.prefix(40))-slot1-\(Self.shortID())"
+        slots = [Slot(number: 1, source: source)]
         self.userspaceNetwork = userspaceNetwork
     }
 
@@ -75,14 +94,15 @@ final class WarmPool {
             MainActor.assumeIsolated { self?.handle(line, responder) }
         }
         interrupt = onInterrupt { [weak self] in self?.shutDown() }
+        let slot = slots[0]
         do {
-            print("Preparing slot 1 from '\(source.name)': boot a clone once and save its state")
-            try await saveBootedClone(of: source)
-            try await refill()
+            print("Preparing slot \(slot.number) from '\(source.name)': boot a clone once and save its state")
+            try await saveBootedClone(of: source, in: slot)
+            try await refill(slot)
         } catch {
             server?.stop()
-            await discardCurrent()
-            removeSaved()
+            await discardCurrent(of: slot)
+            removeSaved(of: slot)
             throw error
         }
         while true {
@@ -90,14 +110,15 @@ final class WarmPool {
         }
     }
 
-    /// Boots a clone of `source` with a fresh identity until its agent answers, then saves its state.
-    private func saveBootedClone(of source: VMBundle) async throws {
+    /// Boots a clone of `source` with the slot's fresh identity until its agent answers, then
+    /// saves its state.
+    private func saveBootedClone(of source: VMBundle, in slot: Slot) async throws {
         let started = ContinuousClock.now
-        let bundle = try home.bundle(named: "\(slotName)-saved")
-        current = bundle
+        let bundle = try home.bundle(named: "\(slot.name)-saved")
+        slot.current = bundle
         let config = try VMClone.clone(source, to: bundle)
         let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
-        self.vm = vm
+        slot.vm = vm
         try await vm.start()
         let ip = try await waitUntilReady(vm)
         let booted = ContinuousClock.now - started
@@ -105,9 +126,9 @@ final class WarmPool {
         let saveStarted = ContinuousClock.now
         try await vm.pauseAndSave()
         await vm.stop()
-        self.vm = nil
-        current = nil
-        saved = bundle
+        slot.vm = nil
+        slot.current = nil
+        slot.saved = bundle
         let attributes = try? FileManager.default.attributesOfItem(atPath: bundle.savedStateURL.path)
         let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
         print("  booted at \(ip) in \(DurationFormat.short(booted)), "
@@ -128,14 +149,14 @@ final class WarmPool {
     }
 
     /// Restores a fresh clone of the slot's saved state and waits until its agent answers.
-    private func refill() async throws {
-        guard let saved else { return }
+    private func refill(_ slot: Slot) async throws {
+        guard let saved = slot.saved else { return }
         let started = ContinuousClock.now
-        let bundle = try home.bundle(named: "\(slotName)-\(Self.shortID())")
-        current = bundle
+        let bundle = try home.bundle(named: "\(slot.name)-\(Self.shortID())")
+        slot.current = bundle
         let config = try VMClone.clone(saved, to: bundle, keepingSavedState: true)
         let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
-        self.vm = vm
+        slot.vm = vm
         try await vm.restore()
         // Attached before the guest resumes, the display catches the frames it draws then; a
         // serve that can't reach the window server just refuses screenshots later.
@@ -143,11 +164,11 @@ final class WarmPool {
         try await vm.resume()
         let ip = try await waitUntilReady(vm)
         vm.onFailure = { [weak self] error in
-            print("Slot 1: \(error.message); restoring a fresh clone")
-            self?.replaceCurrent()
+            print("Slot \(slot.number): \(error.message); restoring a fresh clone")
+            self?.replaceCurrent(of: slot)
         }
-        warmAddress = ip
-        print("Slot 1 warm: '\(bundle.name)' at \(ip), restored in \(DurationFormat.short(ContinuousClock.now - started))")
+        slot.warmAddress = ip
+        print("Slot \(slot.number) warm: '\(bundle.name)' at \(ip), restored in \(DurationFormat.short(ContinuousClock.now - started))")
         handOut()
     }
 
@@ -155,8 +176,9 @@ final class WarmPool {
         let request = try? JSONDecoder().decode(ServeRequest.self, from: Data(line.utf8))
         switch request?.op {
         case "acquire":
-            if let emptyReason {
-                return responder.finish(ServeResponse(error: "slot 1 is empty: \(emptyReason)").line)
+            let reasons = slots.compactMap { slot in slot.emptyReason.map { "slot \(slot.number) is empty: \($0)" } }
+            if reasons.count == slots.count {
+                return responder.finish(ServeResponse(error: reasons.joined(separator: "; ")).line)
             }
             let allow = request?.allow ?? []
             if !allow.isEmpty && !userspaceNetwork {
@@ -181,10 +203,12 @@ final class WarmPool {
         }
     }
 
-    /// Gives the warm VM to the acquire that has waited longest, once there are both, with that
+    /// Gives a warm VM to the acquire that has waited longest, once there are both, with that
     /// acquire's list in force on the userspace network. Until then the VM reaches nothing there.
     private func handOut() {
-        guard !assigned, let warmAddress, let current, let vm, !waiting.isEmpty else { return }
+        guard !waiting.isEmpty,
+              let slot = slots.first(where: { !$0.assigned && $0.warmAddress != nil && $0.vm != nil }),
+              let warmAddress = slot.warmAddress, let current = slot.current, let vm = slot.vm else { return }
         let (responder, allow) = waiting.removeFirst()
         if !allow.isEmpty {
             do {
@@ -194,21 +218,21 @@ final class WarmPool {
                 return handOut()
             }
         }
-        assigned = true
-        print("Slot 1 assigned: '\(current.name)' at \(warmAddress)"
+        slot.assigned = true
+        print("Slot \(slot.number) assigned: '\(current.name)' at \(warmAddress)"
             + (allow.isEmpty ? "" : ", allowing \(allow.joined(separator: ", "))"))
         responder.finish(ServeResponse(vm: current.name, ip: warmAddress).line)
     }
 
     /// Runs a command in a VM this serve handed out, streaming its output to the caller.
     private func exec(_ command: String?, in name: String?, _ responder: Responder) {
-        guard assigned, let vm, let current, name == current.name else {
+        guard let (slot, vm, current) = handedOut(name) else {
             return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
         }
         guard let command, !command.isEmpty else {
             return responder.finish(ServeResponse(error: "exec needs a command").line)
         }
-        print("Slot 1: running a command in '\(current.name)'")
+        print("Slot \(slot.number): running a command in '\(current.name)'")
         Task {
             do {
                 let status = try await vm.runInGuest(command) { responder.send(ServeResponse(output: $0).line) }
@@ -221,14 +245,14 @@ final class WarmPool {
 
     /// Runs a task on a git bundle in a VM this serve handed out; see `HeadlessVM.runTask`.
     private func task(_ request: ServeRequest?, _ responder: Responder) {
-        guard assigned, let vm, let current, let request, request.vm == current.name else {
+        guard let request, let (slot, vm, current) = handedOut(request.vm) else {
             return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
         }
         guard let command = request.command, !command.isEmpty,
               let bundle = request.bundle, bundle.hasPrefix("/"), let result = request.result, result.hasPrefix("/") else {
             return responder.finish(ServeResponse(error: "task needs a command and absolute bundle and result paths").line)
         }
-        print("Slot 1: running a task in '\(current.name)'")
+        print("Slot \(slot.number): running a task in '\(current.name)'")
         Task {
             do {
                 let outcome = try await vm.runTask(
@@ -243,10 +267,10 @@ final class WarmPool {
 
     /// Streams the accessibility tree of the focused app in a VM this serve handed out.
     private func accessibilityTree(of name: String?, _ responder: Responder) {
-        guard assigned, let vm, let current, name == current.name else {
+        guard let (slot, vm, current) = handedOut(name) else {
             return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
         }
-        print("Slot 1: reading the accessibility tree of '\(current.name)'")
+        print("Slot \(slot.number): reading the accessibility tree of '\(current.name)'")
         Task {
             do {
                 try await vm.accessibilityTree { responder.send(ServeResponse(output: $0).line) }
@@ -261,7 +285,7 @@ final class WarmPool {
     /// its virtual pointer and keyboard. Answers once the input is sent, before the guest has acted
     /// on it.
     private func input(_ request: ServeRequest?, _ responder: Responder) {
-        guard assigned, let vm, let current, let request, request.vm == current.name else {
+        guard let request, let (_, vm, _) = handedOut(request.vm) else {
             return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
         }
         Task {
@@ -303,13 +327,13 @@ final class WarmPool {
 
     /// Saves the screen of a VM this serve handed out as a PNG at the request's result path.
     private func screenshot(_ request: ServeRequest?, _ responder: Responder) {
-        guard assigned, let vm, let current, let request, request.vm == current.name else {
+        guard let request, let (slot, vm, current) = handedOut(request.vm) else {
             return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
         }
         guard let path = request.result, path.hasPrefix("/") else {
             return responder.finish(ServeResponse(error: "screenshot needs an absolute path to save the PNG at").line)
         }
-        print("Slot 1: saving the screen of '\(current.name)'")
+        print("Slot \(slot.number): saving the screen of '\(current.name)'")
         Task {
             do {
                 let image = try await vm.screenshot()
@@ -323,12 +347,20 @@ final class WarmPool {
     }
 
     private func release(_ name: String?, _ responder: Responder) {
-        guard assigned, let current, name == current.name else {
+        guard let (slot, _, current) = handedOut(name) else {
             return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
         }
         responder.finish(ServeResponse(vm: current.name).line)
-        print("Slot 1 released: '\(current.name)'; wiping it and restoring a fresh clone")
-        replaceCurrent()
+        print("Slot \(slot.number) released: '\(current.name)'; wiping it and restoring a fresh clone")
+        replaceCurrent(of: slot)
+    }
+
+    /// The slot that handed out the VM named `name`, with that VM, if one did.
+    private func handedOut(_ name: String?) -> (Slot, HeadlessVM, VMBundle)? {
+        for slot in slots {
+            if let (vm, bundle) = slot.handedOut(name) { return (slot, vm, bundle) }
+        }
+        return nil
     }
 
     /// Waits for the guest agent to answer over vsock and for the guest's network, and, if the
@@ -362,19 +394,22 @@ final class WarmPool {
         return ip
     }
 
-    /// Throws the current VM away, with everything its user did, and restores a fresh clone.
-    private func replaceCurrent() {
-        warmAddress = nil
-        assigned = false
+    /// Throws the slot's current VM away, with everything its user did, and restores a fresh clone.
+    private func replaceCurrent(of slot: Slot) {
+        slot.warmAddress = nil
+        slot.assigned = false
         Task {
-            await discardCurrent()
+            await discardCurrent(of: slot)
             do {
-                try await refill()
+                try await refill(slot)
             } catch {
-                await discardCurrent()
-                emptyReason = error.localizedDescription
-                print("Slot 1 is empty: \(error.localizedDescription)")
-                answerWaiting(with: "slot 1 is empty: \(error.localizedDescription)")
+                await discardCurrent(of: slot)
+                slot.emptyReason = error.localizedDescription
+                print("Slot \(slot.number) is empty: \(error.localizedDescription)")
+                // Waiting acquires wait on for another slot, unless every slot is empty.
+                if slots.allSatisfy({ $0.emptyReason != nil }) {
+                    answerWaiting(with: "slot \(slot.number) is empty: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -386,21 +421,21 @@ final class WarmPool {
         waiting.removeAll()
     }
 
-    /// Forces the current VM off and deletes its clone.
-    private func discardCurrent() async {
-        await vm?.stop()
-        vm = nil
-        if let current {
+    /// Forces the slot's current VM off and deletes its clone.
+    private func discardCurrent(of slot: Slot) async {
+        await slot.vm?.stop()
+        slot.vm = nil
+        if let current = slot.current {
             try? FileManager.default.removeItem(at: current.url)
         }
-        current = nil
+        slot.current = nil
     }
 
-    private func removeSaved() {
-        if let saved {
+    private func removeSaved(of slot: Slot) {
+        if let saved = slot.saved {
             try? FileManager.default.removeItem(at: saved.url)
         }
-        saved = nil
+        slot.saved = nil
     }
 
     private func shutDown() {
@@ -410,13 +445,15 @@ final class WarmPool {
         server?.stop()
         answerWaiting(with: "paddock serve stopped")
         Task {
-            await discardCurrent()
-            removeSaved()
+            for slot in slots {
+                await discardCurrent(of: slot)
+                removeSaved(of: slot)
+            }
             Darwin.exit(0)
         }
     }
 
-    private static func shortID() -> String {
+    static func shortID() -> String {
         UUID().uuidString.prefix(6).lowercased()
     }
 }
