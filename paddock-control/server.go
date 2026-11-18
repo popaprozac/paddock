@@ -43,6 +43,9 @@ type message struct {
 	Version   string `json:"version,omitempty"`   // hello: paddock's version on the host
 	MacOS     string `json:"macos,omitempty"`     // hello: the host's macOS version
 	Image     string `json:"image,omitempty"`     // hello: the golden image serve hands out clones of
+	CPUs      int    `json:"cpus,omitempty"`      // hello: the host's cores
+	Memory    uint64 `json:"memory,omitempty"`    // hello: the host's memory, in bytes
+	DiskFree  uint64 `json:"diskFree,omitempty"`  // capacity: free space for VMs, in bytes
 	Slots     []slot `json:"slots,omitempty"`     // capacity: every slot on the host
 }
 
@@ -63,6 +66,7 @@ type link struct {
 	lastSeen  time.Time
 	hello     message
 	slots     []slot
+	diskFree  uint64
 }
 
 // server is the control plane: enrollment and host links over HTTPS.
@@ -75,6 +79,7 @@ type server struct {
 	mu           sync.Mutex
 	links        map[string]*link // by host ID, for hosts online now
 	pending      int              // links not yet authenticated
+	stopping     bool             // closeAll has run
 	enrollFailed []time.Time      // failed enrollments in the last enrollFailWindow
 }
 
@@ -224,7 +229,7 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		case "hello":
 			l.hello = m
 		case "capacity":
-			l.slots = m.Slots
+			l.slots, l.diskFree = m.Slots, m.DiskFree
 		}
 		l.mu.Unlock()
 	}
@@ -315,6 +320,9 @@ func (s *server) unregister(host string, l *link, reason string) {
 	if current {
 		delete(s.links, host)
 	}
+	if s.stopping {
+		reason = "the control plane is stopping"
+	}
 	s.mu.Unlock()
 	if current {
 		s.audit.record(auditEvent{Event: "link-closed", Host: host, Remote: l.remote, Reason: reason})
@@ -344,6 +352,9 @@ type hostStatus struct {
 	Version   string    `json:"version,omitempty"`
 	MacOS     string    `json:"macos,omitempty"`
 	Image     string    `json:"image,omitempty"`
+	CPUs      int       `json:"cpus,omitempty"`
+	Memory    uint64    `json:"memory,omitempty"`
+	DiskFree  uint64    `json:"diskFree,omitempty"`
 	Slots     []slot    `json:"slots,omitempty"`
 }
 
@@ -358,6 +369,7 @@ func (s *server) status() []hostStatus {
 			l.mu.Lock()
 			status.Online, status.Remote, status.Connected, status.LastSeen = true, l.remote, l.connected, l.lastSeen
 			status.Version, status.MacOS, status.Image, status.Slots = l.hello.Version, l.hello.MacOS, l.hello.Image, l.slots
+			status.CPUs, status.Memory, status.DiskFree = l.hello.CPUs, l.hello.Memory, l.diskFree
 			l.mu.Unlock()
 		}
 		list = append(list, status)

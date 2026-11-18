@@ -264,10 +264,11 @@ func TestLinkAuthenticatesTheEnrolledKeyAndKeepsWhatTheHostReports(t *testing.T)
 		t.Fatalf("welcome %+v, %v", welcome, err)
 	}
 	ctx := context.Background()
-	wsjson.Write(ctx, conn, message{Type: "hello", Name: "studio", Version: "0.1.0", MacOS: "27.2.1", Image: "build26"})
-	wsjson.Write(ctx, conn, message{Type: "capacity", Slots: []slot{{Number: 1, State: "warm", VM: "build26-slot1"}, {Number: 2, State: "assigned"}}})
+	wsjson.Write(ctx, conn, message{Type: "hello", Name: "studio", Version: "0.1.0", MacOS: "27.2.1", Image: "build26", CPUs: 14, Memory: 36 << 30})
+	wsjson.Write(ctx, conn, message{Type: "capacity", DiskFree: 500 << 30, Slots: []slot{{Number: 1, State: "warm", VM: "build26-slot1"}, {Number: 2, State: "assigned"}}})
 	c.waitFor(t, "the host's report", func(list []hostStatus) bool {
-		return len(list) == 1 && list[0].Online && list[0].Image == "build26" && len(list[0].Slots) == 2
+		return len(list) == 1 && list[0].Online && list[0].Image == "build26" && len(list[0].Slots) == 2 &&
+			list[0].CPUs == 14 && list[0].Memory == 36<<30 && list[0].DiskFree == 500<<30
 	})
 	if got := slotSummary(c.srv.status()[0].Slots); got != "1 warm, 1 assigned" {
 		t.Errorf("slot summary %q", got)

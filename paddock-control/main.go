@@ -24,9 +24,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 const usage = `usage: paddock-control <command> [flags]
@@ -298,12 +301,29 @@ func dash(s string) string {
 // next one that starts.
 func (s *server) closeAll() {
 	s.mu.Lock()
+	s.stopping = true
 	links := make([]*link, 0, len(s.links))
 	for _, l := range s.links {
 		links = append(links, l)
 	}
 	s.mu.Unlock()
+	// Closed politely, so each host knows the control plane went away rather than the network,
+	// but all at once and for at most 2 s.
+	var wg sync.WaitGroup
 	for _, l := range links {
-		l.conn.CloseNow()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l.conn.Close(websocket.StatusGoingAway, "the control plane is stopping")
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
 	}
 }
