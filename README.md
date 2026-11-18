@@ -53,14 +53,18 @@ back:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.5.1"}` |
+| `{"op":"health"}` | `{"version":"0.6.0"}` |
 | `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
+| `{"op":"run","command":"...","as":"root"}` | The same, with the command run as root |
 | `{"op":"put","name":"...","size":N}` followed by N bytes | `{"exit":0}` once the file is stored |
 | `{"op":"get","name":"..."}` | `{"chunk":n}` followed by n bytes, repeated, then `{"exit":0}` |
 | `{"op":"state"}` | `{"output":"network"}` once en0 has an IPv4 address and the guest an IPv4 DNS server, `{"output":"session-helper"}` if `paddock-session` is installed, then `{"exit":0}` |
 
 `run` uses a login shell (`zsh -l`) as the account with uid 501, the one created in Setup
-Assistant, in its home folder, with stdin closed. Output lines over 8 KB are split. `put` and
+Assistant, in its home folder, with stdin closed. With `"as":"root"` it runs as root instead,
+also in a login shell, which paddock asks for only while it builds an image; since the agent
+answers only the host, nothing in the guest can ask. An agent before 0.6.0 ignores `as` and runs
+the command as the account. Output lines over 8 KB are split. `put` and
 `get` work on files in that account's `~/paddock` folder, named by one plain path component, up
 to 4 GiB; the account itself reads and writes them, never the root agent, and stored files are
 readable only by it. The host refuses a `get` larger than it asked for and deletes a partial file.

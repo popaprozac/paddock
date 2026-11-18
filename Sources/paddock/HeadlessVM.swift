@@ -277,8 +277,8 @@ final class HeadlessVM: NSObject {
 
     /// Runs `command` in the guest through its agent over vsock, passing each output line to
     /// `output` as it arrives, and returns the command's exit status.
-    func runInGuest(_ command: String, output: @escaping @Sendable (String) -> Void) async throws -> Int32 {
-        try await withAgent { try GuestAgent.askToRun(command, over: $0, output: output) }
+    func runInGuest(_ command: String, asRoot: Bool = false, output: @escaping @Sendable (String) -> Void) async throws -> Int32 {
+        try await withAgent { try GuestAgent.askToRun(command, asRoot: asRoot, over: $0, output: output) }
     }
 
     /// Copies the file at `url` into the guest agent's files folder as `name`.

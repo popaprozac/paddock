@@ -7,20 +7,23 @@ import SystemConfiguration
 /// The agent listens only on vsock, so nothing on the VM network can reach it. Each
 /// connection carries one request line of JSON and gets one or more answer lines back:
 ///
-///     {"op":"health"}                       ->  {"version":"0.5.1"}
+///     {"op":"health"}                       ->  {"version":"0.6.0"}
 ///     {"op":"run","command":"ls"}           ->  {"output":"..."} per line, then {"exit":0}
+///     {"op":"run","command":"ls","as":"root"}  ->  the same, run as root
 ///     {"op":"put","name":"a","size":N} + N bytes  ->  {"exit":0}
 ///     {"op":"get","name":"a"}               ->  {"chunk":n} + n bytes, repeated, then {"exit":0}
 ///     {"op":"state"}                        ->  {"output":"network"} and {"output":"session-helper"}
 ///                                               when they hold, then {"exit":0}
 ///
+/// `run` runs as the workload account unless it asks for root, which the host does only to build
+/// an image; the agent answers only the host (see `onlyFromHost`), so nothing in the guest can ask.
 /// `put` and `get` work on files in the workload account's `~/paddock` folder.
 /// The host treats every answer as untrusted: the workload runs as admin and can replace the
 /// agent.
 public enum GuestAgent {
     /// The vsock port the agent listens on inside the guest.
     public static let port: UInt32 = 52525
-    public static let version = "0.5.1"
+    public static let version = "0.6.0"
 
     /// Output lines longer than this are split, so every answer line stays well under the
     /// 64 KB a reader accepts even after JSON escaping.
@@ -31,12 +34,20 @@ public enum GuestAgent {
         public var command: String?
         public var name: String?
         public var size: Int64?
+        /// For `run`: "root", or nil for the workload account.
+        public var user: String?
 
-        public init(op: String, command: String? = nil, name: String? = nil, size: Int64? = nil) {
+        private enum CodingKeys: String, CodingKey {
+            case op, command, name, size
+            case user = "as"
+        }
+
+        public init(op: String, command: String? = nil, name: String? = nil, size: Int64? = nil, user: String? = nil) {
             self.op = op
             self.command = command
             self.name = name
             self.size = size
+            self.user = user
         }
 
         var line: String {
@@ -83,7 +94,16 @@ public enum GuestAgent {
         switch request.op {
         case "run":
             guard let command = request.command else { return responder.finish(answer(line)) }
-            work = { run(command, as: user) { responder.send(lines: $0.map { Response(output: $0).line }) } }
+            let send: @Sendable ([String]) -> Void = { responder.send(lines: $0.map { Response(output: $0).line }) }
+            switch request.user {
+            case nil:
+                work = { run(command, as: user, output: send) }
+            case "root":
+                // As the agent's own user, root under launchd, in a login shell as for the account.
+                work = { run(command, shell: ["/bin/zsh", "-lc"], as: nil, output: send) }
+            case let other?:
+                return responder.finish(Response(error: "run as 'root' or as the workload account, not '\(other.prefix(64))'").line)
+            }
         case "put":
             guard let name = request.name, isFileName(name), let size = request.size, (0...maxFileSize).contains(size) else {
                 return responder.finish(Response(error: "put needs a plain file name and a size up to \(maxFileSize) bytes").line)
@@ -259,8 +279,8 @@ public enum GuestAgent {
 
     /// Asks the agent over `fd` to run `command`, passes each output line to `output` as it
     /// arrives and returns the command's exit status. Waits as long as the command runs.
-    public static func askToRun(_ command: String, over fd: Int32, output: (String) -> Void) throws -> Int32 {
-        try askStreaming(Request(op: "run", command: command), over: fd, output: output)
+    public static func askToRun(_ command: String, asRoot: Bool = false, over fd: Int32, output: (String) -> Void) throws -> Int32 {
+        try askStreaming(Request(op: "run", command: command, user: asRoot ? "root" : nil), over: fd, output: output)
     }
 
     /// Sends `request` over `fd`, passes each `output` line of the answer to `output` and returns
