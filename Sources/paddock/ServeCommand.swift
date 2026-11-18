@@ -360,7 +360,7 @@ final class WarmPool {
         if sessionHelper == true {
             guard try await vm.sessionHelperVersion(within: Self.sessionTimeout) != nil else {
                 throw PaddockError("'\(vm.bundle.name)' has paddock-session installed, but it didn't answer within "
-                    + "\(DurationFormat.short(Self.sessionTimeout)); turn on automatic login in the golden image")
+                    + "\(DurationFormat.short(Self.sessionTimeout)); turn on automatic login in the golden image, and boot it once to finish Setup Assistant")
             }
             guard try await vm.desktopReady(within: Self.sessionTimeout) else {
                 throw PaddockError("loginwindow in '\(vm.bundle.name)' still covered the screen after "
