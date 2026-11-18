@@ -36,9 +36,12 @@ const usage = `usage: paddock-control <command> [flags]
 
 commands:
   run           start the control plane
-  join-token    make a one-use token for a Mac to join with
+  join-token    make a one-use token for a Mac to join the pool with
+  login-token   make a one-use token for a person's CLI or an agent to log in with
   hosts         list the Macs that joined, and what each reports
+  clients       list the CLIs and agents that logged in
   remove-host   remove a Mac: its link closes and it can't connect again
+  remove-client remove a CLI or agent: its links close and it can't connect again
 
 Run 'paddock-control <command> -h' for its flags.
 `
@@ -57,8 +60,14 @@ func main() {
 		err = joinToken(os.Args[2:])
 	case "hosts":
 		err = hosts(os.Args[2:])
+	case "login-token":
+		err = loginToken(os.Args[2:])
+	case "clients":
+		err = clients(os.Args[2:])
 	case "remove-host":
-		err = removeHost(os.Args[2:])
+		err = remove(hostKind, os.Args[2:])
+	case "remove-client":
+		err = remove(clientKind, os.Args[2:])
 	case "-h", "-help", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -209,11 +218,21 @@ func urlsFor(r reach, port string) []string {
 }
 
 func joinToken(args []string) error {
-	flags := flag.NewFlagSet("join-token", flag.ExitOnError)
+	return token(hostKind, args)
+}
+
+func loginToken(args []string) error {
+	return token(clientKind, args)
+}
+
+// token makes a one-use token of kind k and says what to do with it.
+func token(k kind, args []string) error {
+	op := map[kind]string{hostKind: "join-token", clientKind: "login-token"}[k]
+	flags := flag.NewFlagSet(op, flag.ExitOnError)
 	dir := stateFlag(flags)
 	ttl := flags.Duration("ttl", defaultTokenTTL, "how long the token can be used, at most 24h")
 	flags.Parse(args)
-	response, err := askAdmin(*dir, adminRequest{Op: "join-token", TTL: *ttl})
+	response, err := askAdmin(*dir, adminRequest{Op: op, TTL: *ttl})
 	if err != nil {
 		return err
 	}
@@ -221,9 +240,16 @@ func joinToken(args []string) error {
 	if len(response.URLs) > 0 {
 		url = response.URLs[0]
 	}
-	fmt.Printf("Join token, for one Mac, until %s:\n\n  %s\n\n", response.Expires.Local().Format("Jan 2 15:04"), response.Token)
-	fmt.Println("Anyone with it can add a Mac until then, so pass it on only to the Mac you add. On that Mac:")
-	fmt.Printf("\n  paddock serve <golden image> --control %s --join <token>\n\n", url)
+	until := response.Expires.Local().Format("Jan 2 15:04")
+	if k == clientKind {
+		fmt.Printf("Login token, for one person's CLI or one agent, until %s:\n\n  %s\n\n", until, response.Token)
+		fmt.Println("Anyone with it can use the pool's VMs until then, so pass it on only to whoever logs in. There:")
+		fmt.Printf("\n  paddock login %s --token <token>\n\n", url)
+	} else {
+		fmt.Printf("Join token, for one Mac, until %s:\n\n  %s\n\n", until, response.Token)
+		fmt.Println("Anyone with it can add a Mac until then, so pass it on only to the Mac you add. On that Mac:")
+		fmt.Printf("\n  paddock serve <golden image> --control %s --join <token>\n\n", url)
+	}
 	if len(response.URLs) > 1 {
 		fmt.Printf("The control plane also answers at: %s\n", strings.Join(response.URLs[1:], ", "))
 	}
@@ -263,11 +289,45 @@ func hosts(args []string) error {
 	return table.Flush()
 }
 
-func removeHost(args []string) error {
-	flags := flag.NewFlagSet("remove-host", flag.ExitOnError)
+func clients(args []string) error {
+	flags := flag.NewFlagSet("clients", flag.ExitOnError)
+	dir := stateFlag(flags)
+	asJSON := flags.Bool("json", false, "print JSON")
+	flags.Parse(args)
+	response, err := askAdmin(*dir, adminRequest{Op: "clients"})
+	if err != nil {
+		return err
+	}
+	list := response.Clients
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
+	if *asJSON {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(list)
+	}
+	if len(list) == 0 {
+		fmt.Println("No one has logged in yet. Make a token for someone: paddock-control login-token")
+		return nil
+	}
+	table := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(table, "NAME\tID\tLINKS\tLAST SEEN\tLOGGED IN")
+	for _, c := range list {
+		seen := "-"
+		if !c.LastSeen.IsZero() {
+			seen = c.LastSeen.Local().Format("Jan 2 15:04")
+		}
+		fmt.Fprintf(table, "%s\t%s\t%d\t%s\t%s\n", c.Name, c.ID, c.Links, seen, c.Enrolled.Local().Format("Jan 2 15:04"))
+	}
+	return table.Flush()
+}
+
+// remove removes a host or a client by ID or name.
+func remove(k kind, args []string) error {
+	op := "remove-" + string(k)
+	flags := flag.NewFlagSet(op, flag.ExitOnError)
 	dir := stateFlag(flags)
 	flags.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: paddock-control remove-host [-state folder] <host ID or name>")
+		fmt.Fprintf(os.Stderr, "usage: paddock-control %s [-state folder] <%s ID or name>\n", op, k)
 		flags.PrintDefaults()
 	}
 	flags.Parse(args)
@@ -275,11 +335,15 @@ func removeHost(args []string) error {
 		flags.Usage()
 		os.Exit(2)
 	}
-	response, err := askAdmin(*dir, adminRequest{Op: "remove-host", Host: flags.Arg(0)})
+	response, err := askAdmin(*dir, adminRequest{Op: op, Host: flags.Arg(0)})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Removed %s: its link is closed, and it can't connect again unless it joins with a new token.\n", response.Removed)
+	again := "joins with a new token"
+	if k == clientKind {
+		again = "logs in with a new token"
+	}
+	fmt.Printf("Removed %s: its links are closed, and it can't connect again unless it %s.\n", response.Removed, again)
 	return nil
 }
 

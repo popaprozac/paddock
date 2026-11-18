@@ -9,23 +9,37 @@ public enum ControlLink {
     /// What a Mac signs ahead of the control plane's random bytes, so the signature can't be
     /// taken for one made for anything else.
     public static let context = Data("paddock-link-v1:".utf8)
+    /// What a client signs instead, so a host's signature never passes for a client's.
+    public static let clientContext = Data("paddock-client-v1:".utf8)
 
-    /// A join token: `pj1.<secret>.<pin>`, both base64url. The pin is the SHA-256 of the control
-    /// plane's CA public key; the secret, used once, lets the Mac enroll.
-    public struct JoinToken: Equatable, Sendable {
+    /// What an identity may do: a host serves VMs and reports its slots; a client, a person's CLI
+    /// or an agent, asks for them.
+    public enum Kind: String, Codable, Sendable {
+        case host, client
+
+        var tokenPrefix: String { self == .host ? "pj1" : "pl1" }
+    }
+
+    /// A join token (`pj1.`, for a Mac) or a login token (`pl1.`, for a CLI or agent), then
+    /// `<secret>.<pin>`, both base64url. The pin is the SHA-256 of the control plane's CA public
+    /// key; the secret, used once, lets its holder enroll.
+    public struct Token: Equatable, Sendable {
         public let text: String
+        public let kind: Kind
         public let pin: Data
 
         public init(_ text: String) throws {
             let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
             let parts = text.split(separator: ".", omittingEmptySubsequences: false)
-            guard parts.count == 3, parts[0] == "pj1",
+            guard parts.count == 3, let kind = [Kind.host, .client].first(where: { $0.tokenPrefix == parts[0] }),
                   let secret = Data(base64URL: String(parts[1])), secret.count == 32,
                   let pin = Data(base64URL: String(parts[2])), pin.count == 32
             else {
-                throw PaddockError("that isn't a paddock join token: make one with 'paddock-control join-token'")
+                throw PaddockError("that isn't a paddock token: make one with 'paddock-control join-token' for a Mac, "
+                    + "or 'paddock-control login-token' to log in")
             }
             self.text = text
+            self.kind = kind
             self.pin = pin
         }
     }
@@ -44,9 +58,9 @@ public enum ControlLink {
         return Data(SHA256.hash(data: p256KeyInfoPrefix + point))
     }
 
-    /// The answer to a link's challenge: an ECDSA signature, in DER, over the SHA-256 of
-    /// `context` and the control plane's bytes.
-    public static func answer(_ nonce: Data, with key: P256.Signing.PrivateKey) throws -> Data {
+    /// The answer to a link's challenge: an ECDSA signature, in DER, over the SHA-256 of the
+    /// context (a host's, unless given) and the control plane's bytes.
+    public static func answer(_ nonce: Data, with key: P256.Signing.PrivateKey, context: Data = context) throws -> Data {
         try key.signature(for: context + nonce).derRepresentation
     }
 
@@ -64,13 +78,23 @@ public enum ControlLink {
         public var memory: UInt64?   // hello: this Mac's memory, in bytes
         public var diskFree: UInt64? // capacity: free space for VMs, in bytes
         public var slots: [SlotReport]?
+        public var client: String?  // a client's auth and welcome: its ID
+        public var id: String?      // request and response: pairs them on one link
+        public var op: String?      // request: hosts or logout
+        public var hosts: [HostStatus]?
+        public var error: String?   // response: why the request failed
+        public var done: Bool?      // response: the request's last answer
 
         public init(type: String, nonce: Data? = nil, host: String? = nil, signature: Data? = nil, name: String? = nil,
                     version: String? = nil, macos: String? = nil, image: String? = nil, cpus: Int? = nil,
-                    memory: UInt64? = nil, diskFree: UInt64? = nil, slots: [SlotReport]? = nil) {
+                    memory: UInt64? = nil, diskFree: UInt64? = nil, slots: [SlotReport]? = nil, client: String? = nil,
+                    id: String? = nil, op: String? = nil) {
             self.type = type
             self.nonce = nonce
             self.host = host
+            self.client = client
+            self.id = id
+            self.op = op
             self.signature = signature
             self.name = name
             self.version = version
@@ -98,21 +122,57 @@ public enum ControlLink {
         }
     }
 
+    /// A Mac in the pool, as the control plane reports it to a client.
+    public struct HostStatus: Codable, Equatable, Sendable {
+        public var id: String
+        public var name: String
+        public var enrolled: Date
+        public var online: Bool
+        public var remote: String?
+        public var connected: Date?
+        public var lastSeen: Date?
+        public var version: String?
+        public var macos: String?
+        public var image: String?
+        public var cpus: Int?
+        public var memory: UInt64?
+        public var diskFree: UInt64?
+        public var slots: [SlotReport]?
+    }
+
     public struct EnrollRequest: Codable, Sendable {
         public var token: String
         public var name: String
         public var publicKey: Data  // SubjectPublicKeyInfo DER
+        public var `as`: Kind
 
-        public init(token: String, name: String, publicKey: Data) {
+        public init(token: String, name: String, publicKey: Data, as kind: Kind) {
             self.token = token
             self.name = name
             self.publicKey = publicKey
+            self.as = kind
         }
     }
 
     public struct EnrollResponse: Codable, Sendable {
         public var host: String?
+        public var client: String?
         public var error: String?
+    }
+
+    /// Reads the control plane's JSON: its times are RFC 3339, with fractions of a second.
+    public static func decoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: text) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: text) { return date }
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "not an RFC 3339 time: \(text)"))
+        }
+        return decoder
     }
 
     /// The name a Mac enrolls and reports with: what paddock-control accepts, 1 to 64 printable
@@ -124,55 +184,64 @@ public enum ControlLink {
     }
 }
 
-/// What a Mac keeps once it joins a control plane: where it is, the ID it was given, the CA it
-/// trusts there and nothing else, and its own private key, in a folder only its user can read.
-/// The private key never leaves the Mac.
-public struct HostIdentity: Equatable, Sendable {
+/// What a Mac (a host) or a CLI (a client) keeps once it joins a control plane: where it is, the ID
+/// it was given, the CA it trusts there and nothing else, and its own private key, in a folder only
+/// its user can read. The private key never leaves the Mac.
+public struct ControlIdentity: Equatable, Sendable {
+    public var kind: ControlLink.Kind
     public var url: URL
-    public var host: String
+    public var id: String
     public var authority: Data  // the CA certificate, DER
     public var key: P256.Signing.PrivateKey
 
-    public init(url: URL, host: String, authority: Data, key: P256.Signing.PrivateKey) {
+    public init(kind: ControlLink.Kind, url: URL, id: String, authority: Data, key: P256.Signing.PrivateKey) {
+        self.kind = kind
         self.url = url
-        self.host = host
+        self.id = id
         self.authority = authority
         self.key = key
     }
 
-    public static func == (a: HostIdentity, b: HostIdentity) -> Bool {
-        a.url == b.url && a.host == b.host && a.authority == b.authority && a.key.rawRepresentation == b.key.rawRepresentation
+    public static func == (a: ControlIdentity, b: ControlIdentity) -> Bool {
+        a.kind == b.kind && a.url == b.url && a.id == b.id && a.authority == b.authority
+            && a.key.rawRepresentation == b.key.rawRepresentation
     }
 
+    /// The saved form: a host's ID under "host", as serve first wrote it, a client's under "client".
     private struct Record: Codable {
         var url: URL
-        var host: String
+        var host: String?
+        var client: String?
         var authority: Data
     }
 
-    /// The folder in a paddock home: `host/`, apart from `control/`, which is the control plane's
-    /// own when both run on one Mac.
-    public static func folder(in home: PaddockHome) -> URL {
-        home.root.appendingPathComponent("host", isDirectory: true)
+    /// The folder in a paddock home: `host/` or `client/`, apart from `control/`, which is the
+    /// control plane's own when it runs on the same Mac.
+    public static func folder(in home: PaddockHome, for kind: ControlLink.Kind) -> URL {
+        home.root.appendingPathComponent(kind.rawValue, isDirectory: true)
     }
 
-    /// The identity saved in `folder`, or nil if this Mac hasn't joined.
-    public static func load(from folder: URL) throws -> HostIdentity? {
-        let recordURL = folder.appendingPathComponent("host.json"), keyURL = folder.appendingPathComponent("host.key")
+    /// The identity of `kind` saved in `folder`, or nil if there's none.
+    public static func load(_ kind: ControlLink.Kind, from folder: URL) throws -> ControlIdentity? {
+        let recordURL = folder.appendingPathComponent("\(kind.rawValue).json")
+        let keyURL = folder.appendingPathComponent("\(kind.rawValue).key")
         guard FileManager.default.fileExists(atPath: recordURL.path) else { return nil }
         let record = try JSONDecoder().decode(Record.self, from: Data(contentsOf: recordURL))
+        guard let id = kind == .host ? record.host : record.client else {
+            throw PaddockError("\(recordURL.path) has no \(kind.rawValue) ID")
+        }
         let key = try P256.Signing.PrivateKey(rawRepresentation: Data(contentsOf: keyURL))
-        return HostIdentity(url: record.url, host: record.host, authority: record.authority, key: key)
+        return ControlIdentity(kind: kind, url: record.url, id: id, authority: record.authority, key: key)
     }
 
-    /// Saves the identity, replacing any other, with the folder 0700 and its files 0600.
+    /// Saves the identity, replacing any other of its kind, with the folder 0700 and its files 0600.
     public func save(to folder: URL) throws {
         let manager = FileManager.default
         try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
-        let record = try JSONEncoder().encode(Record(url: url, host: host, authority: authority))
-        try Self.writePrivate(key.rawRepresentation, to: folder.appendingPathComponent("host.key"))
-        try Self.writePrivate(record, to: folder.appendingPathComponent("host.json"))
+        let record = Record(url: url, host: kind == .host ? id : nil, client: kind == .client ? id : nil, authority: authority)
+        try Self.writePrivate(key.rawRepresentation, to: folder.appendingPathComponent("\(kind.rawValue).key"))
+        try Self.writePrivate(try JSONEncoder().encode(record), to: folder.appendingPathComponent("\(kind.rawValue).json"))
     }
 
     /// Writes through a temporary file created 0600, so the data is never readable by others,

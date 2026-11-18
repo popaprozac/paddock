@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -16,9 +18,12 @@ import (
 	"github.com/coder/websocket/wsjson"
 )
 
-// linkContext is what a host signs, ahead of the control plane's fresh random bytes, so the
-// signature can't be taken for one made for anything else.
-const linkContext = "paddock-link-v1:"
+// What a host or client signs, ahead of the control plane's fresh random bytes, so the signature
+// can't be taken for one made for anything else, or a host's for a client's.
+const (
+	linkContext   = "paddock-link-v1:"
+	clientContext = "paddock-client-v1:"
+)
 
 const (
 	enrollBodyLimit  = 16 << 10
@@ -32,13 +37,14 @@ const (
 	maxTokenTTL      = 24 * time.Hour
 )
 
-// message is every message on a host's link, as one JSON object; which fields it has depends on
-// its type.
+// message is every message on a host's or client's link, as one JSON object; which fields it has
+// depends on its type.
 type message struct {
-	Type      string `json:"type"`                // challenge, auth, welcome, hello, capacity
+	Type      string `json:"type"`                // challenge, auth, welcome, hello, capacity, request, response
 	Nonce     []byte `json:"nonce,omitempty"`     // challenge: 32 random bytes
-	Host      string `json:"host,omitempty"`      // auth and welcome: the host's ID
-	Signature []byte `json:"signature,omitempty"` // auth: ECDSA over SHA-256 of linkContext + nonce, DER
+	Host      string `json:"host,omitempty"`      // a host's auth and welcome: its ID
+	Client    string `json:"client,omitempty"`    // a client's auth and welcome: its ID
+	Signature []byte `json:"signature,omitempty"` // auth: ECDSA over SHA-256 of the context + nonce, DER
 	Name      string `json:"name,omitempty"`      // hello: the host's name for people
 	Version   string `json:"version,omitempty"`   // hello: paddock's version on the host
 	MacOS     string `json:"macos,omitempty"`     // hello: the host's macOS version
@@ -47,6 +53,12 @@ type message struct {
 	Memory    uint64 `json:"memory,omitempty"`    // hello: the host's memory, in bytes
 	DiskFree  uint64 `json:"diskFree,omitempty"`  // capacity: free space for VMs, in bytes
 	Slots     []slot `json:"slots,omitempty"`     // capacity: every slot on the host
+
+	ID    string       `json:"id,omitempty"`    // request and response: pairs them on one link
+	Op    string       `json:"op,omitempty"`    // request: hosts or logout
+	Hosts []hostStatus `json:"hosts,omitempty"` // response to hosts
+	Error string       `json:"error,omitempty"` // response: why the request failed
+	Done  bool         `json:"done,omitempty"`  // response: the request's last answer
 }
 
 // slot is one of serve's slots as its host reports it.
@@ -78,35 +90,42 @@ type server struct {
 
 	mu           sync.Mutex
 	links        map[string]*link // by host ID, for hosts online now
-	pending      int              // links not yet authenticated
-	stopping     bool             // closeAll has run
-	enrollFailed []time.Time      // failed enrollments in the last enrollFailWindow
+	clientLinks  map[string]map[*clientLink]bool
+	pending      int         // links not yet authenticated
+	stopping     bool        // closeAll has run
+	enrollFailed []time.Time // failed enrollments in the last enrollFailWindow
 }
 
 func newServer(st *state, authority *authority, audit *auditLog) *server {
-	return &server{state: st, authority: authority, audit: audit, now: time.Now, links: map[string]*link{}}
+	return &server{state: st, authority: authority, audit: audit, now: time.Now, links: map[string]*link{},
+		clientLinks: map[string]map[*clientLink]bool{}}
 }
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/enroll", s.enroll)
 	mux.HandleFunc("GET /v1/link", s.link)
+	mux.HandleFunc("GET /v1/client", s.clientLink)
 	return mux
 }
 
 type enrollRequest struct {
 	Token     string `json:"token"`
 	Name      string `json:"name"`
-	PublicKey []byte `json:"publicKey"` // PKIX DER of the host's P-256 key
+	PublicKey []byte `json:"publicKey"`    // PKIX DER of the P-256 key
+	As        kind   `json:"as,omitempty"` // host or client: what the caller means to be; host if left out
 }
 
 type enrollResponse struct {
-	Host  string `json:"host,omitempty"`
-	Error string `json:"error,omitempty"`
+	Host   string `json:"host,omitempty"`
+	Client string `json:"client,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
-// enroll trades a join token for a host ID under the host's public key. Every refusal looks the
-// same to the caller, and too many in a minute stop all enrollments for the rest of it.
+// enroll trades a token for an ID under the caller's public key: a join token makes a host, a
+// login token a client. Every refusal of a token looks the same to the caller, and too many in a
+// minute stop all enrollments for the rest of it. A token of the other kind is kept, with what to
+// do instead.
 func (s *server) enroll(w http.ResponseWriter, r *http.Request) {
 	if !s.enrollAllowed() {
 		writeJSON(w, http.StatusTooManyRequests, enrollResponse{Error: "too many failed enrollments; try again in a minute"})
@@ -117,25 +136,42 @@ func (s *server) enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: "the request isn't JSON"})
 		return
 	}
+	wanted := request.As
+	if wanted == "" {
+		wanted = hostKind
+	}
+	if wanted != hostKind && wanted != clientKind {
+		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: `"as" is host or client`})
+		return
+	}
+	command := map[kind]string{hostKind: "paddock-control join-token", clientKind: "paddock-control login-token"}[wanted]
 	refuse := func(reason string) {
 		s.enrollFailure()
 		s.audit.record(auditEvent{Event: "enroll-refused", Name: request.Name, Remote: r.RemoteAddr, Reason: reason})
-		writeJSON(w, http.StatusUnauthorized, enrollResponse{Error: "the join token isn't valid, or was used or expired: make a new one with 'paddock-control join-token'"})
+		writeJSON(w, http.StatusUnauthorized, enrollResponse{Error: "the token isn't valid, or was used or expired: make a new one with '" + command + "'"})
 	}
-	secret, _, err := parseJoinToken(request.Token)
+	tokenKind, secret, _, err := parseToken(request.Token)
 	if err != nil {
 		refuse("malformed token")
 		return
 	}
-	if _, err := parseHostKey(request.PublicKey); err != nil {
+	if tokenKind != wanted {
+		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: wrongKind(tokenKind)})
+		return
+	}
+	if _, err := parseMemberKey(request.PublicKey); err != nil {
 		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: err.Error()})
 		return
 	}
-	if err := validateHostName(request.Name); err != nil {
+	if err := validateName(request.Name); err != nil {
 		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: err.Error()})
 		return
 	}
-	ok, err := s.state.useJoinToken(secret, s.now())
+	ok, err := s.state.useToken(secret, wanted, s.now())
+	if errors.Is(err, errWrongKind) {
+		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: wrongKind(otherKind(wanted))})
+		return
+	}
 	if err != nil {
 		log.Printf("can't save state: %v", err)
 		writeJSON(w, http.StatusInternalServerError, enrollResponse{Error: "the control plane can't save its state"})
@@ -145,15 +181,36 @@ func (s *server) enroll(w http.ResponseWriter, r *http.Request) {
 		refuse("unknown, used or expired token")
 		return
 	}
-	host, err := s.state.enroll(request.Name, request.PublicKey, s.now())
+	member, err := s.state.enroll(wanted, request.Name, request.PublicKey, s.now())
 	if err != nil {
 		log.Printf("can't enroll %q: %v", request.Name, err)
 		writeJSON(w, http.StatusInternalServerError, enrollResponse{Error: "the control plane can't save its state"})
 		return
 	}
-	s.audit.record(auditEvent{Event: "enrolled", Host: host.ID, Name: host.Name, Remote: r.RemoteAddr})
-	log.Printf("enrolled %s (%s) from %s", host.Name, host.ID, r.RemoteAddr)
-	writeJSON(w, http.StatusOK, enrollResponse{Host: host.ID})
+	if wanted == clientKind {
+		s.audit.record(auditEvent{Event: "client-enrolled", Client: member.ID, Name: member.Name, Remote: r.RemoteAddr})
+		log.Printf("enrolled client %s (%s) from %s", member.Name, member.ID, r.RemoteAddr)
+		writeJSON(w, http.StatusOK, enrollResponse{Client: member.ID})
+		return
+	}
+	s.audit.record(auditEvent{Event: "enrolled", Host: member.ID, Name: member.Name, Remote: r.RemoteAddr})
+	log.Printf("enrolled %s (%s) from %s", member.Name, member.ID, r.RemoteAddr)
+	writeJSON(w, http.StatusOK, enrollResponse{Host: member.ID})
+}
+
+// wrongKind says what a token of kind k is for, to someone who used it for the other.
+func wrongKind(k kind) string {
+	if k == clientKind {
+		return "that's a login token, for a person's CLI or an agent: use it with 'paddock login'; a Mac joins with a token from 'paddock-control join-token'"
+	}
+	return "that's a join token, for adding a Mac with 'paddock serve --join'; to log in, use a token from 'paddock-control login-token'"
+}
+
+func otherKind(k kind) kind {
+	if k == hostKind {
+		return clientKind
+	}
+	return hostKind
 }
 
 func (s *server) enrollAllowed() bool {
@@ -190,14 +247,14 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(linkMessageLimit)
-	host, err := s.authenticate(r.Context(), conn)
+	host, err := s.authenticate(r.Context(), conn, hostKind)
 	s.endPending()
 	if err != nil {
 		s.audit.record(auditEvent{Event: "link-refused", Host: host, Remote: r.RemoteAddr, Reason: err.Error()})
 		conn.Close(websocket.StatusPolicyViolation, "not an enrolled host")
 		return
 	}
-	enrolled := s.state.host(host)
+	enrolled := s.state.member(hostKind, host)
 	if enrolled == nil { // removed since it authenticated
 		conn.Close(websocket.StatusPolicyViolation, "this host was removed from the control plane")
 		return
@@ -235,9 +292,9 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// authenticate sends a challenge and checks the host's signature over it; it returns the host's
-// ID, also on failure when the host named one.
-func (s *server) authenticate(ctx context.Context, conn *websocket.Conn) (string, error) {
+// authenticate sends a challenge and checks the host's or client's signature over it; it returns
+// the ID, also on failure when the caller named one.
+func (s *server) authenticate(ctx context.Context, conn *websocket.Conn, k kind) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, authTimeout)
 	defer cancel()
 	nonce := make([]byte, 32)
@@ -251,22 +308,26 @@ func (s *server) authenticate(ctx context.Context, conn *websocket.Conn) (string
 	if err := wsjson.Read(ctx, conn, &answer); err != nil {
 		return "", err
 	}
-	if answer.Type != "auth" || answer.Host == "" {
-		return answer.Host, errors.New("no auth message")
+	id, context := answer.Host, linkContext
+	if k == clientKind {
+		id, context = answer.Client, clientContext
 	}
-	enrolled := s.state.host(answer.Host)
-	if enrolled == nil {
-		return answer.Host, errors.New("unknown or removed host")
+	if answer.Type != "auth" || id == "" {
+		return id, errors.New("no auth message")
 	}
-	key, err := parseHostKey(enrolled.PublicKey)
+	member := s.state.member(k, id)
+	if member == nil {
+		return id, fmt.Errorf("unknown or removed %s", k)
+	}
+	key, err := parseMemberKey(member.PublicKey)
 	if err != nil {
-		return answer.Host, err
+		return id, err
 	}
-	digest := sha256.Sum256(append([]byte(linkContext), nonce...))
+	digest := sha256.Sum256(append([]byte(context), nonce...))
 	if !ecdsa.VerifyASN1(key, digest[:], answer.Signature) {
-		return answer.Host, errors.New("bad signature")
+		return id, errors.New("bad signature")
 	}
-	return answer.Host, nil
+	return id, nil
 }
 
 func (s *server) keepAlive(ctx context.Context, conn *websocket.Conn) {
@@ -360,7 +421,7 @@ type hostStatus struct {
 
 func (s *server) status() []hostStatus {
 	var list []hostStatus
-	for _, host := range s.state.hosts() {
+	for _, host := range s.state.list(hostKind) {
 		status := hostStatus{ID: host.ID, Name: host.Name, Enrolled: host.Enrolled}
 		s.mu.Lock()
 		l := s.links[host.ID]
@@ -383,6 +444,9 @@ func closeReason(err error) string {
 	}
 	if errors.Is(err, context.Canceled) {
 		return "control plane stopping"
+	}
+	if errors.Is(err, io.EOF) {
+		return "closed without a goodbye" // a CLI command that exits as soon as it's done, or a dropped network
 	}
 	return err.Error()
 }

@@ -20,19 +20,45 @@ import (
 	"unicode"
 )
 
-// enrolledHost is a Mac that joined with a token. Its private key never left it; the control plane
-// keeps only the public key, to check the signature each link starts with.
-type enrolledHost struct {
+// kind is what an identity may do: a host serves VMs and reports its slots; a client, a
+// person's CLI or an agent, asks for them. A token makes one kind only, so a login token can't
+// add a Mac to the pool and a join token can't log anyone in.
+type kind string
+
+const (
+	hostKind   kind = "host"
+	clientKind kind = "client"
+)
+
+// tokenPrefix starts every token of a kind, so one pasted in the wrong place is recognizable.
+func (k kind) tokenPrefix() string {
+	if k == clientKind {
+		return "pl1."
+	}
+	return "pj1."
+}
+
+// enrolled is a host or client that joined with a token. Its private key never left it; the
+// control plane keeps only the public key, to check the signature each link starts with.
+type enrolled struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	PublicKey []byte    `json:"publicKey"` // PKIX DER of a P-256 key
 	Enrolled  time.Time `json:"enrolled"`
 }
 
-// pendingToken is a join token not yet used, kept only as the SHA-256 of its secret.
+// pendingToken is a token not yet used, kept only as the SHA-256 of its secret.
 type pendingToken struct {
+	Kind    kind      `json:"kind,omitempty"` // none: a join token from before there were kinds
 	Created time.Time `json:"created"`
 	Expires time.Time `json:"expires"`
+}
+
+func (t pendingToken) kind() kind {
+	if t.Kind == "" {
+		return hostKind
+	}
+	return t.Kind
 }
 
 // state is everything the control plane keeps on disk, in one file only its user can read.
@@ -40,8 +66,9 @@ type state struct {
 	path string
 	mu   sync.Mutex
 	data struct {
-		Hosts  map[string]*enrolledHost `json:"hosts"`
-		Tokens map[string]pendingToken  `json:"tokens"` // by hex SHA-256 of the secret
+		Hosts   map[string]*enrolled    `json:"hosts"`
+		Clients map[string]*enrolled    `json:"clients,omitempty"`
+		Tokens  map[string]pendingToken `json:"tokens"` // by hex SHA-256 of the secret
 	}
 }
 
@@ -58,7 +85,10 @@ func openState(dir string) (*state, error) {
 		}
 	}
 	if s.data.Hosts == nil {
-		s.data.Hosts = map[string]*enrolledHost{}
+		s.data.Hosts = map[string]*enrolled{}
+	}
+	if s.data.Clients == nil {
+		s.data.Clients = map[string]*enrolled{}
 	}
 	if s.data.Tokens == nil {
 		s.data.Tokens = map[string]pendingToken{}
@@ -75,12 +105,17 @@ func (s *state) save() error {
 	return writePrivate(s.path, data)
 }
 
-// joinTokenPrefix starts every join token, so one pasted in the wrong place is recognizable.
-const joinTokenPrefix = "pj1."
+// members is the map of enrolled identities of a kind; the caller holds mu.
+func (s *state) members(k kind) map[string]*enrolled {
+	if k == clientKind {
+		return s.data.Clients
+	}
+	return s.data.Hosts
+}
 
-// newJoinToken makes a single-use token that expires after ttl. The token carries the CA's pin,
-// so a host that has it trusts this control plane and nothing else.
-func (s *state) newJoinToken(pin []byte, ttl time.Duration, now time.Time) (string, time.Time, error) {
+// newToken makes a single-use token of kind k that expires after ttl. The token carries the CA's
+// pin, so whoever uses it trusts this control plane and nothing else.
+func (s *state) newToken(k kind, pin []byte, ttl time.Duration, now time.Time) (string, time.Time, error) {
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return "", time.Time{}, err
@@ -89,41 +124,59 @@ func (s *state) newJoinToken(pin []byte, ttl time.Duration, now time.Time) (stri
 	defer s.mu.Unlock()
 	s.prune(now)
 	expires := now.Add(ttl)
-	s.data.Tokens[tokenKey(secret)] = pendingToken{Created: now, Expires: expires}
+	s.data.Tokens[tokenKey(secret)] = pendingToken{Kind: k, Created: now, Expires: expires}
 	if err := s.save(); err != nil {
 		return "", time.Time{}, err
 	}
 	encode := base64.RawURLEncoding.EncodeToString
-	return joinTokenPrefix + encode(secret) + "." + encode(pin), expires, nil
+	return k.tokenPrefix() + encode(secret) + "." + encode(pin), expires, nil
 }
 
-// parseJoinToken splits a token into its secret and the CA pin it carries.
-func parseJoinToken(token string) (secret, pin []byte, err error) {
-	rest, ok := strings.CutPrefix(strings.TrimSpace(token), joinTokenPrefix)
+// parseToken splits a token into its kind, its secret and the CA pin it carries.
+func parseToken(token string) (k kind, secret, pin []byte, err error) {
+	token = strings.TrimSpace(token)
+	notAToken := errors.New("not a paddock join or login token")
+	var rest string
+	switch {
+	case strings.HasPrefix(token, hostKind.tokenPrefix()):
+		k, rest = hostKind, strings.TrimPrefix(token, hostKind.tokenPrefix())
+	case strings.HasPrefix(token, clientKind.tokenPrefix()):
+		k, rest = clientKind, strings.TrimPrefix(token, clientKind.tokenPrefix())
+	default:
+		return "", nil, nil, notAToken
+	}
 	parts := strings.Split(rest, ".")
-	if !ok || len(parts) != 2 {
-		return nil, nil, errors.New("not a paddock join token")
+	if len(parts) != 2 {
+		return "", nil, nil, notAToken
 	}
 	secret, err = base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil || len(secret) != 32 {
-		return nil, nil, errors.New("not a paddock join token")
+		return "", nil, nil, notAToken
 	}
 	pin, err = base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || len(pin) != sha256.Size {
-		return nil, nil, errors.New("not a paddock join token")
+		return "", nil, nil, notAToken
 	}
-	return secret, pin, nil
+	return k, secret, pin, nil
 }
 
-// useJoinToken spends the token with this secret, if it exists and hasn't expired. A token is
-// found by the hash of its secret, so the stored hashes are no use to whoever reads them.
-func (s *state) useJoinToken(secret []byte, now time.Time) (bool, error) {
+// errWrongKind is a token of the other kind: kept, so a token pasted in the wrong place still
+// works where it belongs.
+var errWrongKind = errors.New("a token of the other kind")
+
+// useToken spends the token with this secret if it exists, hasn't expired and is of kind k. A
+// token is found by the hash of its secret, so the stored hashes are no use to whoever reads them.
+func (s *state) useToken(secret []byte, k kind, now time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prune(now)
 	key := tokenKey(secret)
-	if _, ok := s.data.Tokens[key]; !ok {
+	token, ok := s.data.Tokens[key]
+	if !ok {
 		return false, nil
+	}
+	if token.kind() != k {
+		return false, errWrongKind
 	}
 	delete(s.data.Tokens, key)
 	return true, s.save()
@@ -143,95 +196,96 @@ func tokenKey(secret []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// enroll keeps a new host's public key under a new ID.
-func (s *state) enroll(name string, publicKey []byte, now time.Time) (*enrolledHost, error) {
-	if _, err := parseHostKey(publicKey); err != nil {
+// enroll keeps a new host's or client's public key under a new ID.
+func (s *state) enroll(k kind, name string, publicKey []byte, now time.Time) (*enrolled, error) {
+	if _, err := parseMemberKey(publicKey); err != nil {
 		return nil, err
 	}
-	if err := validateHostName(name); err != nil {
+	if err := validateName(name); err != nil {
 		return nil, err
 	}
 	id := make([]byte, 8)
 	if _, err := rand.Read(id); err != nil {
 		return nil, err
 	}
-	host := &enrolledHost{ID: "host-" + hex.EncodeToString(id), Name: name, PublicKey: publicKey, Enrolled: now}
+	member := &enrolled{ID: string(k) + "-" + hex.EncodeToString(id), Name: name, PublicKey: publicKey, Enrolled: now}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data.Hosts[host.ID] = host
+	s.members(k)[member.ID] = member
 	if err := s.save(); err != nil {
-		delete(s.data.Hosts, host.ID)
+		delete(s.members(k), member.ID)
 		return nil, err
 	}
-	return host, nil
+	return member, nil
 }
 
-// host is the enrolled host with this ID, or nil.
-func (s *state) host(id string) *enrolledHost {
+// member is the enrolled host or client with this ID, or nil.
+func (s *state) member(k kind, id string) *enrolled {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.data.Hosts[id]
+	return s.members(k)[id]
 }
 
-// hosts is every enrolled host.
-func (s *state) hosts() []enrolledHost {
+// list is every enrolled identity of a kind.
+func (s *state) list(k kind) []enrolled {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	list := make([]enrolledHost, 0, len(s.data.Hosts))
-	for _, host := range s.data.Hosts {
-		list = append(list, *host)
+	list := make([]enrolled, 0, len(s.members(k)))
+	for _, member := range s.members(k) {
+		list = append(list, *member)
 	}
 	return list
 }
 
-// remove deletes the host with this ID, or the only one with this name.
-func (s *state) remove(idOrName string) (*enrolledHost, error) {
+// remove deletes the identity of kind k with this ID, or the only one with this name.
+func (s *state) remove(k kind, idOrName string) (*enrolled, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	host := s.data.Hosts[idOrName]
-	if host == nil {
-		for _, candidate := range s.data.Hosts {
+	members := s.members(k)
+	member := members[idOrName]
+	if member == nil {
+		for _, candidate := range members {
 			if candidate.Name == idOrName {
-				if host != nil {
-					return nil, fmt.Errorf("more than one host is named %q: remove it by its ID", idOrName)
+				if member != nil {
+					return nil, fmt.Errorf("more than one %s is named %q: remove it by its ID", k, idOrName)
 				}
-				host = candidate
+				member = candidate
 			}
 		}
 	}
-	if host == nil {
-		return nil, fmt.Errorf("no host has the ID or name %q", idOrName)
+	if member == nil {
+		return nil, fmt.Errorf("no %s has the ID or name %q", k, idOrName)
 	}
-	delete(s.data.Hosts, host.ID)
+	delete(members, member.ID)
 	if err := s.save(); err != nil {
-		s.data.Hosts[host.ID] = host
+		members[member.ID] = member
 		return nil, err
 	}
-	return host, nil
+	return member, nil
 }
 
-// parseHostKey reads a host's public key, which must be P-256: what CryptoKit and the Secure
-// Enclave make.
-func parseHostKey(der []byte) (*ecdsa.PublicKey, error) {
+// parseMemberKey reads a host's or client's public key, which must be P-256: what CryptoKit and
+// the Secure Enclave make.
+func parseMemberKey(der []byte) (*ecdsa.PublicKey, error) {
 	parsed, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {
-		return nil, errors.New("the host's public key isn't a PKIX key")
+		return nil, errors.New("the public key isn't a PKIX key")
 	}
 	key, ok := parsed.(*ecdsa.PublicKey)
 	if !ok || key.Curve != elliptic.P256() {
-		return nil, errors.New("the host's public key isn't P-256")
+		return nil, errors.New("the public key isn't P-256")
 	}
 	return key, nil
 }
 
-// validateHostName accepts a name for people to read: 1 to 64 printable characters.
-func validateHostName(name string) error {
+// validateName accepts a name for people to read: 1 to 64 printable characters.
+func validateName(name string) error {
 	if name == "" || len(name) > 64 {
-		return errors.New("a host's name must be 1 to 64 characters")
+		return errors.New("a name must be 1 to 64 characters")
 	}
 	for _, r := range name {
 		if !unicode.IsPrint(r) {
-			return errors.New("a host's name must be printable characters only")
+			return errors.New("a name must be printable characters only")
 		}
 	}
 	return nil

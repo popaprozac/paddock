@@ -51,7 +51,7 @@ struct Serve: AsyncParsableCommand {
 
     func run() async throws {
         // Joined before any VM boots, so a bad token or URL fails in seconds.
-        var identity: HostIdentity?
+        var identity: ControlIdentity?
         if let control {
             identity = try await ControlEnrollment.identity(control: try ControlEnrollment.url(control), join: join,
                                                             home: .fromEnvironment())
@@ -104,16 +104,16 @@ final class WarmPool {
     private var checkedSource = false  // the first slot to boot checks the source for both
     private var controlClient: ControlClient?
 
-    static func serve(source: String, slots: Int, userspaceNetwork: Bool, control: HostIdentity? = nil) async throws {
+    static func serve(source: String, slots: Int, userspaceNetwork: Bool, control: ControlIdentity? = nil) async throws {
         let pool = WarmPool(source: source, slots: slots, userspaceNetwork: userspaceNetwork, control: control)
         defer { withExtendedLifetime(pool) {} }
         try await pool.run(source: source)
     }
 
     private let userspaceNetwork: Bool
-    private let control: HostIdentity?
+    private let control: ControlIdentity?
 
-    private init(source: String, slots: Int, userspaceNetwork: Bool, control: HostIdentity?) {
+    private init(source: String, slots: Int, userspaceNetwork: Bool, control: ControlIdentity?) {
         self.slots = (1...slots).map { Slot(number: $0, source: source) }
         self.userspaceNetwork = userspaceNetwork
         self.control = control

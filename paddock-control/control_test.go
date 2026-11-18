@@ -10,6 +10,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -81,7 +83,7 @@ func newHostKey(t *testing.T) (*ecdsa.PrivateKey, []byte) {
 
 func (c *testControl) token(t *testing.T) string {
 	t.Helper()
-	token, _, err := c.srv.state.newJoinToken(c.srv.authority.pin(), time.Hour, time.Now())
+	token, _, err := c.srv.state.newToken(hostKind, c.srv.authority.pin(), time.Hour, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,27 +149,27 @@ func TestJoinTokenIsSingleUseAndExpires(t *testing.T) {
 	}
 	pin := bytes.Repeat([]byte{7}, 32)
 	now := time.Now()
-	token, _, err := st.newJoinToken(pin, time.Hour, now)
+	token, _, err := st.newToken(hostKind, pin, time.Hour, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, carried, err := parseJoinToken(token)
+	_, secret, carried, err := parseToken(token)
 	if err != nil || !bytes.Equal(carried, pin) {
 		t.Fatalf("parse: %v, pin %x", err, carried)
 	}
-	if ok, _ := st.useJoinToken(secret, now); !ok {
+	if ok, _ := st.useToken(secret, hostKind, now); !ok {
 		t.Fatal("a new token was refused")
 	}
-	if ok, _ := st.useJoinToken(secret, now); ok {
+	if ok, _ := st.useToken(secret, hostKind, now); ok {
 		t.Fatal("a token worked twice")
 	}
-	late, _, _ := st.newJoinToken(pin, time.Hour, now)
-	lateSecret, _, _ := parseJoinToken(late)
-	if ok, _ := st.useJoinToken(lateSecret, now.Add(time.Hour)); ok {
+	late, _, _ := st.newToken(hostKind, pin, time.Hour, now)
+	_, lateSecret, _, _ := parseToken(late)
+	if ok, _ := st.useToken(lateSecret, hostKind, now.Add(time.Hour)); ok {
 		t.Fatal("an expired token worked")
 	}
 	for _, junk := range []string{"", "pj1.", "pj1.abc.def", "xx1." + strings.Repeat("A", 43) + "." + strings.Repeat("A", 43)} {
-		if _, _, err := parseJoinToken(junk); err == nil {
+		if _, _, _, err := parseToken(junk); err == nil {
 			t.Errorf("parsed %q", junk)
 		}
 	}
@@ -176,11 +178,11 @@ func TestJoinTokenIsSingleUseAndExpires(t *testing.T) {
 func TestStateKeepsOnlyTokenHashesAndIsPrivate(t *testing.T) {
 	dir := t.TempDir()
 	st, _ := openState(dir)
-	token, _, err := st.newJoinToken(bytes.Repeat([]byte{1}, 32), time.Hour, time.Now())
+	token, _, err := st.newToken(hostKind, bytes.Repeat([]byte{1}, 32), time.Hour, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret := strings.Split(strings.TrimPrefix(token, joinTokenPrefix), ".")[0]
+	secret := strings.Split(strings.TrimPrefix(token, hostKind.tokenPrefix()), ".")[0]
 	data, _ := os.ReadFile(filepath.Join(dir, "state.json"))
 	if bytes.Contains(data, []byte(secret)) {
 		t.Fatal("state.json holds the token's secret")
@@ -357,10 +359,10 @@ func TestAdminSocketMakesTokensAndListsHosts(t *testing.T) {
 		t.Fatalf("admin socket mode %v", info.Mode().Perm())
 	}
 	response, err := askAdmin(dir, adminRequest{Op: "join-token"})
-	if err != nil || !strings.HasPrefix(response.Token, joinTokenPrefix) || response.URLs[0] != "https://studio.local:7443" {
+	if err != nil || !strings.HasPrefix(response.Token, hostKind.tokenPrefix()) || response.URLs[0] != "https://studio.local:7443" {
 		t.Fatalf("join-token: %+v, %v", response, err)
 	}
-	if _, pin, _ := parseJoinToken(response.Token); !bytes.Equal(pin, authority.pin()) {
+	if _, _, pin, _ := parseToken(response.Token); !bytes.Equal(pin, authority.pin()) {
 		t.Fatal("the token doesn't carry this CA's pin")
 	}
 	if _, err := askAdmin(dir, adminRequest{Op: "join-token", TTL: 48 * time.Hour}); err == nil {
@@ -387,5 +389,11 @@ func TestURLsShowNamesAndIPv4ButNotEveryIPv6(t *testing.T) {
 	}
 	if got := urlsFor(reach{names: []string{"localhost"}, addresses: []net.IP{net.ParseIP("2601:645::1")}}, "7443"); len(got) != 1 || got[0] != "https://[2601:645::1]:7443" {
 		t.Errorf("IPv6 only: %v", got)
+	}
+}
+
+func TestCloseReasonsReadPlainly(t *testing.T) {
+	if got := closeReason(fmt.Errorf("failed to read frame header: %w", io.EOF)); got != "closed without a goodbye" {
+		t.Errorf("EOF: %q", got)
 	}
 }

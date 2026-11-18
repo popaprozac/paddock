@@ -99,15 +99,20 @@ enum ControlEnrollment {
 
     /// Joins with `token` and saves the identity, replacing any other; or, with no token, the
     /// identity this Mac saved when it joined, for `url`.
-    static func identity(control url: URL, join token: String?, home: PaddockHome) async throws -> HostIdentity {
-        let folder = HostIdentity.folder(in: home)
+    static func identity(control url: URL, join token: String?, home: PaddockHome) async throws -> ControlIdentity {
+        let folder = ControlIdentity.folder(in: home, for: .host)
         if let token {
-            let joined = try await join(url, token: try ControlLink.JoinToken(token))
+            let parsed = try ControlLink.Token(token)
+            guard parsed.kind == .host else {
+                throw PaddockError("that's a login token, for 'paddock login'; a Mac joins with a token from "
+                    + "'paddock-control join-token'")
+            }
+            let joined = try await join(url, token: parsed, as: .host, name: ControlClient.computerName)
             try joined.save(to: folder)
-            print("Joined the control plane at \(url.absoluteString) as \(joined.host)")
+            print("Joined the control plane at \(url.absoluteString) as \(joined.id)")
             return joined
         }
-        guard let saved = try HostIdentity.load(from: folder) else {
+        guard let saved = try ControlIdentity.load(.host, from: folder) else {
             throw PaddockError("this Mac hasn't joined \(url.absoluteString) yet: add --join with a token from "
                 + "'paddock-control join-token' there")
         }
@@ -118,8 +123,9 @@ enum ControlEnrollment {
         return identity
     }
 
-    /// Makes this Mac's key and enrolls its public half, trusting only the CA the token pins.
-    static func join(_ url: URL, token: ControlLink.JoinToken) async throws -> HostIdentity {
+    /// Makes a key and enrolls its public half as `kind`, trusting only the CA the token pins.
+    static func join(_ url: URL, token: ControlLink.Token, as kind: ControlLink.Kind, name: String) async throws
+        -> ControlIdentity {
         let trust = PinnedTrust(.pin(token.pin))
         let session = URLSession(configuration: .ephemeral, delegate: trust, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
@@ -128,7 +134,7 @@ enum ControlEnrollment {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(ControlLink.EnrollRequest(
-            token: token.text, name: ControlClient.computerName, publicKey: key.publicKey.derRepresentation))
+            token: token.text, name: ControlLink.hostName(name), publicKey: key.publicKey.derRepresentation, as: kind))
         let data: Data, response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
@@ -137,10 +143,13 @@ enum ControlEnrollment {
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let decoded = try? JSONDecoder().decode(ControlLink.EnrollResponse.self, from: data)
-        guard status == 200, let host = decoded?.host, let authority = trust.matchedAuthority else {
-            throw PaddockError("the control plane didn't enroll this Mac: \(decoded?.error ?? "HTTP status \(status)")")
+        guard status == 200, let id = kind == .host ? decoded?.host : decoded?.client,
+              let authority = trust.matchedAuthority
+        else {
+            throw PaddockError("the control plane didn't enroll this \(kind == .host ? "Mac" : "client"): "
+                + (decoded?.error ?? "HTTP status \(status)"))
         }
-        return HostIdentity(url: url, host: host, authority: SecCertificateCopyData(authority) as Data, key: key)
+        return ControlIdentity(kind: kind, url: url, id: id, authority: SecCertificateCopyData(authority) as Data, key: key)
     }
 }
 
@@ -149,7 +158,7 @@ enum ControlEnrollment {
 /// serving: VMs go on being handed out here whether the link is up or not.
 @MainActor
 final class ControlClient {
-    private let identity: HostIdentity
+    private let identity: ControlIdentity
     private let image: String
     private let slots: @MainActor () -> [ControlLink.SlotReport]
     private let diskFree: @MainActor () -> UInt64?
@@ -159,7 +168,7 @@ final class ControlClient {
     /// The removed Mac's link is closed by the control plane, which then refuses it.
     private struct Removed: Error {}
 
-    init(identity: HostIdentity, image: String, slots: @escaping @MainActor () -> [ControlLink.SlotReport],
+    init(identity: ControlIdentity, image: String, slots: @escaping @MainActor () -> [ControlLink.SlotReport],
          diskFree: @escaping @MainActor () -> UInt64?) {
         self.identity = identity
         self.image = image
@@ -190,7 +199,7 @@ final class ControlClient {
             let started = ContinuousClock.now
             do {
                 try await link {
-                    print("Linked to the control plane at \(self.identity.url.absoluteString) as \(self.identity.host)")
+                    print("Linked to the control plane at \(self.identity.url.absoluteString) as \(self.identity.id)")
                     down = false
                 }
             } catch is Removed {
@@ -269,7 +278,7 @@ final class ControlClient {
         guard challenge.type == "challenge", let nonce = challenge.nonce, nonce.count == 32 else {
             throw PaddockError("the control plane didn't start with a challenge")
         }
-        try await send(ControlLink.Message(type: "auth", host: identity.host,
+        try await send(ControlLink.Message(type: "auth", host: identity.id,
                                            signature: ControlLink.answer(nonce, with: identity.key)), on: socket)
         let welcome = try await receive(socket)
         guard welcome.type == "welcome" else { throw PaddockError("the control plane didn't accept the link") }
