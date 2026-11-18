@@ -34,6 +34,14 @@ struct Install: AsyncParsableCommand {
     }
 
     func run() async throws {
+        try await Self.install(name: name, ipsw: ipsw, cpus: cpus, memory: memory, diskSize: diskSize)
+        print("Next: paddock run \(name)   (finish Setup Assistant once; this becomes the golden image)")
+        print("  or, with macOS 27: paddock run \(name) --provision <account>   (creates the account, no Setup Assistant)")
+    }
+
+    /// Installs macOS into a new VM named `name`, from `ipsw` or the latest this Mac supports,
+    /// downloaded into the cache if it isn't there; memory and disk in GB. `build` uses it too.
+    static func install(name: String, ipsw: String?, cpus: Int, memory: UInt64, diskSize: UInt64) async throws {
         let home = PaddockHome.fromEnvironment()
         let bundle = try home.bundle(named: name)
         guard !FileManager.default.fileExists(atPath: bundle.url.path) else {
@@ -50,7 +58,7 @@ struct Install: AsyncParsableCommand {
         }
         defer { interrupt.cancel() }
 
-        let imageURL = try await resolveRestoreImage(home: home)
+        let imageURL = try await resolveRestoreImage(ipsw, home: home)
         let image = try await RestoreImages.load(from: imageURL)
         let sizing = VMSizing.resolve(cpuCount: cpus, memorySize: memory << 30, limits: .forImage(image))
         let request = MacOSInstall.Request(
@@ -67,11 +75,9 @@ struct Install: AsyncParsableCommand {
 
         let minutes = Double((ContinuousClock.now - started).components.seconds) / 60
         print("Installed '\(name)' in \(String(format: "%.1f", minutes)) min at \(bundle.url.path)")
-        print("Next: paddock run \(name)   (finish Setup Assistant once; this becomes the golden image)")
-        print("  or, with macOS 27: paddock run \(name) --provision <account>   (creates the account, no Setup Assistant)")
     }
 
-    private func resolveRestoreImage(home: PaddockHome) async throws -> URL {
+    private static func resolveRestoreImage(_ ipsw: String?, home: PaddockHome) async throws -> URL {
         if let ipsw {
             return URL(fileURLWithPath: (ipsw as NSString).expandingTildeInPath)
         }

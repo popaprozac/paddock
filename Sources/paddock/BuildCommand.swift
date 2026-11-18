@@ -61,6 +61,14 @@ struct Build: AsyncParsableCommand {
         let provisioning = try Provisioning.options(account: account, fullName: fullName ?? account, password: password)
         try await GoldenBuild.run(name: name, account: account, password: password, provisioning: provisioning,
                                   guest: folder, acceptLicense: acceptMacOSLicense)
+        print("""
+            Built '\(name)'. Boot it once to finish:
+              paddock run \(name)
+            then \(acceptMacOSLicense ? "" : "click through the license agreement and the welcome screen, turn on automatic login for '\(account)' in System Settings > Users & Groups, ")allow \
+            paddock-session in System Settings > Privacy & Security > Accessibility when macOS asks, add \
+            /usr/local/libexec/paddock-guestd under Full Disk Access, and shut down from the Apple menu.
+            Or leave the two grants to 'paddock grant \(name)', which writes them from macOS Recovery with SIP on.
+            """)
     }
 }
 
@@ -99,14 +107,6 @@ enum GoldenBuild {
             await vm.stop()
             throw error
         }
-        print("""
-            Built '\(name)'. Boot it once to finish:
-              paddock run \(name)
-            then \(acceptLicense ? "" : "click through the license agreement and the welcome screen, turn on automatic login for '\(account)' in System Settings > Users & Groups, ")allow \
-            paddock-session in System Settings > Privacy & Security > Accessibility when macOS asks, add \
-            /usr/local/libexec/paddock-guestd under Full Disk Access, and shut down from the Apple menu.
-            Or leave the two grants to 'paddock grant \(name)', which writes them from macOS Recovery with SIP on.
-            """)
     }
 
     /// Runs as root through sudo, from the shared guest folder: installs the guest agent and turns
