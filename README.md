@@ -334,6 +334,10 @@ between a workload and the host, and every VM is wiped when it is released.
   same row into the image's privacy database,
   `/Library/Application Support/com.apple.TCC/TCC.db`, that System Settings writes when you
   allow it. Then it halts the VM.
+- It also removes the Full Disk Access that turning on Remote Login gives sshd ("Allow full disk
+  access for remote users"). `build` turns Remote Login on for its first boot and off for good;
+  without this, the grant would stay in the image, and turning Remote Login back on would bring
+  back full disk access for whoever logs in remotely.
 - SIP stays on in the image and every clone. Scripts that turn SIP off to write grants leave it
   off in every VM they make, where a workload could then grant itself more, such as Screen
   Recording.

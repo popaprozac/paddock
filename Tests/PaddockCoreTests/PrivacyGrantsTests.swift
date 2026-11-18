@@ -18,6 +18,10 @@ import Testing
         #expect(script.contains("values ('kTCCServiceSystemPolicyAllFiles', '/usr/local/libexec/paddock-guestd', 1, 2, 4, 1, readfile('/tmp/paddock-1.csreq'), 0, 0);"))
     }
 
+    @Test func removesRemoteLoginsFullDiskAccess() {
+        #expect(script.contains(#"TCC.db" "delete from access where client = '/usr/libexec/sshd-keygen-wrapper'; insert or replace"#))
+    }
+
     @Test func canBeTypedOnTheVirtualKeyboard() throws {
         _ = try KeyInput.strokes(typing: script)
     }

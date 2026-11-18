@@ -10,7 +10,9 @@ struct GrantCommand: AsyncParsableCommand {
             Boots the VM, which must be shut down, in macOS Recovery without a window, reads its \
             screen to open Terminal, and types a command that writes the two permissions into the \
             image's privacy database (TCC.db), each tied to the helper's code signature, as \
-            System Settings does when you allow them. Then the VM shuts down. System Integrity \
+            System Settings does when you allow them. It also removes the Full Disk Access that \
+            turning on Remote Login gives sshd, which 'paddock build' turns off. Then the VM shuts \
+            down. System Integrity \
             Protection stays on throughout, so nothing running in the image or its clones can \
             change that database. Apple doesn't document its format, and a macOS release could \
             change it; allowing the two in System Settings, or with an MDM profile, is the \
