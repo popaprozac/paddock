@@ -22,6 +22,18 @@ import Testing
         withExtendedLifetime(server) {}
     }
 
+    @Test func closesAConnectionItRefusesUnread() throws {
+        let path = socketPath()
+        let handled = OSAllocatedUnfairLock(initialState: false)
+        let server = try LineServer(path: path, queue: queue, accepts: { _ in false }) { _, responder in
+            handled.withLock { $0 = true }
+            responder.finish("answered")
+        }
+        #expect(throws: PaddockError.self) { try LineClient.send("hello", to: path) }
+        #expect(!handled.withLock { $0 })
+        withExtendedLifetime(server) {}
+    }
+
     @Test func canAnswerLater() throws {
         let path = socketPath()
         let server = try LineServer(path: path, queue: queue) { line, responder in

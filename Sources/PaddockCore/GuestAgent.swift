@@ -7,7 +7,7 @@ import SystemConfiguration
 /// The agent listens only on vsock, so nothing on the VM network can reach it. Each
 /// connection carries one request line of JSON and gets one or more answer lines back:
 ///
-///     {"op":"health"}                       ->  {"version":"0.5.0"}
+///     {"op":"health"}                       ->  {"version":"0.5.1"}
 ///     {"op":"run","command":"ls"}           ->  {"output":"..."} per line, then {"exit":0}
 ///     {"op":"put","name":"a","size":N} + N bytes  ->  {"exit":0}
 ///     {"op":"get","name":"a"}               ->  {"chunk":n} + n bytes, repeated, then {"exit":0}
@@ -20,7 +20,7 @@ import SystemConfiguration
 public enum GuestAgent {
     /// The vsock port the agent listens on inside the guest.
     public static let port: UInt32 = 52525
-    public static let version = "0.5.0"
+    public static let version = "0.5.1"
 
     /// Output lines longer than this are split, so every answer line stays well under the
     /// 64 KB a reader accepts even after JSON escaping.
@@ -289,6 +289,27 @@ public enum GuestAgent {
             throw PaddockError("the guest refused: \(error.prefix(200))")
         }
         return response
+    }
+
+    /// For LineServer: accepts a vsock connection only from the host, and logs any other as
+    /// refused. A process in the guest can reach the guest's own vsock listeners through the
+    /// guest's own CID, as vsock loopback; the guest's kernel sets the peer's CID, so only the
+    /// host's connections come from VMADDR_CID_HOST.
+    public static func onlyFromHost(_ name: String) -> @Sendable (sockaddr_storage) -> Bool {
+        { peer in
+            let cid = vsockCID(of: peer)
+            guard cid != UInt32(VMADDR_CID_HOST) else { return true }
+            print("\(name): refused a connection from \(cid.map { "vsock CID \($0)" } ?? "a non-vsock address")")
+            return false
+        }
+    }
+
+    /// The CID of a vsock peer address, or nil for another kind of address.
+    static func vsockCID(of peer: sockaddr_storage) -> UInt32? {
+        guard peer.ss_family == sa_family_t(AF_VSOCK) else { return nil }
+        return withUnsafePointer(to: peer) {
+            $0.withMemoryRebound(to: sockaddr_vm.self, capacity: 1) { $0.pointee.svm_cid }
+        }
     }
 
     /// Opens a vsock socket listening on `port` for the host. Works only inside a VM: a macOS

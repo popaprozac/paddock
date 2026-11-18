@@ -14,7 +14,7 @@ do {
         print("paddock-guestd: \(line)")
     }
     let fd = try GuestAgent.listen(port: GuestAgent.port)
-    let server = LineServer(listening: fd, queue: .main) { line, responder in
+    let server = LineServer(listening: fd, queue: .main, accepts: GuestAgent.onlyFromHost("paddock-guestd")) { line, responder in
         GuestAgent.handle(line, runAs: user, files: files, responder: responder)
     }
     print("paddock-guestd \(GuestAgent.version) listening on vsock port \(GuestAgent.port), running commands as '\(user)'")

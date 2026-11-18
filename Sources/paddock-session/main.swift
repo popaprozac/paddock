@@ -21,7 +21,7 @@ print("paddock-session \(SessionHelper.version): Accessibility \(trusted ? "allo
 
 do {
     let fd = try GuestAgent.listen(port: SessionHelper.port)
-    let server = LineServer(listening: fd, queue: .main) { line, responder in
+    let server = LineServer(listening: fd, queue: .main, accepts: GuestAgent.onlyFromHost("paddock-session")) { line, responder in
         let request = try? JSONDecoder().decode(GuestAgent.Request.self, from: Data(line.utf8))
         switch request?.op {
         case "health":
