@@ -150,7 +150,7 @@ enum ImageBuild {
         }
         if image.grants == .managed {
             left.append("allow paddock-session under Accessibility and /usr/local/libexec/paddock-guestd under Full Disk "
-                + "Access, in System Settings > Privacy & Security or with an MDM profile, or run 'paddock grant \(plan.name)'")
+                + "Access in System Settings > Privacy & Security, booted with 'paddock run \(plan.name)', or run 'paddock grant \(plan.name)'")
         }
         if left.isEmpty {
             print("  Ready to serve: paddock serve \(plan.name)")

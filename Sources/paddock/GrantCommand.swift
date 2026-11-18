@@ -15,7 +15,7 @@ struct GrantCommand: AsyncParsableCommand {
             down. System Integrity \
             Protection stays on throughout, so nothing running in the image or its clones can \
             change that database. Apple doesn't document its format, and a macOS release could \
-            change it; allowing the two in System Settings, or with an MDM profile, is the \
+            change it; allowing the two once in System Settings, in the golden image, is the \
             supported way. Needs the guest agent installed, as 'paddock build' does, and the \
             image's volumes under their default names.
             """)

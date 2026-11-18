@@ -109,8 +109,10 @@ paddock bench golden --runs 3 # clone, boot headless, time each step, delete the
 With macOS 27 on this Mac and in the VM, `paddock build` makes a golden image from an image file,
 with no one at the keyboard. `paddock init golden.yaml` writes a commented one to start from, with
 `--template minimal` (the default: the latest macOS, for your own agents and for you), `ci` (a
-pinned macOS plus the tools CI jobs need) or `managed` (for a Mac fleet under MDM, with the grants
-from an MDM profile). None accepts Apple's license for you: its license line ships commented out.
+pinned macOS plus the tools CI jobs need) or `managed` (a pinned macOS, with a person making the
+privacy grants in the image, so paddock never writes the privacy database). Templates are starting
+points: any file can take any setting. None accepts Apple's license for you: its license line ships
+commented out.
 A file with every key looks like this:
 
 ```yaml
@@ -158,8 +160,8 @@ screenshot of it. It is never a default.
 
 With `grants: recovery`, `paddock grant` then writes the Accessibility and Full Disk Access grants
 from macOS Recovery (see [What a golden image allows](#what-a-golden-image-allows)). With
-`managed`, the default, they are yours to make, in System Settings or with an MDM profile, as in
-step 3 below.
+`managed`, the default, they are yours to make, once in System Settings in `paddock run`, as in
+step 3 below; every clone keeps them.
 
 Last, `build` boots the image once more and runs each step through the guest agent, in order: in
 a login `zsh` with `set -e -o pipefail`, as the account, or as root with `as: root`, with the
@@ -384,9 +386,24 @@ between a workload and the host, and every VM is wiped when it is released.
   Recording.
 - Apple doesn't document that database's format, and a macOS release could change it. paddock
   writes it as macOS 27 does. If a release changes it, `grant` fails, or `serve` warns that a
-  grant is missing. System Settings, or an MDM profile (PPPC), is the supported way.
+  grant is missing. Allowing the two once in System Settings, in the golden image, is the
+  supported way.
 - Recovery asks for no password, because the VM's disk isn't encrypted with FileVault. Anyone who
   can read and write the image's files on this Mac can change the image anyway.
+
+### MDM and monitoring agents
+
+MDM manages the Macs that run paddock, not its VMs. Enrollment belongs to one device: a golden
+image enrolled and then cloned would give every clone the same MDM identity, and unenrolling it
+first removes the profiles it installed. So a golden image gets its grants from a person or from
+`paddock grant`, not from an MDM privacy profile, and skips Setup Assistant through provisioning
+or `build`, not through Automated Device Enrollment.
+
+A monitoring agent that enrolls with its own server, such as osquery or fleetd, does work in
+clones, and reports from each VM like any other host. Install it with a build step, and remove the
+identity it saves when it enrolls before the image is finished, so that each clone enrolls as a
+host of its own rather than all of them as one. Every hand-out is a new, short-lived host, so have
+the server expire hosts that stop reporting.
 
 ## The userspace network
 

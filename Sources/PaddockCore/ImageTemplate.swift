@@ -1,13 +1,13 @@
-/// Starter image files for `paddock init`, named for what each does differently. Each is
-/// commented for the person editing it, and none accepts Apple's license for them: that line
-/// ships commented out.
+/// Starter image files for `paddock init`, named for what each does differently. They are
+/// starting points, not kinds of image: any file can take any setting. Each is commented for the
+/// person editing it, and none accepts Apple's license for them: that line ships commented out.
 public enum ImageTemplate: String, CaseIterable, Sendable {
     /// The latest macOS with nothing left to click: for your own agents and for you.
     case minimal
     /// A pinned macOS plus the tools CI jobs need.
     case ci
-    /// For a Mac fleet under MDM: a pinned macOS, grants from an MDM profile, and paddock never
-    /// writing the privacy database.
+    /// A pinned macOS, with a person accepting the license and making the privacy grants in the
+    /// image, so paddock never writes the privacy database: for teams whose policy asks for that.
     case managed
 
     public var text: String {
@@ -59,9 +59,11 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             """
         case .managed:
             """
-            # A golden image for a Mac fleet under MDM: a pinned macOS, the two privacy grants from
-            # your MDM profile, so paddock never writes the privacy database, and the license
-            # accepted by a person or by policy. Build it with: paddock build <this file>
+            # A golden image for teams whose policy has a person make the privacy grants: a pinned
+            # macOS, the two grants allowed once by hand in the image, so paddock never writes the
+            # privacy database, and the license accepted by a person or by policy. A starting
+            # point: change any setting, such as grants: recovery. Build it with:
+            #   paddock build <this file>
             # The VM is named after this file; set name: to choose another.
 
             from:
@@ -76,11 +78,14 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             \(Self.license)
             # Otherwise a person accepts it once, with: paddock run <name>
 
-            # paddock-session needs Accessibility and paddock-guestd Full Disk Access: grant them
-            # with a privacy (PPPC) profile from your MDM, or once by hand in the image.
+            # paddock-session needs Accessibility and paddock-guestd Full Disk Access: a person
+            # allows them once in System Settings, with paddock run <name>, and every clone keeps
+            # them. MDM profiles don't reach clones, since enrollment doesn't survive cloning.
             grants: managed
 
             \(Self.steps)
+            # A monitoring agent that reports to its own server, such as osquery or fleetd, goes
+            # in as a step; see the README on agents in cloned images.
 
             """
         }

@@ -27,7 +27,7 @@ public struct ImageFile: Equatable, Sendable {
     }
 
     /// How the helpers' privacy grants get into the image: `managed` leaves them to a person or
-    /// an MDM profile, `recovery` has `paddock grant` write them.
+    /// clicking them once in the image, `recovery` has `paddock grant` write them.
     public enum Grants: String, CaseIterable, Sendable {
         case managed, recovery
     }
