@@ -53,14 +53,18 @@ back:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.5.1"}` |
+| `{"op":"health"}` | `{"version":"0.6.0"}` |
 | `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
+| `{"op":"run","command":"...","as":"root"}` | The same, with the command run as root |
 | `{"op":"put","name":"...","size":N}` followed by N bytes | `{"exit":0}` once the file is stored |
 | `{"op":"get","name":"..."}` | `{"chunk":n}` followed by n bytes, repeated, then `{"exit":0}` |
 | `{"op":"state"}` | `{"output":"network"}` once en0 has an IPv4 address and the guest an IPv4 DNS server, `{"output":"session-helper"}` if `paddock-session` is installed, then `{"exit":0}` |
 
 `run` uses a login shell (`zsh -l`) as the account with uid 501, the one created in Setup
-Assistant, in its home folder, with stdin closed. Output lines over 8 KB are split. `put` and
+Assistant, in its home folder, with stdin closed. With `"as":"root"` it runs as root instead,
+also in a login shell, which paddock asks for only while it builds an image; since the agent
+answers only the host, nothing in the guest can ask. An agent before 0.6.0 ignores `as` and runs
+the command as the account. Output lines over 8 KB are split. `put` and
 `get` work on files in that account's `~/paddock` folder, named by one plain path component, up
 to 4 GiB; the account itself reads and writes them, never the root agent, and stored files are
 readable only by it. The host refuses a `get` larger than it asked for and deletes a partial file.
@@ -102,35 +106,67 @@ paddock run golden            # finish Setup Assistant in the window
 paddock bench golden --runs 3 # clone, boot headless, time each step, delete the clone
 ```
 
-With macOS 27 on this Mac and in the VM, `paddock build` does most of the setup below with no
-one at the keyboard:
+With macOS 27 on this Mac and in the VM, `paddock build` makes a golden image from an image file,
+with no one at the keyboard. `paddock init golden.yaml` writes a commented one to start from, with
+`--template minimal` (the default: the latest macOS, for your own agents and for you), `ci` (a
+pinned macOS plus the tools CI jobs need) or `managed` (for a Mac fleet under MDM, with the grants
+from an MDM profile). None accepts Apple's license for you: its license line ships commented out.
+A file with every key looks like this:
 
-```bash
-paddock install golden
-paddock build golden --account bench   # asks for the account's password
-paddock run golden                     # once: the license, a welcome screen and two grants
+```yaml
+# golden.yaml
+from: { macos: latest }              # or { ipsw: path/to/restore.ipsw }, which pins the version
+vm: { cpus: 4, memory: 8, disk: 80 } # in GB; leave any out for install's defaults
+account: { name: bench }             # full-name is optional
+license: accept                      # optional: see below
+grants: recovery                     # or managed, the default
+share: installers                    # optional: a host folder, read-only in the guest
+steps:
+  - name: Install a package from the share
+    as: root
+    run: installer -pkg "/Volumes/My Shared Files/tool.pkg" -target /
+  - name: Hide the Dock
+    run: defaults write com.apple.dock autohide -bool true
 ```
 
-`build` boots the new VM once, and macOS creates the account, with automatic login and Remote
-Login on, in place of Setup Assistant. paddock logs in over SSH once with the password, which it
-keeps only in memory and hands to ssh through a socket only you can reach. As root, it installs
-the guest agent from the `guest` folder `scripts/build.sh` stages, turns off sleep, display sleep
-and the screen saver, turns Remote Login off for good and shuts the guest down. From then on
+```bash
+paddock build golden.yaml        # asks for the account's password
+paddock bench golden --runs 3
+```
+
+`build` checks the whole file before it starts: every key, so a misspelled one fails with its path
+instead of being ignored, the paths it names, the account's name, and that no VM has the image's
+name yet. The VM is named after the file unless `name` says otherwise, and paths are relative to
+the file's folder. Only then does it ask for the account's password.
+
+It installs macOS into a new VM and boots it once, and macOS creates the account, with automatic
+login and Remote Login on, in place of Setup Assistant. paddock logs in over SSH once with the
+password, which it keeps only in memory and hands to ssh through a socket only you can reach. As
+root, it installs the guest agent from the `guest` folder `scripts/build.sh` stages, turns off
+sleep, display sleep and the screen saver, and turns Remote Login off for good. From then on
 nothing reaches the guest over the network.
 
-macOS still shows its license agreement and a welcome screen at the next boot. Accepting the
-license finishes Setup Assistant, which turns automatic login off, so turn it on again in System
-Settings > Users & Groups in that boot. The Accessibility and Full Disk Access grants in step 3
-below are yours to make too, or `paddock grant golden` writes them once the VM is shut down (see
-[What a golden image allows](#what-a-golden-image-allows)).
+Without `license: accept`, macOS still shows its license agreement and a welcome screen at the
+next boot. Accepting the license then finishes Setup Assistant, which turns automatic login off,
+so turn it on again in System Settings > Users & Groups in that boot. With `license: accept`, you
+accept Apple's [macOS Software License Agreement](https://www.apple.com/legal/sla/) for the image
+when you build it. The build reads the guest's screen with Apple's text recognition and clicks
+Agree on the license, Agree on its confirmation and Get Started on the welcome screen, so Setup
+Assistant finishes on the first boot and macOS turns on automatic login itself. It clicks nothing
+else: any other page, such as one asking to share analytics, stops the build and saves a
+screenshot of it. It is never a default.
 
-With `--accept-macos-license`, you accept Apple's
-[macOS Software License Agreement](https://www.apple.com/legal/sla/) for the image when you build
-it. The build reads the guest's screen with Apple's text recognition and clicks Agree on the
-license, Agree on its confirmation and Get Started on the welcome screen, so Setup Assistant
-finishes on the first boot and macOS turns on automatic login itself. Only the two grants are
-left. It clicks nothing else: any other page, such as one asking to share analytics, stops the
-build and saves a screenshot of it. The flag is never a default.
+With `grants: recovery`, `paddock grant` then writes the Accessibility and Full Disk Access grants
+from macOS Recovery (see [What a golden image allows](#what-a-golden-image-allows)). With
+`managed`, the default, they are yours to make, in System Settings or with an MDM profile, as in
+step 3 below.
+
+Last, `build` boots the image once more and runs each step through the guest agent, in order: in
+a login `zsh` with `set -e -o pipefail`, as the account, or as root with `as: root`, with the
+shared folder at `/Volumes/My Shared Files`. Each step's output is shown as it runs, and the first
+step that fails stops the build. Then it checks the image as `serve` does, has the guest shut
+itself down, and says what is left for a person, if anything. A build that stops leaves the VM in
+place to look at; delete it to build again.
 
 The app paddock runs in, such as Terminal, needs Local Network access in System Settings >
 Privacy & Security to reach the guest over SSH.
@@ -185,7 +221,8 @@ To set up a guest by hand instead, while Setup Assistant is open in `paddock run
 | --- | --- |
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`; `--recovery` starts it in macOS Recovery. |
-| `paddock build <name> --account <account> [--full-name name] [--guest folder] [--accept-macos-license]` | Sets up a VM that `install` just made, on its first boot, with no one at the keyboard: creates the account, installs the guest agent and turns off what would stop unattended VMs (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27. |
+| `paddock init <file> [--template minimal\|ci\|managed]` | Writes a commented starter image file for `build`. |
+| `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](#make-a-golden-image-and-benchmark-it)). Needs macOS 27. |
 | `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](#what-a-golden-image-allows)). |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |

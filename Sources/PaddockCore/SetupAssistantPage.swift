@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// What `paddock build --accept-macos-license` clicks on a Setup Assistant page, from the text
+/// What `paddock build` clicks on a Setup Assistant page with `license: accept`, from the text
 /// recognized on the guest's screen. Only the buttons that page's owner has opted in to: the
 /// license agreement's Agree, which a confirmation sheet asks for twice, and the welcome screen's
 /// Get Started. Any other page stops the build, rather than take a default the owner didn't

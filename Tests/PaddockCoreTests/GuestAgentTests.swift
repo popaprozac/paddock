@@ -77,10 +77,10 @@ import Testing
     }
 
     /// Sends `request` through `handle` over a real socket and returns the answer lines.
-    func answers(to request: GuestAgent.Request) throws -> [GuestAgent.Response] {
+    func answers(to request: GuestAgent.Request, runAs user: String? = nil) throws -> [GuestAgent.Response] {
         let path = "/tmp/paddock-test-\(UUID().uuidString.prefix(8)).sock"
         let server = try LineServer(path: path, queue: DispatchQueue(label: "guest-agent-tests")) { line, responder in
-            GuestAgent.handle(line, runAs: nil, files: NSTemporaryDirectory(), responder: responder)
+            GuestAgent.handle(line, runAs: user, files: NSTemporaryDirectory(), responder: responder)
         }
         defer { server.stop() }
         let line = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
@@ -112,6 +112,24 @@ import Testing
             GuestAgent.Response(output: "two"),
             GuestAgent.Response(exit: 3),
         ])
+    }
+
+    /// Runs as the workload account unless the request asks for root, the agent's own user. A
+    /// workload account that doesn't exist shows which one a run used, without needing root.
+    @Test func runsAsRootOnlyWhenAsked() throws {
+        let workload = "paddock-no-such-user"
+        let plain = try answers(to: .init(op: "run", command: "id -un"), runAs: workload)
+        #expect(plain.last?.error?.contains("no user '\(workload)'") == true)
+        let root = try answers(to: .init(op: "run", command: "id -un", user: "root"), runAs: workload)
+        #expect(root.compactMap(\.output).last == NSUserName())
+        #expect(root.last == GuestAgent.Response(exit: 0))
+        let other = try answers(to: .init(op: "run", command: "id -un", user: "admin"), runAs: workload)
+        #expect(other == [GuestAgent.Response(error: "run as 'root' or as the workload account, not 'admin'")])
+    }
+
+    @Test func asksForRootOnlyWhenTold() {
+        #expect(GuestAgent.Request(op: "run", command: "id", user: "root").line.contains(#""as":"root""#))
+        #expect(!GuestAgent.Request(op: "run", command: "id").line.contains(#""as""#))
     }
 
     @Test func runSplitsLongLines() throws {

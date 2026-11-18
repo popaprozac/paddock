@@ -1,4 +1,5 @@
 import Foundation
+import os
 import PaddockCore
 import Virtualization
 
@@ -277,8 +278,8 @@ final class HeadlessVM: NSObject {
 
     /// Runs `command` in the guest through its agent over vsock, passing each output line to
     /// `output` as it arrives, and returns the command's exit status.
-    func runInGuest(_ command: String, output: @escaping @Sendable (String) -> Void) async throws -> Int32 {
-        try await withAgent { try GuestAgent.askToRun(command, over: $0, output: output) }
+    func runInGuest(_ command: String, asRoot: Bool = false, output: @escaping @Sendable (String) -> Void) async throws -> Int32 {
+        try await withAgent { try GuestAgent.askToRun(command, asRoot: asRoot, over: $0, output: output) }
     }
 
     /// Copies the file at `url` into the guest agent's files folder as `name`.
@@ -297,6 +298,26 @@ final class HeadlessVM: NSObject {
         try await withAgent(port: SessionHelper.port, name: "paddock-session") {
             try SessionHelper.askForTree(over: $0, output: output)
         }
+    }
+
+    /// What in the image this VM booted from breaks VMs that nobody watches: SourceCheck's
+    /// settings and, with `sessionHelper`, whether paddock-session has Accessibility. Nil if the
+    /// check couldn't run. serve warns with it; build reports it.
+    func imageProblems(sessionHelper: Bool) async -> [String]? {
+        let output = OSAllocatedUnfairLock(initialState: [String]())
+        guard (try? await runInGuest(SourceCheck.command) { line in output.withLock { $0.append(line) } }) == 0 else {
+            return nil
+        }
+        var problems = SourceCheck.problems(in: output.withLock { $0 })
+        if sessionHelper {
+            do {
+                try await accessibilityTree { _ in }
+            } catch let error as PaddockError where error.message.contains("Accessibility") {
+                problems.append("paddock-session lacks Accessibility, so axtree fails: allow it in System Settings > "
+                    + "Privacy & Security > Accessibility")
+            } catch {}
+        }
+        return problems
     }
 
     /// Connects to the agent, or with `port` to another listener in the guest, and runs

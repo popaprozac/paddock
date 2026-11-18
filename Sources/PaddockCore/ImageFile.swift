@@ -1,0 +1,242 @@
+import Foundation
+
+/// An image file: what `paddock build <file>` makes a golden image from, written in YAML. It
+/// decodes with any Decoder, so PaddockCore needs no YAML parser. Every mapping's keys are
+/// checked, so a misspelled key fails with its path instead of being ignored; `describe` turns a
+/// failure into one line.
+///
+/// ```yaml
+/// from: { macos: latest }      # or { ipsw: path/to/restore.ipsw }, which pins the version
+/// vm: { cpus: 4, memory: 8, disk: 80 }
+/// account: { name: bench, full-name: Bench }
+/// license: accept              # leave out and a person accepts it
+/// grants: recovery             # or managed, the default
+/// share: installers            # a host folder, read-only in the guest
+/// steps:
+///   - name: Homebrew
+///     as: user                 # or root
+///     run: |
+///       ...
+/// ```
+public struct ImageFile: Equatable, Sendable {
+    public enum Source: Equatable, Sendable {
+        /// The latest macOS this Mac supports.
+        case latest
+        /// A restore image file, which pins the version.
+        case ipsw(String)
+    }
+
+    /// How the helpers' privacy grants get into the image: `managed` leaves them to a person or
+    /// an MDM profile, `recovery` has `paddock grant` write them.
+    public enum Grants: String, CaseIterable, Sendable {
+        case managed, recovery
+    }
+
+    public enum User: String, CaseIterable, Sendable {
+        case user, root
+    }
+
+    /// Sizes for the new VM; nil takes `paddock install`'s default.
+    public struct VM: Equatable, Sendable {
+        public var cpus: Int?
+        /// In GB.
+        public var memory: Int?
+        /// In GB.
+        public var disk: Int?
+
+        public init(cpus: Int? = nil, memory: Int? = nil, disk: Int? = nil) {
+            self.cpus = cpus
+            self.memory = memory
+            self.disk = disk
+        }
+    }
+
+    /// The account the build creates. Its name is checked where the account is made.
+    public struct Account: Equatable, Sendable {
+        public var name: String
+        public var fullName: String?
+    }
+
+    /// A shell script the build runs in the guest after its first boot, as `user`.
+    public struct Step: Equatable, Sendable {
+        public var name: String
+        public var user: User
+        public var run: String
+    }
+
+    /// The VM's name; nil means the file's name.
+    public var name: String?
+    public var from: Source
+    public var vm: VM
+    public var account: Account
+    public var acceptsLicense: Bool
+    public var grants: Grants
+    /// As written: relative to the image file's folder unless it starts with "/".
+    public var share: String?
+    public var steps: [Step]
+
+    /// One line for a file that doesn't decode: where, then what, as in
+    /// "steps[1].as: expected user or root, not admin".
+    public static func describe(_ error: any Error) -> String {
+        guard let error = error as? DecodingError else { return String(describing: error) }
+        switch error {
+        case let .keyNotFound(key, context):
+            return "\(path(context.codingPath + [key])): missing"
+        case let .valueNotFound(_, context):
+            return "\(path(context.codingPath)): needs a value"
+        case let .typeMismatch(type, context):
+            let expected = switch type {
+            case is String.Type: "text"
+            case is Int.Type: "a whole number"
+            case is [Any].Type: "a list"
+            default: "keys and values"
+            }
+            return "\(path(context.codingPath)): expected \(expected)"
+        case let .dataCorrupted(context):
+            return "\(path(context.codingPath)): \(context.debugDescription)"
+        @unknown default:
+            return String(describing: error)
+        }
+    }
+
+    private static func path(_ keys: [any CodingKey]) -> String {
+        guard !keys.isEmpty else { return "the file" }
+        return keys.enumerated().map { index, key in
+            if let item = key.intValue { return "[\(item)]" }
+            return index == 0 ? key.stringValue : ".\(key.stringValue)"
+        }.joined()
+    }
+}
+
+extension ImageFile: Decodable {
+    private enum Keys: String, CodingKey, CaseIterable {
+        case name, from, vm, account, license, grants, share, steps
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let keys = try decoder.strictContainer(keyedBy: Keys.self)
+        name = try keys.decodeIfPresent(String.self, forKey: .name)
+        if let name {
+            do { try BundleName.validate(name) } catch let error as PaddockError {
+                throw DecodingError.dataCorruptedError(forKey: .name, in: keys, debugDescription: error.message)
+            }
+        }
+        from = try keys.decode(Source.self, forKey: .from)
+        vm = try keys.decodeIfPresent(VM.self, forKey: .vm) ?? VM()
+        account = try keys.decode(Account.self, forKey: .account)
+        acceptsLicense = try keys.choice(["accept"], forKey: .license) != nil
+        grants = try keys.choice(Grants.allCases, forKey: .grants) ?? .managed
+        share = try keys.decodeIfPresent(String.self, forKey: .share)
+        steps = try keys.decodeIfPresent([Step].self, forKey: .steps) ?? []
+    }
+}
+
+extension ImageFile.Source: Decodable {
+    private enum Keys: String, CodingKey, CaseIterable {
+        case macos, ipsw
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let keys = try decoder.strictContainer(keyedBy: Keys.self)
+        switch (keys.contains(.macos), keys.contains(.ipsw)) {
+        case (true, false):
+            // shortcut: only the latest; a version number needs a catalog to find its image.
+            _ = try keys.choice(["latest"], forKey: .macos, hint: "to pin a version, give its restore image with ipsw:")
+            self = .latest
+        case (false, true):
+            self = .ipsw(try keys.decode(String.self, forKey: .ipsw))
+        default:
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath, debugDescription: "give one of macos: latest or ipsw: <path>"))
+        }
+    }
+}
+
+extension ImageFile.VM: Decodable {
+    private enum Keys: String, CodingKey, CaseIterable {
+        case cpus, memory, disk
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let keys = try decoder.strictContainer(keyedBy: Keys.self)
+        cpus = try keys.positive(forKey: .cpus)
+        memory = try keys.positive(forKey: .memory)
+        disk = try keys.positive(forKey: .disk)
+    }
+}
+
+extension ImageFile.Account: Decodable {
+    private enum Keys: String, CodingKey, CaseIterable {
+        case name
+        case fullName = "full-name"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let keys = try decoder.strictContainer(keyedBy: Keys.self)
+        name = try keys.decode(String.self, forKey: .name)
+        fullName = try keys.decodeIfPresent(String.self, forKey: .fullName)
+    }
+}
+
+extension ImageFile.Step: Decodable {
+    private enum Keys: String, CodingKey, CaseIterable {
+        case name, run
+        case user = "as"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let keys = try decoder.strictContainer(keyedBy: Keys.self)
+        name = try keys.decode(String.self, forKey: .name)
+        user = try keys.choice(ImageFile.User.allCases, forKey: .user) ?? .user
+        run = try keys.decode(String.self, forKey: .run)
+        guard !run.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DecodingError.dataCorruptedError(forKey: .run, in: keys, debugDescription: "is empty")
+        }
+    }
+}
+
+/// Any key, to see every key a mapping has, known or not.
+private struct AnyKey: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
+}
+
+extension Decoder {
+    /// The mapping's container, after checking it has no key but `Keys`'.
+    fileprivate func strictContainer<Keys: CodingKey & CaseIterable>(keyedBy: Keys.Type) throws -> KeyedDecodingContainer<Keys> {
+        let known = Keys.allCases.map(\.stringValue)
+        if let unknown = try container(keyedBy: AnyKey.self).allKeys.first(where: { !known.contains($0.stringValue) }) {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: codingPath + [unknown], debugDescription: "unknown key; expected \(known.joined(separator: ", "))"))
+        }
+        return try container(keyedBy: Keys.self)
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// The value at `key` if it is one of `values`, nil if the key is absent.
+    fileprivate func choice(_ values: [String], forKey key: Key, hint: String? = nil) throws -> String? {
+        guard let value = try decodeIfPresent(String.self, forKey: key) else { return nil }
+        guard values.contains(value) else {
+            let expected = values.count == 1 ? values[0] : values.dropLast().joined(separator: ", ") + " or " + values.last!
+            throw DecodingError.dataCorruptedError(
+                forKey: key, in: self, debugDescription: "expected \(expected), not \(value)" + (hint.map { "; \($0)" } ?? ""))
+        }
+        return value
+    }
+
+    fileprivate func choice<Value: RawRepresentable & CaseIterable>(_ values: [Value], forKey key: Key) throws -> Value?
+    where Value.RawValue == String {
+        try choice(values.map(\.rawValue), forKey: key).flatMap(Value.init(rawValue:))
+    }
+
+    fileprivate func positive(forKey key: Key) throws -> Int? {
+        guard let value = try decodeIfPresent(Int.self, forKey: key) else { return nil }
+        guard value > 0 else {
+            throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "must be more than 0, not \(value)")
+        }
+        return value
+    }
+}
