@@ -36,6 +36,8 @@ if ! command -v go >/dev/null; then
   exit 1
 fi
 (cd "$root/paddock-net" && go build -trimpath -o "$(dirname "$bin")/paddock-net" .) >&2
+# paddock-control, the control plane, is Go too; it also builds for Linux (GOOS=linux).
+(cd "$root/paddock-control" && go build -trimpath -o "$(dirname "$bin")/paddock-control" .) >&2
 
 # In the guest, paddock-session needs Accessibility and paddock-guestd Full Disk Access, which
 # macOS grants per signature. Signed with a stable certificate, rebuilt binaries keep the grants;

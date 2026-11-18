@@ -41,7 +41,12 @@ uid="$(id -u "${SUDO_USER:-}" 2>/dev/null || true)"
 if [[ -n "$uid" ]] && launchctl print "gui/$uid" >/dev/null 2>&1; then
   launchctl bootout "gui/$uid/paddock.session" 2>/dev/null || true
   launchctl bootstrap "gui/$uid" /Library/LaunchAgents/paddock.session.plist
-  sleep 1
+  # A session still logging in, as on a build's first boot while the guest finishes booting,
+  # can't keep it up yet; launchd starts it again every 10 s, so give it a minute.
+  for _ in $(seq 1 60); do
+    launchctl print "gui/$uid/paddock.session" 2>/dev/null | grep -q 'state = running' && break
+    sleep 1
+  done
   if launchctl print "gui/$uid/paddock.session" | grep -q 'state = running'; then
     echo "paddock-session is running; allow it in System Settings > Privacy & Security > Accessibility"
   else

@@ -15,6 +15,13 @@ struct Serve: AsyncParsableCommand {
             and replaced; they reach serve through a socket in the paddock home that only you \
             can open. A slot that can't start stays empty, with the reason, and the other keeps \
             serving. Press Ctrl-C to stop serve and delete the slots' VMs.
+
+            With --control, serve also links this Mac to paddock-control, the control plane, and \
+            reports its slots there. The first time, add --join with a token from \
+            'paddock-control join-token': serve makes this Mac a key, which never leaves it, and \
+            trusts only the control plane's CA that the token names. The link goes out from this \
+            Mac, so it needs no open port, and serve goes on handing out VMs here while the \
+            control plane is down, linking again when it's back.
             """)
 
     @Argument(help: "VM to clone, usually the golden image, with the guest agent installed.")
@@ -26,15 +33,30 @@ struct Serve: AsyncParsableCommand {
     @Flag(help: "Give each VM its own userspace network (paddock-net) instead of the shared NAT.")
     var userspace = false
 
+    @Option(help: "The control plane to link this Mac to, such as https://studio.local:7443.")
+    var control: String?
+
+    @Option(help: "A join token from 'paddock-control join-token', the first time this Mac links to --control.")
+    var join: String?
+
     func validate() throws {
         try BundleName.validate(source)
         guard (1...2).contains(slots) else {
             throw ValidationError("--slots is 1 or 2: macOS runs at most two VMs at once")
         }
+        if join != nil, control == nil {
+            throw ValidationError("--join needs --control, the control plane's URL")
+        }
     }
 
     func run() async throws {
-        try await WarmPool.serve(source: source, slots: slots, userspaceNetwork: userspace)
+        // Joined before any VM boots, so a bad token or URL fails in seconds.
+        var identity: HostIdentity?
+        if let control {
+            identity = try await ControlEnrollment.identity(control: try ControlEnrollment.url(control), join: join,
+                                                            home: .fromEnvironment())
+        }
+        try await WarmPool.serve(source: source, slots: slots, userspaceNetwork: userspace, control: identity)
     }
 }
 
@@ -80,18 +102,21 @@ final class WarmPool {
     private var stopping = false
     private var sessionHelper: Bool?  // whether the source has paddock-session, asked once
     private var checkedSource = false  // the first slot to boot checks the source for both
+    private var controlClient: ControlClient?
 
-    static func serve(source: String, slots: Int, userspaceNetwork: Bool) async throws {
-        let pool = WarmPool(source: source, slots: slots, userspaceNetwork: userspaceNetwork)
+    static func serve(source: String, slots: Int, userspaceNetwork: Bool, control: HostIdentity? = nil) async throws {
+        let pool = WarmPool(source: source, slots: slots, userspaceNetwork: userspaceNetwork, control: control)
         defer { withExtendedLifetime(pool) {} }
         try await pool.run(source: source)
     }
 
     private let userspaceNetwork: Bool
+    private let control: HostIdentity?
 
-    private init(source: String, slots: Int, userspaceNetwork: Bool) {
+    private init(source: String, slots: Int, userspaceNetwork: Bool, control: HostIdentity?) {
         self.slots = (1...slots).map { Slot(number: $0, source: source) }
         self.userspaceNetwork = userspaceNetwork
+        self.control = control
     }
 
     /// Prepares the slots at the same time, fills them and serves until Ctrl-C, which exits the
@@ -105,6 +130,12 @@ final class WarmPool {
             MainActor.assumeIsolated { self?.handle(line, responder) }
         }
         interrupt = onInterrupt { [weak self] in self?.shutDown() }
+        if let control {
+            controlClient = ControlClient(identity: control, image: name,
+                                          slots: { [weak self] in self?.slotReports() ?? [] },
+                                          diskFree: { [weak self] in self?.freeDisk() })
+            controlClient?.start()
+        }
         await withTaskGroup(of: Void.self) { group in
             for slot in slots {
                 group.addTask { await self.prepare(slot, from: source) }
@@ -136,6 +167,20 @@ final class WarmPool {
                 answerWaiting(with: "no slot could start: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// The slots as the control plane sees them.
+    private func slotReports() -> [ControlLink.SlotReport] {
+        slots.map {
+            ControlLink.SlotReport(number: $0.number, emptyReason: $0.emptyReason, assigned: $0.assigned,
+                                   warm: $0.warmAddress != nil, vm: $0.current?.name)
+        }
+    }
+
+    /// Free space on the paddock home's volume, where clones go.
+    private func freeDisk() -> UInt64? {
+        let values = try? home.root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage.map { UInt64(max(0, $0)) }
     }
 
     /// Warns when the slots' VMs together would leave this Mac little memory of its own.
@@ -484,6 +529,7 @@ final class WarmPool {
         stopping = true
         print("\nStopping; deleting \(slots.count == 1 ? "slot 1's" : "the slots'") VMs. Press Ctrl-C again to quit now.")
         server?.stop()
+        controlClient?.stop()
         answerWaiting(with: "paddock serve stopped")
         Task {
             for slot in slots {
