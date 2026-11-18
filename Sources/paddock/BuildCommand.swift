@@ -16,7 +16,12 @@ struct Build: AsyncParsableCommand {
             Then boot it once with 'paddock run <vm>' to click through the license agreement and \
             the welcome screen, which macOS still shows, to turn on automatic login again in \
             System Settings > Users & Groups, since Setup Assistant turns it off as it finishes, \
-            and to grant paddock-session Accessibility and paddock-guestd Full Disk Access. paddock needs macOS 27 on this Mac \
+            and to grant paddock-session Accessibility and paddock-guestd Full Disk Access. With \
+            --accept-macos-license, you accept Apple's license (apple.com/legal/sla) for the image \
+            instead: the build reads the guest's screen and clicks through the license agreement \
+            and the welcome screen on the first boot, so Setup Assistant finishes with automatic \
+            login on, and only the two grants are left. It clicks nothing else; any other page \
+            stops the build, with a screenshot of it. paddock needs macOS 27 on this Mac \
             and in the VM, and Local Network access for the app it runs in, to reach the guest.
             """)
 
@@ -31,6 +36,12 @@ struct Build: AsyncParsableCommand {
 
     @Option(help: "Folder with the guest agent's installer; defaults to the 'guest' folder next to paddock.")
     var guest: String?
+
+    @Flag(name: .customLong("accept-macos-license"),
+          help: ArgumentHelp(
+              "Accept Apple's macOS Software License Agreement (apple.com/legal/sla) for this image on your behalf.",
+              discussion: "The build then clicks through the license and the welcome screen on the first boot."))
+    var acceptMacOSLicense = false
 
     func validate() throws {
         try BundleName.validate(name)
@@ -47,7 +58,8 @@ struct Build: AsyncParsableCommand {
         }
         let password = try Provisioning.readPassword(for: account)
         let provisioning = try Provisioning.options(account: account, fullName: fullName ?? account, password: password)
-        try await GoldenBuild.run(name: name, account: account, password: password, provisioning: provisioning, guest: folder)
+        try await GoldenBuild.run(name: name, account: account, password: password, provisioning: provisioning,
+                                  guest: folder, acceptLicense: acceptMacOSLicense)
     }
 }
 
@@ -55,9 +67,11 @@ struct Build: AsyncParsableCommand {
 enum GoldenBuild {
     @available(macOS 27, *)
     static func run(name: String, account: String, password: String, provisioning: VZMacGuestProvisioningOptions,
-                    guest: URL) async throws {
+                    guest: URL, acceptLicense: Bool) async throws {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
         let vm = try HeadlessVM(bundle: bundle, config: try bundle.readConfig(), sharing: guest)
+        // Attached before the first frame, so a failed build can show what the guest's screen says.
+        try? vm.attachScreen()
         print("Booting '\(name)' and creating the account '\(account)'")
         try await vm.start(provisioning: provisioning)
         do {
@@ -68,31 +82,44 @@ enum GoldenBuild {
             try await GuestSSH.waitForLogin(at: address, within: .seconds(120))
             print("  logging in as '\(account)' to install the guest agent and turn off what would stop unattended VMs")
             try await GuestSSH.runAsRoot(setupScript, account: account, password: password, at: address)
+            if acceptLicense {
+                print("  accepting the macOS license and finishing Setup Assistant, as --accept-macos-license says")
+                try await SetupAssistant.clickThrough(vm, within: .seconds(300))
+                print("  '\(account)' is logged in")
+            }
+            try await GuestSSH.runAsRoot(finishScript(acceptLicense: acceptLicense), account: account, password: password,
+                                         at: address)
             print("  waiting for the guest to shut down")
             guard try await vm.waitUntilStopped(within: .seconds(120)) else {
                 throw PaddockError("'\(name)' didn't shut down within 120 s of its setup")
             }
         } catch {
+            if let image = try? await vm.screenshot() {
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("paddock-build-\(name).png")
+                if (try? FrameImage.writePNG(image, to: url)) != nil {
+                    print("  the guest's screen when the build failed: \(url.path)")
+                }
+            }
             await vm.stop()
             throw error
         }
         print("""
             Built '\(name)'. Boot it once to finish:
               paddock run \(name)
-            then click through the license agreement and the welcome screen, turn on automatic login \
-            for '\(account)' in System Settings > Users & Groups, allow paddock-session in System \
-            Settings > Privacy & Security > Accessibility when macOS asks, add \
+            then \(acceptLicense ? "" : "click through the license agreement and the welcome screen, turn on automatic login for '\(account)' in System Settings > Users & Groups, ")allow \
+            paddock-session in System Settings > Privacy & Security > Accessibility when macOS asks, add \
             /usr/local/libexec/paddock-guestd under Full Disk Access, and shut down from the Apple menu.
             """)
     }
 
-    /// Runs as root through sudo, from the shared guest folder. Remote Login goes off last, and the
-    /// guest shuts itself down so its settings are on disk, not lost to a forced power-off.
+    /// Runs as root through sudo, from the shared guest folder: installs the guest agent and turns
+    /// off what would stop unattended VMs. Remote Login stays on for `finishScript`.
     ///
-    /// It leaves automatic login alone. Provisioning turns it on only if Setup Assistant finishes
-    /// on the first boot, which this build ends early, and whatever the build sets, Setup Assistant
-    /// turns off when the license is accepted on a later boot. Marking Setup Assistant done
-    /// (`/var/db/.AppleSetupDone`) doesn't stop it showing the license on macOS 27.
+    /// Neither script touches automatic login. Provisioning turns it on once Setup Assistant
+    /// finishes, which takes the license agreement: with `--accept-macos-license` the build clicks
+    /// through it in between. Otherwise the owner accepts it on a later boot, and Setup Assistant,
+    /// finishing then, turns automatic login off. Writing it here doesn't survive that, and marking
+    /// Setup Assistant done (`/var/db/.AppleSetupDone`) doesn't stop macOS 27 showing the license.
     static let setupScript = """
         set -euo pipefail
         echo "installing the guest agent"
@@ -101,11 +128,20 @@ enum GoldenBuild {
         pmset -a sleep 0 displaysleep 0
         defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0
         sudo -u "$SUDO_USER" defaults -currentHost write com.apple.screensaver idleTime 0
-        echo "turning off Remote Login and shutting down"
+        """
+
+    /// Turns Remote Login off for good and has the guest shut itself down, so its settings are on
+    /// disk, not lost to a forced power-off.
+    static func finishScript(acceptLicense: Bool) -> String {
+        let status = acceptLicense ? "echo \"$(sysadminctl -autologin status 2>&1 | sed 's/.*\\] //')\"\n" : ""
+        return """
+        set -euo pipefail
+        \(status)echo "turning off Remote Login and shutting down"
         launchctl disable system/com.openssh.sshd
         sync
         (sleep 2; shutdown -h now) </dev/null >/dev/null 2>&1 &
         """
+    }
 }
 
 /// SSH into a guest that a build has just created, which nothing else has reached yet.
