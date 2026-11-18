@@ -4,7 +4,7 @@ import PaddockCore
 import Vision
 
 /// Reading the guest's screen on the host, for the steps paddock clicks through itself:
-/// Setup Assistant with `build --accept-macos-license`, and macOS Recovery for `grant`.
+/// Setup Assistant for `build` with `license: accept`, and macOS Recovery for `grant`.
 extension HeadlessVM {
     /// The lines of text Vision recognizes on the guest's screen now, and the screen's size.
     func readScreen() async throws -> (lines: [ScreenText], size: CGSize) {

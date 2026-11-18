@@ -2,73 +2,162 @@ import ArgumentParser
 import Foundation
 import PaddockCore
 import Virtualization
+import Yams
 
 struct Build: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Set up a VM that 'paddock install' just made as a golden image, unattended.",
+        abstract: "Make a golden image from an image file, with no one at the keyboard.",
         discussion: """
-            On the VM's first boot, macOS 27 creates the account in place of Setup Assistant. \
-            paddock then logs in over SSH once, with the password it asked for, and as root \
-            installs the guest agent and session helper from the 'guest' folder build.sh stages, \
-            turns off sleep, display sleep and the screen saver, turns Remote Login off for good \
-            and shuts the guest down. From then on nothing reaches the guest over the network.
+            The image file, in YAML, says where macOS comes from, the VM's size, the account, \
+            whether you accept Apple's license for the image, how the two privacy grants get in, \
+            a host folder to share and the steps to run; see the README. paddock checks the whole \
+            file, then asks for the account's password and installs macOS into a new VM named \
+            after the file.
 
-            Then boot it once with 'paddock run <vm>' to click through the license agreement and \
-            the welcome screen, which macOS still shows, to turn on automatic login again in \
-            System Settings > Users & Groups, since Setup Assistant turns it off as it finishes, \
-            and to grant paddock-session Accessibility and paddock-guestd Full Disk Access. With \
-            --accept-macos-license, you accept Apple's license (apple.com/legal/sla) for the image \
-            instead: the build reads the guest's screen and clicks through the license agreement \
-            and the welcome screen on the first boot, so Setup Assistant finishes with automatic \
-            login on, and only the two grants are left, which 'paddock grant' can write instead. \
-            It clicks nothing else; any other page \
-            stops the build, with a screenshot of it. paddock needs macOS 27 on this Mac \
-            and in the VM, and Local Network access for the app it runs in, to reach the guest.
+            On the VM's first boot, macOS 27 creates the account, and paddock logs in over SSH \
+            once to install the guest agent and session helper and turn off sleep, display sleep \
+            and the screen saver, then turns Remote Login off for good. With 'license: accept' \
+            you accept Apple's license (apple.com/legal/sla) for the image, and paddock reads the \
+            guest's screen and clicks through the license and the welcome screen, nothing else. \
+            With 'grants: recovery', 'paddock grant' then writes the two grants from macOS \
+            Recovery. Last, paddock boots the image once more, runs the steps through the guest \
+            agent, each in zsh with set -e, checks the image as serve does and shuts it down.
+
+            paddock needs macOS 27 on this Mac and in the VM, and Local Network access for the \
+            app it runs in, to reach the guest.
             """)
 
-    @Argument(help: "VM that 'paddock install' made, which has never booted.")
-    var name: String
-
-    @Option(help: "Short name of the account to create.")
-    var account: String
-
-    @Option(help: "Full name of the account; defaults to its short name.")
-    var fullName: String?
+    @Argument(help: "Image file (YAML).")
+    var file: String
 
     @Option(help: "Folder with the guest agent's installer; defaults to the 'guest' folder next to paddock.")
     var guest: String?
 
-    @Flag(name: .customLong("accept-macos-license"),
-          help: ArgumentHelp(
-              "Accept Apple's macOS Software License Agreement (apple.com/legal/sla) for this image on your behalf.",
-              discussion: "The build then clicks through the license and the welcome screen on the first boot."))
-    var acceptMacOSLicense = false
-
-    func validate() throws {
-        try BundleName.validate(name)
-        do { try Provisioning.validate(account: account) } catch let error as PaddockError { throw ValidationError(error.message) }
-    }
-
     func run() async throws {
         guard #available(macOS 27, *) else { throw PaddockError("paddock build needs macOS 27 on this Mac") }
-        let next = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-            .deletingLastPathComponent().appendingPathComponent("guest").path
-        let folder = URL(fileURLWithPath: guest ?? next, isDirectory: true).standardizedFileURL
-        guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("install.sh").path) else {
-            throw PaddockError("no install.sh in \(folder.path); run scripts/build.sh, or name the folder with --guest")
+        let plan = try ImageBuild.Plan(file: URL(fileURLWithPath: (file as NSString).expandingTildeInPath), guest: guest)
+        let password = try Provisioning.readPassword(for: plan.image.account.name)
+        try await ImageBuild.run(plan, password: password)
+    }
+}
+
+/// `paddock build <file>`: install → first boot → grant → steps boot, from a checked image file.
+@MainActor
+enum ImageBuild {
+    /// An image file, read and checked against this Mac before anything starts, so a mistake costs
+    /// seconds, not a half-built VM.
+    struct Plan: Sendable {
+        let file: URL
+        let name: String
+        let image: ImageFile
+        let ipsw: String?
+        let share: URL?
+        let guest: URL
+
+        nonisolated init(file: URL, guest: String?) throws {
+            self.file = file.standardizedFileURL
+            let text: String
+            do { text = try String(contentsOf: self.file, encoding: .utf8) } catch {
+                throw PaddockError("can't read \(self.file.path): \(error.localizedDescription)")
+            }
+            do { image = try YAMLDecoder().decode(ImageFile.self, from: text) } catch {
+                throw PaddockError("\(self.file.lastPathComponent): \(ImageFile.describe(error))")
+            }
+            name = image.name ?? self.file.deletingPathExtension().lastPathComponent
+            try BundleName.validate(name)
+            try Provisioning.validate(account: image.account.name)
+            if let disk = image.vm.disk, disk < 32 {
+                throw PaddockError("\(self.file.lastPathComponent): vm.disk must be at least 32 GB for macOS, not \(disk)")
+            }
+
+            // Paths in the file are relative to its folder.
+            let folder = self.file.deletingLastPathComponent()
+            func resolve(_ path: String) -> URL {
+                let expanded = (path as NSString).expandingTildeInPath
+                return expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded) : folder.appendingPathComponent(expanded)
+            }
+            var isFolder: ObjCBool = false
+            switch image.from {
+            case .latest:
+                ipsw = nil
+            case let .ipsw(path):
+                let url = resolve(path).standardizedFileURL
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), !isFolder.boolValue else {
+                    throw PaddockError("\(self.file.lastPathComponent): from.ipsw: no file at \(url.path)")
+                }
+                ipsw = url.path
+            }
+            if let path = image.share {
+                let url = resolve(path).standardizedFileURL
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), isFolder.boolValue else {
+                    throw PaddockError("\(self.file.lastPathComponent): share: no folder at \(url.path)")
+                }
+                share = url
+            } else {
+                share = nil
+            }
+            let next = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+                .deletingLastPathComponent().appendingPathComponent("guest").path
+            self.guest = URL(fileURLWithPath: guest ?? next, isDirectory: true).standardizedFileURL
+            guard FileManager.default.fileExists(atPath: self.guest.appendingPathComponent("install.sh").path) else {
+                throw PaddockError("no install.sh in \(self.guest.path); run scripts/build.sh, or name the folder with --guest")
+            }
+            let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
+            guard !FileManager.default.fileExists(atPath: bundle.url.path) else {
+                throw PaddockError("VM '\(name)' already exists at \(bundle.url.path); delete it or set name: in the file")
+            }
         }
-        let password = try Provisioning.readPassword(for: account)
-        let provisioning = try Provisioning.options(account: account, fullName: fullName ?? account, password: password)
-        try await GoldenBuild.run(name: name, account: account, password: password, provisioning: provisioning,
-                                  guest: folder, acceptLicense: acceptMacOSLicense)
-        print("""
-            Built '\(name)'. Boot it once to finish:
-              paddock run \(name)
-            then \(acceptMacOSLicense ? "" : "click through the license agreement and the welcome screen, turn on automatic login for '\(account)' in System Settings > Users & Groups, ")allow \
-            paddock-session in System Settings > Privacy & Security > Accessibility when macOS asks, add \
-            /usr/local/libexec/paddock-guestd under Full Disk Access, and shut down from the Apple menu.
-            Or leave the two grants to 'paddock grant \(name)', which writes them from macOS Recovery with SIP on.
-            """)
+    }
+
+    @available(macOS 27, *)
+    static func run(_ plan: Plan, password: String) async throws {
+        let image = plan.image, account = image.account.name
+        let started = ContinuousClock.now
+        try await Install.install(
+            name: plan.name, ipsw: plan.ipsw, cpus: image.vm.cpus ?? VMSizing.defaultCPUCount,
+            memory: image.vm.memory.map(UInt64.init) ?? VMSizing.defaultMemorySize >> 30,
+            diskSize: image.vm.disk.map(UInt64.init) ?? VMSizing.defaultDiskSize >> 30)
+        let problems: [String]?
+        do {
+            let provisioning = try Provisioning.options(account: account, fullName: image.account.fullName ?? account,
+                                                        password: password)
+            try await GoldenBuild.run(name: plan.name, account: account, password: password, provisioning: provisioning,
+                                      guest: plan.guest, acceptLicense: image.acceptsLicense)
+            if image.grants == .recovery {
+                try await RecoveryGrant.run(name: plan.name)
+            }
+            problems = try await ImageSteps.run(name: plan.name, steps: image.steps, share: plan.share)
+        } catch {
+            let bundle = try? PaddockHome.fromEnvironment().bundle(named: plan.name)
+            print("The build stopped; '\(plan.name)' is left at \(bundle?.url.path ?? plan.name) to look at. Delete it to build again.")
+            throw error
+        }
+
+        print("Built '\(plan.name)' from \(plan.file.lastPathComponent) in \(DurationFormat.short(ContinuousClock.now - started)).")
+        switch problems {
+        case nil:
+            print("  The image check couldn't run.")
+        case let problems? where !problems.isEmpty:
+            print("  The image check found:")
+            for problem in problems { print("    - \(problem)") }
+        default:
+            break
+        }
+        var left: [String] = []
+        if !image.acceptsLicense {
+            left.append("boot it once with 'paddock run \(plan.name)' to accept the license and the welcome screen, "
+                + "then turn on automatic login for '\(account)' in System Settings > Users & Groups")
+        }
+        if image.grants == .managed {
+            left.append("allow paddock-session under Accessibility and /usr/local/libexec/paddock-guestd under Full Disk "
+                + "Access, in System Settings > Privacy & Security or with an MDM profile, or run 'paddock grant \(plan.name)'")
+        }
+        if left.isEmpty {
+            print("  Ready to serve: paddock serve \(plan.name)")
+        } else {
+            print("  Left for a person:")
+            for step in left { print("    - \(step)") }
+        }
     }
 }
 
@@ -92,7 +181,7 @@ enum GoldenBuild {
             print("  logging in as '\(account)' to install the guest agent and turn off what would stop unattended VMs")
             try await GuestSSH.runAsRoot(setupScript, account: account, password: password, at: address)
             if acceptLicense {
-                print("  accepting the macOS license and finishing Setup Assistant, as --accept-macos-license says")
+                print("  accepting the macOS license and finishing Setup Assistant, as the image file's license: accept says")
                 try await SetupAssistant.clickThrough(vm, within: .seconds(300))
                 print("  '\(account)' is logged in")
             }
@@ -113,7 +202,7 @@ enum GoldenBuild {
     /// off what would stop unattended VMs. Remote Login stays on for `finishScript`.
     ///
     /// Neither script touches automatic login. Provisioning turns it on once Setup Assistant
-    /// finishes, which takes the license agreement: with `--accept-macos-license` the build clicks
+    /// finishes, which takes the license agreement: with `license: accept` the build clicks
     /// through it in between. Otherwise the owner accepts it on a later boot, and Setup Assistant,
     /// finishing then, turns automatic login off. Writing it here doesn't survive that, and marking
     /// Setup Assistant done (`/var/db/.AppleSetupDone`) doesn't stop macOS 27 showing the license.

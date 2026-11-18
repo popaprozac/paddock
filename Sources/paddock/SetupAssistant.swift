@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import PaddockCore
 
-/// Clicks through Setup Assistant on a build's first boot, for `--accept-macos-license`: reads
+/// Clicks through Setup Assistant on a build's first boot, for `license: accept`: reads
 /// the guest's screen on the host, finds the buttons by their text, and clicks them with the VM's
 /// virtual pointer. Provisioning then logs the account in, with automatic login on.
 @MainActor
