@@ -6,7 +6,7 @@ import Security
 /// Checks the control plane's TLS certificate against the one CA this Mac trusts there, and no
 /// other: while joining, the CA in the server's chain whose key has the join token's pin; after,
 /// the CA saved then. The certificate must also name the host in the URL.
-final class PinnedTrust: NSObject, URLSessionDelegate, @unchecked Sendable {
+final class PinnedTrust: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     enum Anchor {
         case pin(Data)
         case authority(SecCertificate)
@@ -16,6 +16,7 @@ final class PinnedTrust: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var matched: SecCertificate?
     private var failed: String?
+    private var taskEnded: (@Sendable (Error) -> Void)?
 
     init(_ anchor: Anchor) {
         self.anchor = anchor
@@ -25,6 +26,16 @@ final class PinnedTrust: NSObject, URLSessionDelegate, @unchecked Sendable {
     var matchedAuthority: SecCertificate? { lock.withLock { matched } }
     /// Why the server's certificate was refused, if it was.
     var failure: String? { lock.withLock { failed } }
+
+    /// Called once URLSession ends a task, with why.
+    func onTaskEnd(_ handler: @escaping @Sendable (Error) -> Void) {
+        lock.withLock { taskEnded = handler }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let handler = lock.withLock { taskEnded }
+        handler?(error ?? PaddockError("the link closed"))
+    }
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
         -> (URLSession.AuthChallengeDisposition, URLCredential?) {
@@ -50,8 +61,8 @@ final class PinnedTrust: NSObject, URLSessionDelegate, @unchecked Sendable {
         var error: CFError?
         guard SecTrustEvaluateWithError(trust, &error) else {
             let reason = error.map { CFErrorCopyDescription($0) as String } ?? "unknown"
-            fail("the control plane's certificate doesn't check out for \(host) (\(reason)); if the control plane doesn't "
-                + "know itself as \(host), start it with --name \(host)")
+            fail("the server at \(host) isn't the control plane this Mac trusts, or doesn't know itself as \(host) "
+                + "(\(reason)): if it is the same control plane, start it with --name \(host); if not, join it with --join")
             return (.cancelAuthenticationChallenge, nil)
         }
         lock.withLock { matched = authority }
@@ -87,7 +98,7 @@ enum ControlEnrollment {
     }
 
     /// Joins with `token` and saves the identity, replacing any other; or, with no token, the
-    /// identity this Mac saved when it joined `url`.
+    /// identity this Mac saved when it joined, for `url`.
     static func identity(control url: URL, join token: String?, home: PaddockHome) async throws -> HostIdentity {
         let folder = HostIdentity.folder(in: home)
         if let token {
@@ -100,11 +111,11 @@ enum ControlEnrollment {
             throw PaddockError("this Mac hasn't joined \(url.absoluteString) yet: add --join with a token from "
                 + "'paddock-control join-token' there")
         }
-        guard saved.url == url else {
-            throw PaddockError("this Mac joined the control plane at \(saved.url.absoluteString), not \(url.absoluteString): "
-                + "use that URL, or join this one with --join and a new token")
-        }
-        return saved
+        // The same control plane by another name, such as its MagicDNS name away from the LAN, is
+        // fine: the link trusts only the CA saved at joining, so another control plane fails there.
+        var identity = saved
+        identity.url = url
+        return identity
     }
 
     /// Makes this Mac's key and enrolls its public half, trusting only the CA the token pins.
@@ -201,8 +212,13 @@ final class ControlClient {
         }
     }
 
-    /// One link, from the challenge until it closes.
-    private func link(onLinked: () -> Void) async throws {
+    /// One link, from the challenge until it closes. It ends at the first of: its work ending,
+    /// URLSession ending the socket's task, or the handshake taking over 15 s. Not on receive()
+    /// alone: a WebSocket task refused at TLS ends, yet in serve its pending receive() was never
+    /// resumed, even after a cancel, so a wrong or changed control plane hung the link for good.
+    /// shortcut: a receive() left suspended so stays until serve exits; it happens only on
+    /// failed links, at most twice a minute, so it's left rather than worked around further.
+    private func link(onLinked: @escaping @MainActor () -> Void) async throws {
         guard let authority = SecCertificateCreateWithData(nil, identity.authority as CFData) else {
             throw PaddockError("the saved control plane CA can't be read; join again with --join")
         }
@@ -216,53 +232,60 @@ final class ControlClient {
         socket.maximumMessageSize = 1 << 20
         self.socket = socket
         defer { self.socket = nil }
-        socket.resume()
 
-        // A server that never answers would hold the link forever without this.
+        let end = LinkEnd()
+        trust.onTaskEnd { end.finish($0) }
+        socket.resume()
         let watchdog = Task {
             try await Task.sleep(for: .seconds(15))
-            socket.cancel(with: .goingAway, reason: nil)
+            end.finish(PaddockError("the control plane didn't answer within 15 s"))
         }
-        do {
-            let challenge = try await receive(socket)
-            guard challenge.type == "challenge", let nonce = challenge.nonce, nonce.count == 32 else {
-                throw PaddockError("the control plane didn't start with a challenge")
+        let work = Task {
+            do {
+                try await self.serveLink(on: socket, linked: { watchdog.cancel(); onLinked() })
+                end.finish(PaddockError("the link closed"))
+            } catch {
+                end.finish(error)
             }
-            try await send(ControlLink.Message(type: "auth", host: identity.host,
-                                               signature: ControlLink.answer(nonce, with: identity.key)), on: socket)
-            let welcome = try await receive(socket)
-            guard welcome.type == "welcome" else { throw PaddockError("the control plane didn't accept the link") }
-            watchdog.cancel()
-        } catch {
-            watchdog.cancel()
-            if socket.closeCode == .policyViolation { throw Removed() }
-            // The watchdog finished only if it fired; cancelled here, its sleep throws instead.
-            let timedOut = (try? await watchdog.value) != nil
-            throw PaddockError(timedOut ? "the control plane didn't answer within 15 s" : trust.failure ?? error.localizedDescription)
         }
-        onLinked()
+        defer {
+            watchdog.cancel()
+            work.cancel()
+        }
+        let error = await end.wait()
+        switch socket.closeCode {
+        case .policyViolation: throw Removed()
+        case .goingAway: throw PaddockError(Task.isCancelled ? "serve is stopping" : "the control plane stopped or restarted")
+        case .invalid: break
+        default: throw PaddockError("the control plane closed the link (code \(socket.closeCode.rawValue))")
+        }
+        if let failure = trust.failure { throw PaddockError(failure) }
+        throw (error as? PaddockError) ?? PaddockError(error.localizedDescription)
+    }
+
+    /// The link's work: the challenge, the hello, then the slots until it closes.
+    private func serveLink(on socket: URLSessionWebSocketTask, linked: () -> Void) async throws {
+        let challenge = try await receive(socket)
+        guard challenge.type == "challenge", let nonce = challenge.nonce, nonce.count == 32 else {
+            throw PaddockError("the control plane didn't start with a challenge")
+        }
+        try await send(ControlLink.Message(type: "auth", host: identity.host,
+                                           signature: ControlLink.answer(nonce, with: identity.key)), on: socket)
+        let welcome = try await receive(socket)
+        guard welcome.type == "welcome" else { throw PaddockError("the control plane didn't accept the link") }
+        linked()
         let version = ProcessInfo.processInfo.operatingSystemVersion
         try await send(ControlLink.Message(
             type: "hello", name: Self.computerName, version: Paddock.configuration.version,
             macos: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)", image: image,
             cpus: ProcessInfo.processInfo.activeProcessorCount, memory: ProcessInfo.processInfo.physicalMemory), on: socket)
-
-        do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                // Reading keeps the link's pings answered and sees it close.
-                group.addTask {
-                    while true { _ = try await socket.receive() }
-                }
-                group.addTask { try await self.reportSlots(on: socket) }
-                _ = try await group.next()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Reading keeps the link's pings answered and sees it close.
+            group.addTask {
+                while true { _ = try await socket.receive() }
             }
-        } catch {
-            switch socket.closeCode {
-            case .policyViolation: throw Removed()
-            case .goingAway: throw PaddockError(Task.isCancelled ? "serve is stopping" : "the control plane stopped or restarted")
-            case .invalid: throw PaddockError("the connection to the control plane dropped")
-            default: throw PaddockError("the control plane closed the link (code \(socket.closeCode.rawValue))")
-            }
+            group.addTask { try await self.reportSlots(on: socket) }
+            _ = try await group.next()
         }
     }
 
@@ -293,5 +316,33 @@ final class ControlClient {
 
     private func send(_ message: ControlLink.Message, on socket: URLSessionWebSocketTask) async throws {
         try await socket.send(.string(String(decoding: try JSONEncoder().encode(message), as: UTF8.self)))
+    }
+}
+
+/// How a link ended, the first time it's told: resumes the one waiter, and ignores later news.
+private final class LinkEnd: @unchecked Sendable {
+    private let lock = NSLock()
+    private var error: Error?
+    private var waiter: CheckedContinuation<Error, Never>?
+
+    func finish(_ error: Error) {
+        let waiter: CheckedContinuation<Error, Never>? = lock.withLock {
+            guard self.error == nil else { return nil }
+            self.error = error
+            defer { self.waiter = nil }
+            return self.waiter
+        }
+        waiter?.resume(returning: error)
+    }
+
+    func wait() async -> Error {
+        await withCheckedContinuation { continuation in
+            let ended: Error? = lock.withLock {
+                if let error { return error }
+                waiter = continuation
+                return nil
+            }
+            if let ended { continuation.resume(returning: ended) }
+        }
     }
 }
