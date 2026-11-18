@@ -46,8 +46,11 @@ struct Build: AsyncParsableCommand {
         guard firstBoot == .provisioning else {
             throw PaddockError("building macOS \(version) isn't written yet: set it up by hand in 'paddock run' for now")
         }
+        if !GuestSupport.tested.contains(version) {
+            print("macOS \(version) hasn't been tested with paddock build; trying it.")
+        }
         let password = try Provisioning.readPassword(for: plan.image.account.name)
-        try await ImageBuild.run(plan, password: password)
+        try await ImageBuild.run(plan, version: version, password: password)
     }
 }
 
@@ -128,7 +131,7 @@ enum ImageBuild {
     }
 
     @available(macOS 27, *)
-    static func run(_ plan: Plan, password: String) async throws {
+    static func run(_ plan: Plan, version: String, password: String) async throws {
         let image = plan.image, account = image.account.name
         let started = ContinuousClock.now
         try await Install.install(
@@ -148,6 +151,10 @@ enum ImageBuild {
         } catch {
             let bundle = try? PaddockHome.fromEnvironment().bundle(named: plan.name)
             print("The build stopped; '\(plan.name)' is left at \(bundle?.url.path ?? plan.name) to look at. Delete it to build again.")
+            if !GuestSupport.tested.contains(version) {
+                print("macOS \(version) isn't tested yet and may set up differently: set the image up by hand in "
+                    + "'paddock run' instead (see the README).")
+            }
             throw error
         }
 
@@ -185,11 +192,8 @@ enum GoldenBuild {
     static func run(name: String, account: String, password: String, provisioning: VZMacGuestProvisioningOptions,
                     guest: URL, acceptLicense: Bool) async throws {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
-        let vm = try HeadlessVM(bundle: bundle, config: try bundle.readConfig(), sharing: guest)
-        // Attached before the first frame, so a failed build can show what the guest's screen says.
-        try? vm.attachScreen()
         print("Booting '\(name)' and creating the account '\(account)'")
-        try await vm.start(provisioning: provisioning)
+        let vm = try await HeadlessVM.started(bundle: bundle, sharing: guest) { try await $0.start(provisioning: provisioning) }
         do {
             guard let address = try await vm.leasedAddress(within: .seconds(120)) else {
                 throw PaddockError("'\(name)' got no DHCP lease within 120 s")

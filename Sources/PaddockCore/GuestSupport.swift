@@ -5,6 +5,10 @@ public enum GuestSupport {
     public static let minimumGuest = 14
     /// The first macOS whose guests take Virtualization's guest provisioning.
     public static let provisioning = 27
+    /// The versions `build` has set up end to end, then `grant` and `serve`, as the README's
+    /// table lists them. Apple changes Setup Assistant between point releases, so another version
+    /// is tried but not promised.
+    public static let tested: Set<String> = ["27.2.1"]
 
     /// How `build` gets through a guest's first boot.
     public enum FirstBoot: Equatable, Sendable {

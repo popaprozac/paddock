@@ -37,6 +37,27 @@ final class HeadlessVM: NSObject {
         machine.delegate = self
     }
 
+    /// A VM for `bundle`, started by `start`. Started right after `install` in the same process,
+    /// the VM that installed macOS may not have let go of the bundle's auxiliary storage yet, and
+    /// Virtualization says nothing when it does, so this tries again with a fresh VM for up to 15 s.
+    /// shortcut: a retry on that one error; a completion signal from Virtualization would replace it.
+    static func started(bundle: VMBundle, sharing: URL?,
+                        start: (HeadlessVM) async throws -> Void) async throws -> HeadlessVM {
+        let deadline = ContinuousClock.now + .seconds(15)
+        while true {
+            let vm = try HeadlessVM(bundle: bundle, config: try bundle.readConfig(), sharing: sharing)
+            // Attached before the first frame, so there is a screen to read and to save on failure.
+            try? vm.attachScreen()
+            do {
+                try await start(vm)
+                return vm
+            } catch let error as PaddockError where error.message.contains("lock auxiliary storage")
+                && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
     func start() async throws {
         try await perform("start the clone") { machine.start(completionHandler: $0) }
     }

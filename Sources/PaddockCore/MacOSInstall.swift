@@ -92,6 +92,10 @@ public enum MacOSInstall {
         } catch {
             throw PaddockError("macOS install failed: \(error.localizedDescription)")
         }
+        // The reporter holds the installer and its VM; let both go before returning, so a boot
+        // that follows in this process finds the VM's storage free sooner.
+        reporter.cancel()
+        await reporter.value
         progress(1)
     }
 }

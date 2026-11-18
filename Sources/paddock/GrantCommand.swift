@@ -45,18 +45,7 @@ enum RecoveryGrant {
         print("Booting '\(name)' in macOS Recovery")
         try await vm.startInRecovery()
         do {
-            try await click("Options", on: vm, within: .seconds(120))
-            // Selecting Options shows a Continue button under it.
-            try await click("Continue", on: vm, within: .seconds(30))
-            // Recovery's window lists Disk Utility once it is up. Its menu bar reads as one line,
-            // so Terminal is opened with Utilities > Terminal's shortcut, not by its menu title.
-            _ = try await find("Disk Utility", on: vm, within: .seconds(180))
-            print("  opening Terminal")
-            try await vm.press([KeyInput.stroke("cmd+shift+t")])
-            // Its window title names the shell once it runs; keys typed from then on reach it.
-            _ = try await poll("Terminal's shell", within: .seconds(30)) {
-                try await read(vm)?.lines.contains { $0.string.contains("bash") } == true ? true : nil
-            }
+            try await openTerminal(vm)
             print("  writing the permissions")
             try await vm.press(KeyInput.strokes(typing: PrivacyGrants.recoveryScript()))
             guard try await vm.waitUntilStopped(within: .seconds(60)) else {
@@ -68,6 +57,34 @@ enum RecoveryGrant {
             throw error
         }
         print("Granted paddock-session Accessibility and paddock-guestd Full Disk Access in '\(name)'; SIP is still on.")
+    }
+
+    /// From a VM started in Recovery, picks Options at the startup screen and opens Terminal, as
+    /// root, ready for typing.
+    static func openTerminal(_ vm: HeadlessVM) async throws {
+        try await click("Options", on: vm, within: .seconds(120))
+        // Selecting Options shows a Continue button under it.
+        try await click("Continue", on: vm, within: .seconds(30))
+        // Recovery's window lists Disk Utility once it is up, about 50 s after Continue. On a VM
+        // that has never booted, Recovery first asks for a language, with English selected and an
+        // arrow for its button, which Return presses.
+        let first = try await poll("Disk Utility", within: .seconds(180)) { () async throws -> String? in
+            guard let (lines, screen) = try await read(vm) else { return nil }
+            return ScreenText.find(["Disk Utility", "Language"], in: lines, screen: screen)?.string
+        }
+        if first.trimmingCharacters(in: .whitespaces) == "Language" {
+            print("  choosing English for Recovery")
+            try await vm.press([KeyInput.stroke("return")])
+            _ = try await find("Disk Utility", on: vm, within: .seconds(120))
+        }
+        // Recovery's menu bar reads as one line, so Terminal is opened with Utilities > Terminal's
+        // shortcut, not by its menu title.
+        print("  opening Terminal")
+        try await vm.press([KeyInput.stroke("cmd+shift+t")])
+        // Its window title names the shell once it runs; keys typed from then on reach it.
+        _ = try await poll("Terminal's shell", within: .seconds(30)) {
+            try await read(vm)?.lines.contains { $0.string.contains("bash") } == true ? true : nil
+        }
     }
 
     /// Waits until `label` shows as a whole line on the guest's screen, and returns that line.
