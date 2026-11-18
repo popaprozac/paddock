@@ -180,17 +180,30 @@ func reachableURLs(listen, port string, extra []string) []string {
 	if host, _, err := net.SplitHostPort(listen); err == nil && host != "" && host != "0.0.0.0" && host != "::" {
 		return []string{"https://" + net.JoinHostPort(host, port)}
 	}
-	r := currentReach(extra)
-	var urls []string
+	return urlsFor(currentReach(extra), port)
+}
+
+// urlsFor is the URLs worth showing for r: its names, then its IPv4 addresses. IPv6 addresses are
+// only shown when there's nothing else, since a Mac has several that change by the day; the
+// certificate covers them all either way.
+func urlsFor(r reach, port string) []string {
+	var urls, ipv6 []string
 	for _, name := range r.names {
 		if name != "localhost" {
 			urls = append(urls, "https://"+net.JoinHostPort(name, port))
 		}
 	}
 	for _, ip := range r.addresses {
-		if !ip.IsLoopback() {
+		switch {
+		case ip.IsLoopback():
+		case ip.To4() != nil:
 			urls = append(urls, "https://"+net.JoinHostPort(ip.String(), port))
+		default:
+			ipv6 = append(ipv6, "https://"+net.JoinHostPort(ip.String(), port))
 		}
+	}
+	if len(urls) == 0 {
+		return ipv6
 	}
 	return urls
 }

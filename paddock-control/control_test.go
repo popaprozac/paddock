@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -371,5 +372,20 @@ func TestAdminSocketMakesTokensAndListsHosts(t *testing.T) {
 	audited, _ := os.ReadFile(filepath.Join(dir, "audit.log"))
 	if !bytes.Contains(audited, []byte(`"event":"join-token-made"`)) || bytes.Contains(audited, []byte(response.Token)) {
 		t.Fatalf("audit log: %s", audited)
+	}
+}
+
+func TestURLsShowNamesAndIPv4ButNotEveryIPv6(t *testing.T) {
+	r := reach{
+		names:     []string{"studio.local", "localhost", "studio.tail1234.ts.net"},
+		addresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.5"), net.ParseIP("2601:645::1"), net.ParseIP("100.64.0.7")},
+	}
+	got := strings.Join(urlsFor(r, "7443"), " ")
+	want := "https://studio.local:7443 https://studio.tail1234.ts.net:7443 https://10.0.0.5:7443 https://100.64.0.7:7443"
+	if got != want {
+		t.Errorf("got %s", got)
+	}
+	if got := urlsFor(reach{names: []string{"localhost"}, addresses: []net.IP{net.ParseIP("2601:645::1")}}, "7443"); len(got) != 1 || got[0] != "https://[2601:645::1]:7443" {
+		t.Errorf("IPv6 only: %v", got)
 	}
 }
