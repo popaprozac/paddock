@@ -44,12 +44,16 @@ in `paddock-net/`. Run its checks with `go vet ./...` and `go test ./...` there.
 
 The script also puts `paddock-guestd`, the agent that runs inside each guest, in a `guest`
 folder next to the binary, with its launchd job and `install.sh`. The agent listens only on
-vsock port 52525. Each connection carries one request line of JSON and gets one or more answer
-lines back:
+vsock port 52525 and answers only the host: a process in the guest can reach the guest's own
+vsock ports, so the agent closes, unread, any connection that doesn't come from the host's vsock
+address (CID 2), and logs it. An image whose agent is older than 0.5.1, or whose
+`paddock-session` is older than 0.2.1, answers its own guest too: reinstall the guest agent in it
+to close that. Each connection carries one request line of JSON and gets one or more answer lines
+back:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.5.0"}` |
+| `{"op":"health"}` | `{"version":"0.5.1"}` |
 | `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
 | `{"op":"put","name":"...","size":N}` followed by N bytes | `{"exit":0}` once the file is stored |
 | `{"op":"get","name":"..."}` | `{"chunk":n}` followed by n bytes, repeated, then `{"exit":0}` |
@@ -70,11 +74,11 @@ clone has none yet. It logs each one it copies to `/var/log/paddock-guestd.log`.
 
 The folder also holds `paddock-session`, a LaunchAgent that runs in the desktop session of whoever
 logs in to the guest, where the accessibility API can see apps. It listens only on vsock port
-52526 and speaks the same protocol:
+52526, answers only the host in the same way, and speaks the same protocol:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.2.0"}` |
+| `{"op":"health"}` | `{"version":"0.2.1"}` |
 | `{"op":"axtree"}` | `{"output":"..."}` for each line of the focused app's accessibility tree as JSON, then `{"exit":0}` |
 | `{"op":"state"}` | `{"output":"desktop"}` once loginwindow has no window on screen, then `{"exit":0}` |
 

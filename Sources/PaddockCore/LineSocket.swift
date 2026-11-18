@@ -12,18 +12,28 @@ public final class LineServer: @unchecked Sendable {
     private let onStop: @Sendable () -> Void
 
     /// Serves `fd`, a socket that is already listening. The server owns it from here and
-    /// closes it when stopped, then runs `onStop`. Calls `handle` on `queue` with each request
-    /// line and the responder for that connection, which it may use from any thread, later.
+    /// closes it when stopped, then runs `onStop`. Closes each connection whose peer address
+    /// `accepts` refuses, unread. Calls `handle` on `queue` with each request line and the
+    /// responder for that connection, which it may use from any thread, later.
     public init(
         listening fd: Int32,
         queue: DispatchQueue,
+        accepts: @escaping @Sendable (sockaddr_storage) -> Bool = { _ in true },
         handle: @escaping @Sendable (String, Responder) -> Void,
         onStop: @escaping @Sendable () -> Void = {}
     ) {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler {
-            let client = accept(fd, nil, nil)
+            var peer = sockaddr_storage()
+            var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            let client = withUnsafeMutablePointer(to: &peer) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(fd, $0, &length) }
+            }
             guard client >= 0 else { return }
+            guard accepts(peer) else {
+                close(client)
+                return
+            }
             UnixSocket.configure(client, readTimeout: 5)
             // Reading blocks until the client sends its line, so give it its own thread: blocked
             // reads on GCD's shared threads stall other work until GCD adds more, slowly.
@@ -51,6 +61,7 @@ public final class LineServer: @unchecked Sendable {
     public convenience init(
         path: String,
         queue: DispatchQueue,
+        accepts: @escaping @Sendable (sockaddr_storage) -> Bool = { _ in true },
         handle: @escaping @Sendable (String, Responder) -> Void
     ) throws {
         var address = try UnixSocket.address(path)
@@ -72,7 +83,7 @@ public final class LineServer: @unchecked Sendable {
             unlink(path)
             throw error
         }
-        self.init(listening: fd, queue: queue, handle: handle, onStop: { unlink(path) })
+        self.init(listening: fd, queue: queue, accepts: accepts, handle: handle, onStop: { unlink(path) })
     }
 
     /// Stops accepting connections, closes the socket and runs `onStop`.

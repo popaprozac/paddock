@@ -9,6 +9,24 @@ import Testing
         try JSONDecoder().decode(GuestAgent.Response.self, from: Data(line.utf8))
     }
 
+    @Test func acceptsOnlyTheHostsVsockConnections() {
+        func peer(cid: UInt32, family: Int32 = AF_VSOCK) -> sockaddr_storage {
+            var vsock = sockaddr_vm()
+            vsock.svm_len = UInt8(MemoryLayout<sockaddr_vm>.size)
+            vsock.svm_family = sa_family_t(family)
+            vsock.svm_cid = cid
+            var storage = sockaddr_storage()
+            withUnsafeMutablePointer(to: &storage) {
+                $0.withMemoryRebound(to: sockaddr_vm.self, capacity: 1) { $0.pointee = vsock }
+            }
+            return storage
+        }
+        let accepts = GuestAgent.onlyFromHost("test")
+        #expect(accepts(peer(cid: UInt32(VMADDR_CID_HOST))))
+        #expect(!accepts(peer(cid: 3)))  // the guest itself, through vsock loopback
+        #expect(!accepts(peer(cid: UInt32(VMADDR_CID_HOST), family: AF_UNIX)))
+    }
+
     @Test func healthReportsTheVersion() throws {
         let answer = GuestAgent.answer(#"{"op":"health"}"#)
         #expect(try decode(answer) == GuestAgent.Response(version: GuestAgent.version))
