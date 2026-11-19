@@ -58,6 +58,26 @@ public enum ControlLink {
         return Data(SHA256.hash(data: p256KeyInfoPrefix + point))
     }
 
+    /// What a Mac takes from the control plane over its link: serve's VM operations, which name no
+    /// file on the Mac. task and screenshot name paths on the Mac to read and write, so a request
+    /// from the link could reach any file serve's user can; they come over the link only with
+    /// paths the Mac picks itself.
+    public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input"]
+
+    /// `line`, one of serve's requests, if a Mac takes it from the control plane; or why not.
+    public static func checkRemote(_ line: String) throws -> String {
+        guard let request = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+              let op = request["op"] as? String
+        else { throw PaddockError("that isn't one of serve's requests") }
+        guard remoteOperations.contains(op) else {
+            throw PaddockError("this Mac doesn't take '\(op)' from the control plane")
+        }
+        guard request["bundle"] == nil, request["result"] == nil else {
+            throw PaddockError("a request from the control plane can't name a file on this Mac")
+        }
+        return line
+    }
+
     /// The answer to a link's challenge: an ECDSA signature, in DER, over the SHA-256 of the
     /// context (a host's, unless given) and the control plane's bytes.
     public static func answer(_ nonce: Data, with key: P256.Signing.PrivateKey, context: Data = context) throws -> Data {
@@ -84,17 +104,21 @@ public enum ControlLink {
         public var hosts: [HostStatus]?
         public var error: String?   // response: why the request failed
         public var done: Bool?      // response: the request's last answer
+        public var serve: String?   // request to a host: one of serve's request lines
+        public var line: String?    // response from a host: one of serve's answer lines
 
         public init(type: String, nonce: Data? = nil, host: String? = nil, signature: Data? = nil, name: String? = nil,
                     version: String? = nil, macos: String? = nil, image: String? = nil, cpus: Int? = nil,
                     memory: UInt64? = nil, diskFree: UInt64? = nil, slots: [SlotReport]? = nil, client: String? = nil,
-                    id: String? = nil, op: String? = nil) {
+                    id: String? = nil, op: String? = nil, done: Bool? = nil, line: String? = nil) {
             self.type = type
             self.nonce = nonce
             self.host = host
             self.client = client
             self.id = id
             self.op = op
+            self.done = done
+            self.line = line
             self.signature = signature
             self.name = name
             self.version = version

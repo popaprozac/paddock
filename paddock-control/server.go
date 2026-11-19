@@ -55,6 +55,8 @@ type message struct {
 	Slots     []slot `json:"slots,omitempty"`     // capacity: every slot on the host
 
 	ID    string       `json:"id,omitempty"`    // request and response: pairs them on one link
+	Serve string       `json:"serve,omitempty"` // request to a host: one of serve's request lines
+	Line  string       `json:"line,omitempty"`  // response from a host: one of serve's answer lines
 	Op    string       `json:"op,omitempty"`    // request: hosts or logout
 	Hosts []hostStatus `json:"hosts,omitempty"` // response to hosts
 	Error string       `json:"error,omitempty"` // response: why the request failed
@@ -79,6 +81,9 @@ type link struct {
 	hello     message
 	slots     []slot
 	diskFree  uint64
+	nextID    int
+	pending   map[string]chan message // requests forwarded to the host, by ID, until done
+	closed    bool
 }
 
 // server is the control plane: enrollment and host links over HTTPS.
@@ -274,6 +279,7 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	go s.keepAlive(ctx, conn)
+	defer l.failPending()
 	for {
 		var m message
 		if err := wsjson.Read(ctx, conn, &m); err != nil {
@@ -289,6 +295,9 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 			l.slots, l.diskFree = m.Slots, m.DiskFree
 		}
 		l.mu.Unlock()
+		if m.Type == "response" {
+			l.deliver(m)
+		}
 	}
 }
 

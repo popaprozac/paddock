@@ -162,18 +162,22 @@ final class ControlClient {
     private let image: String
     private let slots: @MainActor () -> [ControlLink.SlotReport]
     private let diskFree: @MainActor () -> UInt64?
+    private let onRequest: @MainActor (String, Responder) -> Void
     private var task: Task<Void, Never>?
     private var socket: URLSessionWebSocketTask?
 
     /// The removed Mac's link is closed by the control plane, which then refuses it.
     private struct Removed: Error {}
 
+    /// `onRequest` is serve's own handler: requests from the control plane run through it, with
+    /// the same checks as one from this Mac, once `ControlLink.checkRemote` takes them.
     init(identity: ControlIdentity, image: String, slots: @escaping @MainActor () -> [ControlLink.SlotReport],
-         diskFree: @escaping @MainActor () -> UInt64?) {
+         diskFree: @escaping @MainActor () -> UInt64?, onRequest: @escaping @MainActor (String, Responder) -> Void) {
         self.identity = identity
         self.image = image
         self.slots = slots
         self.diskFree = diskFree
+        self.onRequest = onRequest
     }
 
     /// The name the Mac goes by for people: its computer name, as in Sharing settings.
@@ -289,12 +293,46 @@ final class ControlClient {
             macos: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)", image: image,
             cpus: ProcessInfo.processInfo.activeProcessorCount, memory: ProcessInfo.processInfo.physicalMemory), on: socket)
         try await withThrowingTaskGroup(of: Void.self) { group in
-            // Reading keeps the link's pings answered and sees it close.
+            // Reading keeps the link's pings answered, takes the control plane's requests and sees
+            // the link close.
             group.addTask {
-                while true { _ = try await socket.receive() }
+                while true {
+                    let message = try await self.receive(socket)
+                    if message.type == "request", let id = message.id {
+                        await self.answer(id, serve: message.serve, on: socket)
+                    }
+                }
             }
             group.addTask { try await self.reportSlots(on: socket) }
             _ = try await group.next()
+        }
+    }
+
+    /// Runs one of the control plane's requests through serve's handler and sends its answer lines
+    /// back with the request's ID, the last marked done. A request this Mac doesn't take from its
+    /// link gets serve's kind of error line instead.
+    private func answer(_ id: String, serve line: String?, on socket: URLSessionWebSocketTask) {
+        let lines: AsyncStream<String>
+        do {
+            let request = try ControlLink.checkRemote(line ?? "")
+            let (responder, stream) = try ResponderPipe.make()
+            lines = stream
+            onRequest(request, responder)
+        } catch {
+            let refusal = ServeResponse(error: error.localizedDescription).line
+            Task { try? await self.send(ControlLink.Message(type: "response", id: id, done: true, line: refusal), on: socket) }
+            return
+        }
+        Task {
+            var last: String?
+            for await answer in lines {
+                if let previous = last {
+                    try? await send(ControlLink.Message(type: "response", id: id, line: previous), on: socket)
+                }
+                last = answer
+            }
+            // The last line goes out marked done, so the control plane knows the request is over.
+            try? await send(ControlLink.Message(type: "response", id: id, done: true, line: last), on: socket)
         }
     }
 

@@ -326,3 +326,35 @@ enum UnixSocket {
         PaddockError("can't \(action): \(String(cString: strerror(errno)))")
     }
 }
+
+/// A Responder whose answers come out the other end of a socket pair: for a request that didn't
+/// arrive on a socket, such as one from the control plane, handed to a handler written for one.
+public enum ResponderPipe {
+    /// A responder to give the handler, and the lines it sends, ending once it finishes.
+    public static func make() throws -> (Responder, AsyncStream<String>) {
+        var ends: [Int32] = [0, 0]
+        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &ends) == 0 else {
+            throw PaddockError("can't make a socket pair: \(String(cString: strerror(errno)))")
+        }
+        UnixSocket.configure(ends[0], readTimeout: nil)
+        UnixSocket.configure(ends[1], readTimeout: nil)
+        let reader = ends[1]
+        let (lines, continuation) = AsyncStream<String>.makeStream()
+        Thread.detachNewThread {
+            var pending = Data()
+            while let chunk = UnixSocket.read(upTo: 64 * 1024, from: reader) {
+                pending.append(chunk)
+                while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
+                    continuation.yield(String(decoding: pending[pending.startIndex..<newline], as: UTF8.self))
+                    pending.removeSubrange(pending.startIndex...newline)
+                }
+            }
+            if !pending.isEmpty {
+                continuation.yield(String(decoding: pending, as: UTF8.self))
+            }
+            close(reader)
+            continuation.finish()
+        }
+        return (Responder(fd: ends[0]), lines)
+    }
+}

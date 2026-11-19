@@ -111,4 +111,41 @@ import Testing
         #expect(ControlLink.hostName(" \u{7}\n ") == "Mac")
         #expect(ControlLink.hostName(String(repeating: "x", count: 80)).count == 64)
     }
+
+    /// A Mac takes only VM operations from its link, never one naming a file on it.
+    @Test func takesOnlyVMOperationsThatNameNoFileFromTheLink() throws {
+        for line in [#"{"op":"acquire","allow":["github.com"]}"#, #"{"op":"exec","vm":"v","command":"ls"}"#,
+                     #"{"op":"release","vm":"v"}"#, #"{"op":"axtree","vm":"v"}"#, #"{"op":"input","vm":"v"}"#] {
+            #expect(try ControlLink.checkRemote(line) == line)
+        }
+        for line in [#"{"op":"task","vm":"v","bundle":"/etc/passwd","result":"/tmp/x"}"#,
+                     #"{"op":"screenshot","vm":"v","result":"/Users/zach/.ssh/authorized_keys"}"#,
+                     #"{"op":"exec","vm":"v","command":"ls","result":"/tmp/x"}"#, #"{"vm":"v"}"#, "not json"] {
+            #expect(throws: PaddockError.self) { try ControlLink.checkRemote(line) }
+        }
+    }
+}
+
+@Suite struct ResponderPipeTests {
+    @Test func passesWhatAHandlerSendsLineByLine() async throws {
+        let (responder, lines) = try ResponderPipe.make()
+        responder.send("first")
+        responder.send(lines: ["second", "third"])
+        responder.finish("last")
+        var got: [String] = []
+        for await line in lines { got.append(line) }
+        #expect(got == ["first", "second", "third", "last"])
+    }
+
+    @Test func endsWhenAHandlerDropsItsResponder() async throws {
+        var lines: AsyncStream<String>
+        do {
+            let (responder, stream) = try ResponderPipe.make()
+            responder.send("only")
+            lines = stream
+        }
+        var got: [String] = []
+        for await line in lines { got.append(line) }
+        #expect(got == ["only"])
+    }
 }

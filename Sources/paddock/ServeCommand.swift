@@ -133,7 +133,8 @@ final class WarmPool {
         if let control {
             controlClient = ControlClient(identity: control, image: name,
                                           slots: { [weak self] in self?.slotReports() ?? [] },
-                                          diskFree: { [weak self] in self?.freeDisk() })
+                                          diskFree: { [weak self] in self?.freeDisk() },
+                                          onRequest: { [weak self] line, responder in self?.handle(line, responder) })
             controlClient?.start()
         }
         await withTaskGroup(of: Void.self) { group in
