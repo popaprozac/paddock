@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -373,6 +375,35 @@ func TestRemovingAClientReleasesItsVMs(t *testing.T) {
 	}
 	if c.srv.state.handout("golden-slot1-abc") != nil || !host.sawRequest("release") {
 		t.Fatalf("the removed client's VM wasn't released: %v", host.all())
+	}
+}
+
+// A Mac whose serve stopped or restarted no longer has the VMs it handed out, so a report that
+// names a hand-out's VM in no slot forgets it. One that still names it, even as warm, as a report
+// sent just before the hand-out does, keeps it.
+func TestAHandOutIsForgottenWhenItsMacNoLongerReportsTheVM(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 2)
+	c.waitUntilOnline(t, "golden")
+	client, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	ask(t, conn, message{ID: "2", Op: "acquire"})
+	ctx := context.Background()
+	wsjson.Write(ctx, host.conn, message{Type: "capacity", Slots: []slot{
+		{Number: 1, State: "warm", VM: "golden-slot1-abc"}, {Number: 2, State: "assigned", VM: "golden-slot1-abc2"}}})
+	wsjson.Write(ctx, host.conn, message{Type: "capacity", Slots: []slot{
+		{Number: 1, State: "assigned", VM: "golden-slot1-abc"}, {Number: 2, State: "warm", VM: "golden-slot2-new"}}})
+	released := `"event":"released","host":"` + host.id + `","client":"` + client +
+		`","vm":"golden-slot1-abc2","reason":"the Mac no longer has it"`
+	eventually(t, "the VM the Mac no longer has to be released", func() bool {
+		audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+		return strings.Contains(string(audited), released)
+	})
+	if c.srv.state.handout("golden-slot1-abc2") != nil {
+		t.Fatal("the VM the Mac no longer has is still handed out")
+	}
+	if c.srv.state.handout("golden-slot1-abc") == nil {
+		t.Fatal("a VM the Mac still reports was forgotten")
 	}
 }
 

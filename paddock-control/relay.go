@@ -442,6 +442,22 @@ func (s *server) releaseAll(client string) {
 	}
 }
 
+// forgetMissing forgets host's hand-outs whose VM its report names in no slot: its serve stopped
+// or restarted, which deletes them. A VM still in a slot stays, even warm, as in a report sent
+// just before the hand-out; serve names every clone anew, so a restart leaves no old name.
+func (s *server) forgetMissing(host string, slots []slot) {
+	reported := map[string]bool{}
+	for _, slot := range slots {
+		reported[slot.VM] = true
+	}
+	for _, h := range s.state.handoutsWhere(func(h handout) bool { return h.Host == host && !reported[h.VM] }) {
+		if err := s.state.removeHandout(h.VM); err != nil {
+			log.Printf("can't save a release: %v", err)
+		}
+		s.audit.record(auditEvent{Event: "released", Client: h.Client, Host: host, VM: h.VM, Reason: "the Mac no longer has it"})
+	}
+}
+
 // releaseOn hands a VM back to its host and forgets its hand-out, recording why.
 func (s *server) releaseOn(client, host, vm, reason string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

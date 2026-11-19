@@ -88,15 +88,16 @@ apart.
   its own temporary files for screenshots and bundles.
 - **A VM is its acquirer's.** The control plane keeps which client holds each VM, in its state, so
   a restart keeps it. Only that client can use or release the VM; anyone else's request for it is
-  refused.
+  refused. A hand-out ends when its client releases the VM or is removed or logs out, or when the
+  VM's Mac reports its slots without it, as after its `serve` stops or restarts.
 - **Removal is immediate.** `remove-host` deletes the Mac's key and closes its link; its next link
   is refused. `remove-client` and `paddock logout` do the same for a client, and release its VMs.
 - **State.** Everything is in `~/.paddock/control`, or `-state`, which only the control plane's user
   can read: `ca.key` and `ca.crt`; `state.json`, with each Mac's and client's public key, the
-  hashes of unused tokens and which client holds each VM; `audit.log`, a JSON line for each token
-  made, Mac or client enrolled, refused or removed, link opened, refused or closed, VM handed out
-  or released, and request, with its client, VM and operation, with no secrets in it; and
-  `admin.sock`.
+  hashes of unused tokens and which client holds each VM, until the VM's Mac stops reporting it;
+  `audit.log`, a JSON line for each token made, Mac or client enrolled, refused or removed, link
+  opened, refused or closed, VM handed out or released, and request, with its client, VM and
+  operation, with no secrets in it; and `admin.sock`.
 - **Everyone logged in sees the pool.** Every client sees every Mac, its slots, what each Mac and
   VM uses, and which client holds each VM, in `paddock hosts` and `paddock top`. The numbers are
   measured on each Mac, never asked of a guest.
