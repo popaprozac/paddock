@@ -64,7 +64,8 @@ With a control plane, log in and run `paddock task` on any Mac: it runs on the p
 runs a command in a fresh VM on another Mac, on the current repo's
 last commit, and brings what it commits back as a local branch. It needs only `git` and `ssh` on
 the Mac you run it from. The other Mac needs Remote Login on for your account, `paddock serve`
-running, and the Command Line Tools in its golden image for `git`.
+running, and the Command Line Tools in its golden image for `git` (see
+[the ci template](golden-images.md#build-one-from-an-image-file)).
 
 ```bash
 scripts/run-on-studio.sh you@studio.local -- 'swift test'

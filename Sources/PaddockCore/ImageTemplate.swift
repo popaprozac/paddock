@@ -29,7 +29,7 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             # paddock write both from macOS Recovery, with SIP on; managed leaves them to you.
             grants: recovery
 
-            \(Self.steps)
+            \(Self.steps())
 
             """
         case .ci:
@@ -54,7 +54,7 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             # writes both from macOS Recovery, with SIP on.
             grants: recovery
 
-            \(Self.steps)
+            \(Self.steps(installingCommandLineTools: true))
 
             """
         case .managed:
@@ -83,7 +83,7 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             # them. MDM profiles don't reach clones, since enrollment doesn't survive cloning.
             grants: managed
 
-            \(Self.steps)
+            \(Self.steps())
             # A monitoring agent that reports to its own server, such as osquery or fleetd, goes
             # in as a step; see docs/golden-images.md on agents in cloned images.
 
@@ -97,15 +97,41 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
         # license: accept
         """
 
-    private static let steps = """
-        # A host folder, read-only in the guest at /Volumes/My Shared Files, and steps that run
-        # in order after setup, each in zsh with set -e, as the account or as root.
-        # share: installers
-        # steps:
-        #   - name: Install a package from the share
-        #     as: root
-        #     run: installer -pkg "/Volumes/My Shared Files/tool.pkg" -target /
-        #   - name: Hide the Dock
-        #     run: defaults write com.apple.dock autohide -bool true
-        """
+    /// The Command Line Tools, for git: Apple's on-demand install, as Homebrew's installer does it.
+    private static let commandLineTools = [
+        "# git and the compilers, which paddock task and most jobs need, from Apple's software",
+        "# update servers. Installing them accepts Apple's Xcode and SDK license for this image.",
+        "- name: Install the Command Line Tools",
+        "  as: root",
+        "  run: |",
+        "    touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress",
+        #"    label=$(softwareupdate --list 2>&1 | sed -n 's/^\* Label: \(Command Line Tools.*\)$/\1/p' | sort -V | tail -n 1)"#,
+        #"    if [ -z "$label" ]; then echo "softwareupdate lists no Command Line Tools"; exit 1; fi"#,
+        #"    softwareupdate --install "$label""#,
+        "    rm /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress",
+        "- name: Check that git works for the account",
+        "  run: xcode-select -p && git --version",
+    ]
+
+    private static let examples = [
+        "- name: Install a package from the share",
+        "  as: root",
+        #"  run: installer -pkg "/Volumes/My Shared Files/tool.pkg" -target /"#,
+        "- name: Hide the Dock",
+        "  run: defaults write com.apple.dock autohide -bool true",
+    ]
+
+    /// A shared folder and steps, commented out, with the Command Line Tools' steps in force or not.
+    private static func steps(installingCommandLineTools: Bool = false) -> String {
+        let header = [
+            "# A host folder, read-only in the guest at /Volumes/My Shared Files, and steps that run",
+            "# in order after setup, each in zsh with set -e, as the account or as root.",
+            "# share: installers",
+        ]
+        guard installingCommandLineTools else {
+            return (header + ["# steps:"] + (commandLineTools + examples).map { "#   " + $0 }).joined(separator: "\n")
+        }
+        return (header + ["steps:"] + commandLineTools.map { "  " + $0 } + examples.map { "  # " + $0 })
+            .joined(separator: "\n")
+    }
 }
