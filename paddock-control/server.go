@@ -329,7 +329,10 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		switch m.Type {
 		case "response":
 			l.deliver(m)
-		case "hello", "capacity":
+		case "capacity":
+			s.forgetMissing(host, m.Slots)
+			s.poolChanged()
+		case "hello":
 			s.poolChanged()
 		}
 	}
