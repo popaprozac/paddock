@@ -8,8 +8,8 @@ public enum GuestSupport {
     /// The oldest macOS `build` sets up offline from Recovery, as it does every release below
     /// `provisioning`: the latest three releases, with 27.
     public static let offline = 15
-    /// The versions `build` has set up end to end, then `grant` and `serve`, as the README's
-    /// table lists them. Apple changes first-boot setup between point releases, so another version
+    /// The versions `build` has set up end to end, then `grant` and `serve`, as the table in
+    /// docs/golden-images.md lists them. Apple changes first-boot setup between point releases, so another version
     /// is tried but not promised.
     public static let tested: Set<String> = ["15.6.1", "26.6.2", "27.2.1"]
 
@@ -38,11 +38,11 @@ public enum GuestSupport {
         }
         guard major >= offline else {
             throw PaddockError("paddock build sets up macOS \(offline) and later, not \(version); set this one up "
-                + "by hand in 'paddock run' instead (see the README)")
+                + "by hand in 'paddock run' instead (see docs/golden-images.md)")
         }
         guard acceptsLicense else {
             throw PaddockError("building macOS \(version) needs license: accept, since paddock sets it up from Recovery "
-                + "and skips Setup Assistant, license included; or set it up by hand in 'paddock run' (see the README)")
+                + "and skips Setup Assistant, license included; or set it up by hand in 'paddock run' (see docs/golden-images.md)")
         }
         return .offline
     }
