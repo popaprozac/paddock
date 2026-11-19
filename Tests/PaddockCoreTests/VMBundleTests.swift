@@ -71,3 +71,21 @@ import Testing
         #expect(throws: PaddockError.self) { try bundle.readConfig() }
     }
 }
+
+@Suite struct SlotBundleNameTests {
+    @Test func knowsServesSlotBundlesFromVMsSomeoneNamed() {
+        #expect(BundleName.isSlotBundle("golden-slot1-d07d90-a903d8", of: "golden"))
+        #expect(BundleName.isSlotBundle("golden-slot1-d07d90-saved", of: "golden"))
+        #expect(BundleName.isSlotBundle("golden-slot12-d07d90-a903d8", of: "golden"))
+        #expect(BundleName.isSlotBundle("ci-clt-slot1-022c52-a79a54", of: "ci-clt"))
+        #expect(!BundleName.isSlotBundle("golden", of: "golden"))
+        #expect(!BundleName.isSlotBundle("golden-slot1-mytest", of: "golden"))
+        #expect(!BundleName.isSlotBundle("golden-slot1-d07d90", of: "golden"))
+        #expect(!BundleName.isSlotBundle("golden-slot1-D07D90-saved", of: "golden"))
+        #expect(!BundleName.isSlotBundle("golden-slot0-d07d90-saved", of: "golden"))
+        #expect(!BundleName.isSlotBundle("golden-slot01-d07d90-saved", of: "golden"))
+        #expect(!BundleName.isSlotBundle("golden-slot1-d07d90-a903d8-copy", of: "golden"))
+        #expect(!BundleName.isSlotBundle("ci-clt-slot1-022c52-a79a54", of: "golden"))
+        #expect(!BundleName.isSlotBundle("golden2-slot1-d07d90-saved", of: "golden"))
+    }
+}

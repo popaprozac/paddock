@@ -55,4 +55,16 @@ public enum BundleName {
                 "invalid VM name '\(name)': use up to 64 letters, digits, '-', '_' or '.', not starting with '.'")
         }
     }
+
+    /// Whether `name` is one serve gives its slots' bundles for `source`: "<source>-slot<n>-<id>"
+    /// and then "-saved" or "-<id>", each id 6 lowercase hex digits, so what a killed serve left
+    /// can be told from a VM someone named.
+    public static func isSlotBundle(_ name: String, of source: String) -> Bool {
+        let prefix = "\(source.prefix(40))-slot"
+        guard name.hasPrefix(prefix) else { return false }
+        let parts = name.dropFirst(prefix.count).split(separator: "-", omittingEmptySubsequences: false)
+        let isID = { (part: Substring) in part.count == 6 && part.allSatisfy { "0123456789abcdef".contains($0) } }
+        guard parts.count == 3, let number = Int(parts[0]), number > 0, String(number) == parts[0] else { return false }
+        return isID(parts[1]) && (parts[2] == "saved" || isID(parts[2]))
+    }
 }

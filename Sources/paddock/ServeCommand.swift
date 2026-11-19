@@ -140,6 +140,23 @@ final class WarmPool {
         image = source
     }
 
+    /// Deletes the slot bundles of `source` that a serve stopped without cleaning up left, as
+    /// Force Quit does. Only one serve listens in a paddock home and this one listens now, so none
+    /// of them is a slot's; one that something else holds, such as paddock run, is left alone.
+    private func deleteLeftoverSlots(of source: String) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: home.vmsDirectory.path)) ?? []
+        for name in names.sorted() where BundleName.isSlotBundle(name, of: source) {
+            guard let bundle = try? home.bundle(named: name), let lock = try? BundleLock(bundle: bundle) else { continue }
+            do {
+                try FileManager.default.removeItem(at: bundle.url)
+                print("Deleted '\(name)', which a serve stopped without cleaning up left behind")
+            } catch {
+                print("  warning: can't delete '\(name)', left by an earlier serve: \(error.localizedDescription)")
+            }
+            withExtendedLifetime(lock) {}
+        }
+    }
+
     /// Samples this Mac's usage and its VMs' every 2 s, off the main actor, for `status`.
     private func sampleUsage() {
         let sampler = sampler, folder = home.vmsDirectory
@@ -192,6 +209,7 @@ final class WarmPool {
             MainActor.assumeIsolated { self?.handle(line, responder) }
         }
         interrupt = onInterrupt { [weak self] in self?.shutDown() }
+        deleteLeftoverSlots(of: name)
         sampleUsage()
         if let control {
             controlClient = ControlClient(identity: control, image: name,
