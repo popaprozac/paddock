@@ -46,6 +46,8 @@ none free, it waits its turn, first come first served, and says so. `--image` na
 image when the pool serves more than one. `exec`, `task`, `screenshot`, `axtree`, the input
 commands, `release` and `paddock mcp` then reach that VM through the control plane, whichever Mac
 it runs on. Screenshots and task bundles travel in pieces of 256 KB; a bundle can be up to 1 GB.
+If a client leaves before its bundle is all up, or sends more than 1 GB, the control plane tells
+the Mac to drop what it has so far.
 A Mac can serve the pool and be logged in to it at once: its host link and its login are kept
 apart.
 

@@ -409,26 +409,32 @@ func (s *server) relayTask(ctx context.Context, client string, l *clientLink, re
 	uploaded := make(chan error, 1)
 	go func() {
 		total := 0
-		for piece := range uploads {
-			total += len(piece.Data)
-			if total > maxTransfer {
-				uploaded <- fmt.Errorf("the bundle is over %d GB, the most a task takes", maxTransfer>>30)
-				return
-			}
-			if err := f.upload(ctx, piece.Data, piece.Done); err != nil {
-				uploaded <- err
+		for {
+			select {
+			case piece, open := <-uploads:
+				if !open { // closed after the last piece
+					uploaded <- nil
+					return
+				}
+				total += len(piece.Data)
+				if total > maxTransfer {
+					uploaded <- fmt.Errorf("the bundle is over %d GB, the most a task takes", maxTransfer>>30)
+					return
+				}
+				if err := f.upload(ctx, piece.Data, piece.Done); err != nil {
+					uploaded <- err
+					return
+				}
+			case <-ctx.Done(): // the client left mid-upload: nothing closes uploads then
+				uploaded <- ctx.Err()
 				return
 			}
 		}
-		uploaded <- nil
 	}()
-	select {
-	case err := <-uploaded:
-		if err != nil {
-			fail(err)
-			return
-		}
-	case <-ctx.Done():
+	if err := <-uploaded; err != nil {
+		// The Mac holds part of the bundle: have it drop that, not wait for the rest.
+		_ = f.link.write(message{Type: "cancel", ID: f.id})
+		fail(err)
 		return
 	}
 	pass(ctx, l, request.ID, f.answers, func(message) {})

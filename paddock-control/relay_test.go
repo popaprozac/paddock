@@ -15,13 +15,14 @@ import (
 
 // fakeHost is a linked host that answers forwarded requests the way serve does.
 type fakeHost struct {
-	id       string
-	conn     *websocket.Conn
-	mu       sync.Mutex
-	requests []string
-	acquired int
-	busy     bool          // answers acquires as a Mac with no warm VM free does
-	hold     chan struct{} // if set, acquires are answered once it's closed
+	id        string
+	conn      *websocket.Conn
+	mu        sync.Mutex
+	requests  []string
+	acquired  int
+	busy      bool          // answers acquires as a Mac with no warm VM free does
+	hold      chan struct{} // if set, acquires are answered once it's closed
+	cancelled []string      // the tasks the control plane told it to drop, by request ID
 }
 
 // startFakeHost enrolls and links a host serving image with warm warm slots, and answers
@@ -88,10 +89,18 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 			case "task":
 				// The bundle arrives as uploads after the request; the result goes back as data.
 				var bundle []byte
+				cancelled := false
 				for {
 					var piece message
 					if err := wsjson.Read(ctx, conn, &piece); err != nil {
 						return
+					}
+					if piece.Type == "cancel" && piece.ID == m.ID {
+						h.mu.Lock()
+						h.cancelled = append(h.cancelled, m.ID)
+						h.mu.Unlock()
+						cancelled = true
+						break
 					}
 					if piece.Type != "upload" || piece.ID != m.ID {
 						continue
@@ -100,6 +109,9 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 					if piece.Done {
 						break
 					}
+				}
+				if cancelled {
+					continue
 				}
 				reply(`{"output":"got `+string(bundle)+`"}`, false)
 				wsjson.Write(ctx, conn, message{Type: "response", ID: m.ID, Data: []byte("NEW-COMMITS")})
@@ -472,4 +484,25 @@ func TestUsageReachesClientsWithWhoHoldsEachVM(t *testing.T) {
 	if !busy {
 		t.Fatal("a usage report cleared the host's busy mark")
 	}
+}
+
+// A client that leaves partway through a task's upload leaves the Mac holding part of a bundle:
+// the control plane tells the Mac to drop it rather than wait for the rest.
+func TestATaskWhoseClientLeavesMidUploadIsCancelledOnTheMac(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	wsjson.Write(ctx, conn, message{Type: "request", ID: "2", Op: "task", Serve: `{"op":"task","vm":"golden-slot1-abc","command":"true"}`})
+	wsjson.Write(ctx, conn, message{Type: "upload", ID: "2", Data: []byte("PART")})
+	eventually(t, "the host to get the task", func() bool { return host.sawRequest("task") })
+	conn.Close(websocket.StatusNormalClosure, "")
+	eventually(t, "the host to be told to drop the upload", func() bool {
+		host.mu.Lock()
+		defer host.mu.Unlock()
+		return len(host.cancelled) == 1
+	})
 }

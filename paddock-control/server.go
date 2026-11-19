@@ -40,7 +40,7 @@ const (
 // message is every message on a host's or client's link, as one JSON object; which fields it has
 // depends on its type.
 type message struct {
-	Type      string    `json:"type"`                // challenge, auth, welcome, hello, capacity, request, response
+	Type      string    `json:"type"`                // challenge, auth, welcome, hello, capacity, usage, request, upload, cancel, response
 	Nonce     []byte    `json:"nonce,omitempty"`     // challenge: 32 random bytes
 	Host      string    `json:"host,omitempty"`      // a host's auth and welcome: its ID
 	Client    string    `json:"client,omitempty"`    // a client's auth and welcome: its ID
