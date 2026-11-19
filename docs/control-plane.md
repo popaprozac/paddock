@@ -1,7 +1,8 @@
 # A pool of Macs: the control plane
 
 `paddock-control` is the one place that knows every Mac in a pool. Each Mac's `paddock serve`
-links out to it and reports its slots; nothing connects in to a Mac, so a Mac needs no open port.
+links out to it and reports its slots, and every 2 s what it and its VMs use; nothing connects in to
+a Mac, so a Mac needs no open port.
 People's CLIs and agents log in to it, and from then on `acquire` takes a warm VM from whichever
 Mac has one, and the commands that take a VM reach it through the control plane.
 
@@ -13,6 +14,7 @@ paddock serve golden --control https://studio.local:7443                  # on t
 paddock-control login-token                 # back where it runs: a one-use token for a person
 paddock login https://studio.local:7443 --token <token>                   # on their Mac
 paddock hosts                               # there: every Mac and its slots
+paddock top                                 # there: every Mac and VM, live
 paddock acquire                             # a warm VM from any Mac in the pool
 ```
 
@@ -22,7 +24,7 @@ paddock acquire                             # a warm VM from any Mac in the pool
 | --- | --- |
 | `paddock-control run [-listen addr] [-name name] [-state folder]` | Runs the control plane on HTTPS, port 7443 on every address by default, and prints the URLs hosts can use. `-listen` picks one address and port; `-name` adds a name or address the machine is reached by that it can't find itself, such as a MagicDNS name or a load balancer's, and repeats. |
 | `paddock-control join-token [-ttl 1h]` | Makes a token one Mac can join with, for an hour by default and 24 hours at most, and prints the `serve` command to run on that Mac. |
-| `paddock-control hosts [-json]` | Lists every Mac that joined: online or not, its image, its slots (warm, assigned, preparing or empty), macOS and paddock versions; with `-json`, also its address, cores, memory and free disk. |
+| `paddock-control hosts [-json]` | Lists every Mac that joined: online or not, its image, its slots (warm, assigned, preparing or empty), macOS and paddock versions; with `-json`, also its address, cores, memory and free disk, what it and each VM use now, and the client holding each VM. |
 | `paddock-control remove-host <ID or name>` | Removes a Mac: its link closes at once, and it can't link again unless it joins with a new token. |
 | `paddock-control login-token [-ttl 1h]` | Makes a token one person's CLI or one agent can log in with, for an hour by default and 24 hours at most, and prints the `paddock login` command to run. |
 | `paddock-control clients [-json]` | Lists every CLI or agent that logged in: its open links, when it was last seen and when it logged in. |
@@ -30,6 +32,7 @@ paddock acquire                             # a warm VM from any Mac in the pool
 | `paddock login <url> --token <token>` | On a person's Mac: logs in to the control plane, so this Mac's VM commands use the pool. Logging in again replaces the login. |
 | `paddock logout` | The control plane forgets this client and releases its VMs, and this Mac forgets the login. |
 | `paddock hosts [--json]` | Lists the pool's Macs, as `paddock-control hosts` does, from any logged-in Mac. |
+| `paddock top [--json]` | Shows every Mac in the pool and each slot's VM, who holds it and what it uses, redrawn every 2 s (see [paddock top](commands.md#watching-with-paddock-top)). |
 
 The admin commands reach the running control plane over a Unix socket in its state folder, so
 they run on the machine it runs on, as its user. On a Mac, `--control` on `serve` takes any URL
@@ -94,6 +97,9 @@ apart.
   made, Mac or client enrolled, refused or removed, link opened, refused or closed, VM handed out
   or released, and request, with its client, VM and operation, with no secrets in it; and
   `admin.sock`.
+- **Everyone logged in sees the pool.** Every client sees every Mac, its slots, what each Mac and
+  VM uses, and which client holds each VM, in `paddock hosts` and `paddock top`. The numbers are
+  measured on each Mac, never asked of a guest.
 - **Your network decides who can reach it.** Run it on the LAN, Tailscale, a VPN or a private
   subnet; don't forward its port to the internet. `-listen` keeps it to one address.
 

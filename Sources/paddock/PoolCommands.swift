@@ -66,7 +66,7 @@ struct Hosts: AsyncParsableCommand {
         commandName: "hosts",
         abstract: "List the Macs in the logged-in control plane's pool, and what each reports.")
 
-    @Flag(help: "Print JSON, with each Mac's address, cores, memory and free disk too.")
+    @Flag(help: "Print JSON, with each Mac's address, cores, memory, free disk and what it and its VMs use now too.")
     var json = false
 
     func run() async throws {
