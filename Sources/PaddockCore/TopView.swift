@@ -20,16 +20,19 @@ public struct MacStatus: Codable, Equatable, Sendable {
 
 /// `paddock top`'s screen, as lines: a summary, then a row per Mac, then a row per slot.
 public enum TopView {
-    public static func lines(of macs: [MacStatus], from source: String, width: Int) -> [String] {
+    public static func lines(of macs: [MacStatus], from source: String, waiting: Int? = nil, width: Int) -> [String] {
         let slots = macs.filter(\.online).flatMap(\.slots)
-        let counts = ["warm", "assigned", "preparing", "empty"].compactMap { state -> String? in
+        var counts = ["warm", "assigned", "preparing", "empty"].compactMap { state -> String? in
             let count = slots.filter { $0.state == state }.count
             return count == 0 ? nil : "\(count) \(state)"
+        }
+        if let waiting, waiting > 0 {
+            counts.append("\(waiting) waiting")
         }
         let summary = (["paddock top", source, macs.count == 1 ? "1 Mac" : "\(macs.count) Macs"] + counts)
             .joined(separator: " · ")
         let macRows = [["MAC", "CPU", "MEMORY", "PRESSURE", "DISK FREE", "THERMAL"]] + macs.map(row)
-        var slotRows = [["MAC", "SLOT", "STATE", "VM", "FOR", "CPU", "MEMORY"]]
+        var slotRows = [["MAC", "SLOT", "STATE", "VM", "HELD BY", "FOR", "CPU", "MEMORY"]]
         for mac in macs where mac.online {
             slotRows += mac.slots.map { row($0, on: mac) }
         }
@@ -49,7 +52,7 @@ public enum TopView {
         let vm: String = slot.vm ?? slot.reason ?? "-"
         let since: String = slot.age.map(age) ?? "-"
         let memory: String = slot.usage.map { ByteFormat.memory($0.memory) } ?? "-"
-        return [mac.name, String(slot.number), slot.state, vm, since, percent(slot.usage?.cpu), memory]
+        return [mac.name, String(slot.number), slot.state, vm, slot.holder ?? "-", since, percent(slot.usage?.cpu), memory]
     }
 
     static func percent(_ value: Double?) -> String {

@@ -40,37 +40,58 @@ const (
 // message is every message on a host's or client's link, as one JSON object; which fields it has
 // depends on its type.
 type message struct {
-	Type      string `json:"type"`                // challenge, auth, welcome, hello, capacity, request, response
-	Nonce     []byte `json:"nonce,omitempty"`     // challenge: 32 random bytes
-	Host      string `json:"host,omitempty"`      // a host's auth and welcome: its ID
-	Client    string `json:"client,omitempty"`    // a client's auth and welcome: its ID
-	Signature []byte `json:"signature,omitempty"` // auth: ECDSA over SHA-256 of the context + nonce, DER
-	Name      string `json:"name,omitempty"`      // hello: the host's name for people
-	Version   string `json:"version,omitempty"`   // hello: paddock's version on the host
-	MacOS     string `json:"macos,omitempty"`     // hello: the host's macOS version
-	Image     string `json:"image,omitempty"`     // hello: the golden image serve hands out clones of
-	CPUs      int    `json:"cpus,omitempty"`      // hello: the host's cores
-	Memory    uint64 `json:"memory,omitempty"`    // hello: the host's memory, in bytes
-	DiskFree  uint64 `json:"diskFree,omitempty"`  // capacity: free space for VMs, in bytes
-	Slots     []slot `json:"slots,omitempty"`     // capacity: every slot on the host
+	Type      string    `json:"type"`                // challenge, auth, welcome, hello, capacity, request, response
+	Nonce     []byte    `json:"nonce,omitempty"`     // challenge: 32 random bytes
+	Host      string    `json:"host,omitempty"`      // a host's auth and welcome: its ID
+	Client    string    `json:"client,omitempty"`    // a client's auth and welcome: its ID
+	Signature []byte    `json:"signature,omitempty"` // auth: ECDSA over SHA-256 of the context + nonce, DER
+	Name      string    `json:"name,omitempty"`      // hello: the host's name for people
+	Version   string    `json:"version,omitempty"`   // hello: paddock's version on the host
+	MacOS     string    `json:"macos,omitempty"`     // hello: the host's macOS version
+	Image     string    `json:"image,omitempty"`     // hello: the golden image serve hands out clones of
+	CPUs      int       `json:"cpus,omitempty"`      // hello: the host's cores
+	Memory    uint64    `json:"memory,omitempty"`    // hello: the host's memory, in bytes
+	DiskFree  uint64    `json:"diskFree,omitempty"`  // capacity: free space for VMs, in bytes
+	Slots     []slot    `json:"slots,omitempty"`     // capacity and usage: every slot on the host
+	Usage     *macUsage `json:"usage,omitempty"`     // usage: what the host uses now, sent every 2 s
 
-	ID    string       `json:"id,omitempty"`    // request and response: pairs them on one link
-	Serve string       `json:"serve,omitempty"` // request to a host: one of serve's request lines
-	Line  string       `json:"line,omitempty"`  // response from a host: one of serve's answer lines
-	Data  []byte       `json:"data,omitempty"`  // response: a piece of a file, such as a screenshot, in order
-	Note  string       `json:"note,omitempty"`  // response: news for the person waiting, such as no free VM
-	Op    string       `json:"op,omitempty"`    // request: hosts or logout
-	Hosts []hostStatus `json:"hosts,omitempty"` // response to hosts
-	Error string       `json:"error,omitempty"` // response: why the request failed
-	Done  bool         `json:"done,omitempty"`  // response: the request's last answer
+	ID      string       `json:"id,omitempty"`      // request and response: pairs them on one link
+	Serve   string       `json:"serve,omitempty"`   // request to a host: one of serve's request lines
+	Line    string       `json:"line,omitempty"`    // response from a host: one of serve's answer lines
+	Data    []byte       `json:"data,omitempty"`    // response: a piece of a file, such as a screenshot, in order
+	Note    string       `json:"note,omitempty"`    // response: news for the person waiting, such as no free VM
+	Op      string       `json:"op,omitempty"`      // request: hosts or logout
+	Hosts   []hostStatus `json:"hosts,omitempty"`   // response to hosts
+	Waiting *int         `json:"waiting,omitempty"` // response to hosts: acquires waiting for a warm VM
+	Error   string       `json:"error,omitempty"`   // response: why the request failed
+	Done    bool         `json:"done,omitempty"`    // response: the request's last answer
 }
 
 // slot is one of serve's slots as its host reports it.
 type slot struct {
-	Number int    `json:"number"`
-	State  string `json:"state"`            // warm, assigned, preparing or empty
-	VM     string `json:"vm,omitempty"`     // the VM in it, if any
-	Reason string `json:"reason,omitempty"` // empty: why
+	Number int      `json:"number"`
+	State  string   `json:"state"`            // warm, assigned, preparing or empty
+	VM     string   `json:"vm,omitempty"`     // the VM in it, if any
+	Reason string   `json:"reason,omitempty"` // empty: why
+	Age    int      `json:"age,omitempty"`    // usage: seconds the slot has been in this state
+	Usage  *vmUsage `json:"usage,omitempty"`  // usage: what its VM costs the host
+	Holder string   `json:"holder,omitempty"` // status: the client the control plane handed its VM to
+}
+
+// macUsage is what a host uses, measured on the host, as serve reports it every 2 s.
+type macUsage struct {
+	CPU         *float64 `json:"cpu,omitempty"` // percent of the whole Mac
+	MemoryUsed  uint64   `json:"memoryUsed"`
+	MemoryTotal uint64   `json:"memoryTotal"`
+	Pressure    string   `json:"pressure"` // normal, warn or critical
+	Thermal     string   `json:"thermal"`  // nominal, fair, serious or critical
+	DiskFree    *uint64  `json:"diskFree,omitempty"`
+}
+
+// vmUsage is what one VM's process costs its host.
+type vmUsage struct {
+	CPU    *float64 `json:"cpu,omitempty"` // percent of one core
+	Memory uint64   `json:"memory"`        // memory footprint, in bytes
 }
 
 // link is an authenticated host's open connection.
@@ -87,6 +108,8 @@ type link struct {
 	pending   map[string]*pendingRequest // requests forwarded to the host, by ID, until done
 	closed    bool
 	busy      bool // answered an acquire busy: offered none until its next report
+	usage     *macUsage
+	slotUsage []slot // the slots as the last usage report had them, for their age and usage
 }
 
 // server is the control plane: enrollment and host links over HTTPS.
@@ -298,6 +321,9 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 			l.hello = m
 		case "capacity":
 			l.slots, l.diskFree, l.busy = m.Slots, m.DiskFree, false
+		case "usage":
+			// Usage changes every report, so it never moves the queue: only capacity does.
+			l.usage, l.slotUsage = m.Usage, m.Slots
 		}
 		l.mu.Unlock()
 		switch m.Type {
@@ -436,6 +462,7 @@ type hostStatus struct {
 	Memory    uint64    `json:"memory,omitempty"`
 	DiskFree  uint64    `json:"diskFree,omitempty"`
 	Slots     []slot    `json:"slots,omitempty"`
+	Usage     *macUsage `json:"usage,omitempty"`
 }
 
 func (s *server) status() []hostStatus {
@@ -448,9 +475,32 @@ func (s *server) status() []hostStatus {
 		if l != nil {
 			l.mu.Lock()
 			status.Online, status.Remote, status.Connected, status.LastSeen = true, l.remote, l.connected, l.lastSeen
-			status.Version, status.MacOS, status.Image, status.Slots = l.hello.Version, l.hello.MacOS, l.hello.Image, l.slots
-			status.CPUs, status.Memory, status.DiskFree = l.hello.CPUs, l.hello.Memory, l.diskFree
+			status.Version, status.MacOS, status.Image = l.hello.Version, l.hello.MacOS, l.hello.Image
+			status.CPUs, status.Memory, status.DiskFree, status.Usage = l.hello.CPUs, l.hello.Memory, l.diskFree, l.usage
+			// A copy: the link's slots change in place when the control plane hands one out.
+			status.Slots = append([]slot(nil), l.slots...)
+			for i, slot := range status.Slots {
+				for _, used := range l.slotUsage {
+					if used.Number != slot.Number || used.VM != slot.VM {
+						continue
+					}
+					status.Slots[i].Usage = used.Usage
+					if used.State == slot.State { // just handed out, the age is the old state's
+						status.Slots[i].Age = used.Age
+					}
+				}
+			}
 			l.mu.Unlock()
+			for i, slot := range status.Slots {
+				if slot.VM == "" {
+					continue
+				}
+				if h := s.state.handout(slot.VM); h != nil {
+					if member := s.state.member(clientKind, h.Client); member != nil {
+						status.Slots[i].Holder = member.Name
+					}
+				}
+			}
 		}
 		list = append(list, status)
 	}

@@ -183,6 +183,7 @@ final class WarmPool {
             controlClient = ControlClient(identity: control, image: name,
                                           slots: { [weak self] in self?.slotReports() ?? [] },
                                           diskFree: { [weak self] in self?.freeDisk() },
+                                          status: { [weak self] in self?.status() },
                                           onRequest: { [weak self] line, responder in self?.handle(line, responder) })
             controlClient?.start()
         }

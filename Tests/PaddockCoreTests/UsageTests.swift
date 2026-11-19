@@ -45,16 +45,18 @@ import Testing
         var assigned = ControlLink.SlotReport(number: 1, emptyReason: nil, assigned: true, warm: true, vm: "golden-slot1-a")
         assigned.age = 252
         assigned.usage = VMUsage(cpu: 112, memory: 13_958_643_712)
+        assigned.holder = "zach on Studio"
         let preparing = ControlLink.SlotReport(number: 2, emptyReason: nil, assigned: false, warm: false, vm: "golden-slot2-b")
         let studio = MacStatus(name: "Studio", image: "golden", online: true, usage: usage, slots: [assigned, preparing])
         let laptop = MacStatus(name: "Laptop", image: "golden", online: false, usage: nil, slots: [])
-        let lines = TopView.lines(of: [studio, laptop], from: "the pool", width: 200)
-        #expect(lines[0] == "paddock top · the pool · 2 Macs · 1 assigned · 1 preparing")
+        let lines = TopView.lines(of: [studio, laptop], from: "the pool", waiting: 2, width: 200)
+        #expect(lines[0] == "paddock top · the pool · 2 Macs · 1 assigned · 1 preparing · 2 waiting")
         #expect(lines[2].hasPrefix("MAC "))
         #expect(lines[3] == "Studio  23%      21.0/36.0 GB  normal    1.2 TB     nominal")
         #expect(lines[4] == "Laptop  offline  -             -         -          -")
-        #expect(lines[7] == "Studio  1     assigned   golden-slot1-a  4m 12s  112%  13.0 GB")
-        #expect(lines[8] == "Studio  2     preparing  golden-slot2-b  -       -     -")
+        #expect(lines[7] == "Studio  1     assigned   golden-slot1-a  zach on Studio  4m 12s  112%  13.0 GB")
+        #expect(lines[8] == "Studio  2     preparing  golden-slot2-b  -               -       -     -")
+        #expect(TopView.lines(of: [studio], from: "x", waiting: 0, width: 200)[0] == "paddock top · x · 1 Mac · 1 assigned · 1 preparing")
         #expect(TopView.lines(of: [studio], from: "x", width: 30).allSatisfy { $0.count <= 30 })
     }
 
