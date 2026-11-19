@@ -32,4 +32,9 @@
   user's password. With no screen saver and no sleep nothing sets it off, but anything that
   starts the screen saver or locks the screen, such as Ctrl-Cmd-Q, locks the session until the
   password is typed. Release the VM to get a fresh one.
+- `serve` needs a login session: its slots restore VMs from saved state, which macOS encrypts
+  with a key in the user's keychain, and screenshots and input need the window server. It can't
+  run as a LaunchDaemon, and after a restart nothing runs until someone logs in, so a Mac with
+  FileVault, which turns off automatic login, needs a person after every restart (see
+  [Setting up Macs](hosts.md)).
 - Apple's macOS license permits macOS VMs for development and testing.
