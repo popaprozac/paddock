@@ -74,8 +74,11 @@ public enum RestoreImages {
                         minimumCPUCount: requirements.minimumSupportedCPUCount,
                         minimumMemorySize: requirements.minimumSupportedMemorySize))
                 case .failure(let error):
+                    // paddock's own downloads only appear once complete, so this is usually a copy cut short.
                     continuation.resume(throwing: PaddockError(
-                        "\(url.lastPathComponent) is not a usable macOS restore image: \(error.localizedDescription)"))
+                        "\(url.path) is not a usable macOS restore image (\(error.localizedDescription)). A copy or "
+                            + "download that stopped early leaves a file like this: delete it, and paddock install "
+                            + "downloads the image again"))
                 }
             }
         }
