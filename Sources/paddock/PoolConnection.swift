@@ -97,6 +97,8 @@ final class PoolConnection: @unchecked Sendable {
         }
         message.type = "request"
         let id = message.id ?? ""
+        // A reader that stops early leaves the link to the other requests: its answers are dropped.
+        continuation.onTermination = { [weak self] _ in self?.forget(id) }
         Task { [self] in
             do {
                 try await send(message)
@@ -134,6 +136,15 @@ final class PoolConnection: @unchecked Sendable {
     func close() {
         socket.cancel(with: .normalClosure, reason: nil)
         session.finishTasksAndInvalidate()
+    }
+
+    /// Whether the link still takes requests: it hasn't ended, from either side.
+    var isOpen: Bool {
+        lock.withLock { ended == nil }
+    }
+
+    private func forget(_ id: String) {
+        _ = lock.withLock { waiting.removeValue(forKey: id) }
     }
 
     private func readAll() async {

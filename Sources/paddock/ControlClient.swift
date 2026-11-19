@@ -306,6 +306,8 @@ final class ControlClient {
                         await self.answer(id, serve: message.serve, on: socket)
                     } else if message.type == "upload" {
                         await self.receiveUpload(message, on: socket)
+                    } else if message.type == "cancel", let id = message.id {
+                        await self.abandonUpload(id)
                     }
                 }
             }
@@ -390,11 +392,16 @@ final class ControlClient {
 
     /// Drops the bundles of tasks that never got all their pieces, as when the link closes.
     private func abandonUploads() {
-        for upload in uploads.values {
-            try? upload.handle.close()
-            try? FileManager.default.removeItem(at: upload.bundle)
+        for id in Array(uploads.keys) {
+            abandonUpload(id)
         }
-        uploads.removeAll()
+    }
+
+    /// Drops a task's bundle that won't be finished: its client left, or it grew too big.
+    private func abandonUpload(_ id: String) {
+        guard let upload = uploads.removeValue(forKey: id) else { return }
+        try? upload.handle.close()
+        try? FileManager.default.removeItem(at: upload.bundle)
     }
 
     /// Runs the request through serve's handler and sends back its lines; then, if serve wrote

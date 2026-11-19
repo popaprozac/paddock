@@ -90,7 +90,7 @@ public enum ControlLink {
 
     /// Every message on the link, as one JSON object, with the Go side's field names.
     public struct Message: Codable, Equatable, Sendable {
-        public var type: String  // challenge, auth, welcome, hello, capacity
+        public var type: String  // challenge, auth, welcome, hello, capacity, usage, request, upload, cancel, response
         public var nonce: Data?
         public var host: String?
         public var signature: Data?

@@ -25,6 +25,10 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 - A session holds one VM at a time. When the client closes stdin, or stops the server with
   SIGINT, SIGTERM or SIGHUP, as a dropped ssh connection does, the server releases the VM it
   holds.
+- Through a control plane, a session keeps one link open for all its tool calls. If the link
+  drops, as when the control plane restarts, a call that was under way fails with the reason, and
+  the next call opens a new link. paddock doesn't repeat a call on its own, since repeating a
+  command, a click or an acquire could do it twice.
 - Screenshots are scaled to fit 1280x800, keeping the screen's shape: 1920x1200 becomes
   1280x800. Every coordinate the tools take or return is in the screenshot's pixels, frames in
   the accessibility tree included, and the server converts them for the guest.

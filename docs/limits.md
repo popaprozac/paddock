@@ -2,8 +2,9 @@
 
 - macOS allows at most two macOS VMs running at once on one host.
 - A VM costs its Mac more memory than it's configured with: an 8 GB VM's process took 10.7
-  to 13.6 GB once warm in testing, as `paddock top` shows. `serve`'s memory warning counts only the configured
-  memory, so leave room for the difference when choosing how many slots to run.
+  to 13.6 GB once warm in testing, as `paddock top` shows. `serve` counts each VM at 1.7 times its
+  memory, measured only for 8 GB VMs, when it warns at startup, and warns again while it runs if
+  macOS's memory pressure rises. On a 36 GB Mac, two 8 GB slots brought pressure to warn.
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
 - Networking is macOS's shared NAT, or with `--userspace` a network of each VM's own, where a
   VM reaches only the names its `acquire --allow` listed (see

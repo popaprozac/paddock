@@ -8,6 +8,13 @@ public enum VMSizing {
     public static let defaultMemorySize: UInt64 = 8 << 30
     public static let defaultDiskSize: UInt64 = 80 << 30
 
+    /// What a running VM costs its host in memory: the guest's memory and Virtualization's own.
+    /// shortcut: 1.7 times, measured on 8 GB macOS 27 VMs (10.7 to 13.6 GB once warm); measure
+    /// other sizes before trusting it for them.
+    public static func hostMemory(for memorySize: UInt64) -> UInt64 {
+        memorySize * 17 / 10
+    }
+
     public struct Limits: Sendable {
         public var minimumCPUCount: Int
         public var maximumCPUCount: Int

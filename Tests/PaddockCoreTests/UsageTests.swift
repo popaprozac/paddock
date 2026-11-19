@@ -66,3 +66,18 @@ import Testing
         #expect(TopView.age(7500) == "2h 05m")
     }
 }
+
+@Suite struct HostMemoryTests {
+    @Test func aVMCostsItsMacMoreThanItsMemory() {
+        #expect(VMSizing.hostMemory(for: 8 << 30) == 14_602_888_806)  // 13.6 GB, as measured
+    }
+
+    @Test func pressureLevelsCompare() {
+        let usage = { (pressure: String) in
+            MacUsage(cpu: nil, memoryUsed: 0, memoryTotal: 0, pressure: pressure, thermal: "nominal", diskFree: nil)
+        }
+        #expect(usage("normal").pressureLevel == 0)
+        #expect(usage("warn").pressureLevel == 1)
+        #expect(usage("critical").pressureLevel == 2)
+    }
+}
