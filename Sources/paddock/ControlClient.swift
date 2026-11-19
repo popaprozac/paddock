@@ -162,6 +162,7 @@ final class ControlClient {
     private let image: String
     private let slots: @MainActor () -> [ControlLink.SlotReport]
     private let diskFree: @MainActor () -> UInt64?
+    private let status: @MainActor () -> MacStatus?
     private let onRequest: @MainActor (String, Responder) -> Void
     private var task: Task<Void, Never>?
     private var socket: URLSessionWebSocketTask?
@@ -172,11 +173,13 @@ final class ControlClient {
     /// `onRequest` is serve's own handler: requests from the control plane run through it, with
     /// the same checks as one from this Mac, once `ControlLink.checkRemote` takes them.
     init(identity: ControlIdentity, image: String, slots: @escaping @MainActor () -> [ControlLink.SlotReport],
-         diskFree: @escaping @MainActor () -> UInt64?, onRequest: @escaping @MainActor (String, Responder) -> Void) {
+         diskFree: @escaping @MainActor () -> UInt64?, status: @escaping @MainActor () -> MacStatus?,
+         onRequest: @escaping @MainActor (String, Responder) -> Void) {
         self.identity = identity
         self.image = image
         self.slots = slots
         self.diskFree = diskFree
+        self.status = status
         self.onRequest = onRequest
     }
 
@@ -307,6 +310,7 @@ final class ControlClient {
                 }
             }
             group.addTask { try await self.reportSlots(on: socket) }
+            group.addTask { try await self.reportUsage(on: socket) }
             _ = try await group.next()
         }
     }
@@ -468,6 +472,17 @@ final class ControlClient {
                 sent = .now
             }
             try await Task.sleep(for: .seconds(1))
+        }
+    }
+
+    /// Sends what this Mac and its VMs use, every 2 s, apart from the slot reports: the control
+    /// plane then keeps its view of the slots, and its queue, as they were.
+    private func reportUsage(on socket: URLSessionWebSocketTask) async throws {
+        while true {
+            if let status = status(), let usage = status.usage {
+                try await send(ControlLink.Message(type: "usage", slots: status.slots, usage: usage), on: socket)
+            }
+            try await Task.sleep(for: .seconds(2))
         }
     }
 

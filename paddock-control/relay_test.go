@@ -420,3 +420,56 @@ func TestARequestMustCarryTheOperationItsRoutedAs(t *testing.T) {
 		t.Fatalf("a task sent as exec: %+v", got)
 	}
 }
+
+// What a host uses reaches logged-in clients, with who holds each VM, and moves nothing in the
+// queue: a usage report doesn't clear a busy mark the way a capacity report does.
+func TestUsageReachesClientsWithWhoHoldsEachVM(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 0)
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	wsjson.Write(ctx, host.conn, message{Type: "capacity", Slots: []slot{
+		{Number: 1, State: "warm", VM: "golden-slot1-abc"}, {Number: 2, State: "warm", VM: "golden-slot2-xyz"}}})
+	c.waitUntilOnline(t, "golden")
+	eventually(t, "two warm slots", func() bool {
+		list := c.srv.status()
+		return len(list) == 1 && len(list[0].Slots) == 2 && list[0].Slots[1].State == "warm"
+	})
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	c.srv.markHost(host.id, func(l *link) { l.busy = true })
+	cpu, vmCPU, disk := 23.5, 112.0, uint64(500<<30)
+	wsjson.Write(ctx, host.conn, message{Type: "usage",
+		Usage: &macUsage{CPU: &cpu, MemoryUsed: 20 << 30, MemoryTotal: 36 << 30, Pressure: "warn", Thermal: "fair", DiskFree: &disk},
+		Slots: []slot{
+			{Number: 1, State: "assigned", VM: "golden-slot1-abc", Age: 12, Usage: &vmUsage{CPU: &vmCPU, Memory: 13 << 30}},
+			{Number: 2, State: "warm", VM: "golden-slot2-xyz", Age: 40, Usage: &vmUsage{Memory: 9 << 30}},
+		}})
+	eventually(t, "the usage report", func() bool { return c.srv.status()[0].Usage != nil })
+
+	got := ask(t, conn, message{ID: "2", Op: "hosts"})
+	reply := got[len(got)-1]
+	if len(reply.Hosts) != 1 || reply.Waiting == nil || *reply.Waiting != 0 {
+		t.Fatalf("hosts reply %+v", reply)
+	}
+	h := reply.Hosts[0]
+	if h.Usage == nil || *h.Usage.CPU != 23.5 || h.Usage.Pressure != "warn" || h.Usage.Thermal != "fair" {
+		t.Fatalf("host usage %+v", h.Usage)
+	}
+	held, warm := h.Slots[0], h.Slots[1]
+	if held.State != "assigned" || held.Holder != "zach on studio" || held.Age != 12 || held.Usage == nil || *held.Usage.CPU != 112 {
+		t.Fatalf("the held slot %+v", held)
+	}
+	if warm.Holder != "" || warm.Age != 40 || warm.Usage == nil || warm.Usage.CPU != nil || warm.Usage.Memory != 9<<30 {
+		t.Fatalf("the warm slot %+v", warm)
+	}
+	c.srv.mu.Lock()
+	l := c.srv.links[host.id]
+	c.srv.mu.Unlock()
+	l.mu.Lock()
+	busy := l.busy
+	l.mu.Unlock()
+	if !busy {
+		t.Fatal("a usage report cleared the host's busy mark")
+	}
+}

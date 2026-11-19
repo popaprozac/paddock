@@ -13,6 +13,7 @@ Apache 2.0.
 - **Commands and git tasks** in the guest, through an agent that listens only on vsock.
 - **A network per VM** that reaches only the host names you allow.
 - **Screen and input from the host:** screenshots, the accessibility tree, mouse and keyboard.
+- **A live view**, `paddock top`, of each Mac's CPU, memory and disk, and what each VM uses.
 - **An MCP server**, `paddock mcp`, so an agent can drive a VM.
 - **A pool of Macs.** A control plane hands out VMs from every Mac in it; the Macs only connect
   out, so none needs an open port.
@@ -59,6 +60,7 @@ paddock acquire                      # prints the VM's name, such as golden-slot
 paddock exec <vm> -- sw_vers
 paddock screenshot <vm>
 paddock release <vm>                 # wipes it; a fresh one is ready in about 6 s
+paddock top                          # watch the Mac and each VM, live; Ctrl-C quits
 ```
 
 `paddock task` runs a command on a git branch in the VM and brings back what it commits; it needs
@@ -81,7 +83,8 @@ paddock-control login-token                                              # there
 paddock login https://studio.local:7443 --token <token>                  # on their Mac
 ```
 
-From then on, `acquire` and the commands after it use the whole pool. See
+From then on, `acquire` and the commands after it use the whole pool, and `paddock top` shows
+every Mac in it. See
 [A pool of Macs](docs/control-plane.md).
 
 ## Documentation
@@ -89,7 +92,7 @@ From then on, `acquire` and the commands after it use the whole pool. See
 | Doc | What's in it |
 | --- | --- |
 | [Golden images](docs/golden-images.md) | Image files, how `build` sets up each macOS version, setting up by hand, `grant`, what an image allows, MDM |
-| [Commands](docs/commands.md) | Every command and its flags, where paddock keeps its files, running a task over SSH, what `bench` measures |
+| [Commands](docs/commands.md) | Every command and its flags, what `paddock top` shows, where paddock keeps its files, running a task over SSH, what `bench` measures |
 | [Agents, screenshots and input](docs/agents.md) | `paddock mcp` and its tools, how screenshots and input work |
 | [A pool of Macs](docs/control-plane.md) | The control plane: setup, commands, placement, where it can run, how it keeps the pool safe |
 | [The userspace network](docs/network.md) | A network per VM that reaches only the names its session allows |

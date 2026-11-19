@@ -112,12 +112,14 @@ public enum ControlLink {
         public var line: String?    // response from a host: one of serve's answer lines
         public var data: Data?      // response: a piece of a file, such as a screenshot, in order
         public var note: String?    // response: news for whoever waits, such as no free VM
+        public var usage: MacUsage? // usage: what the Mac uses now, every 2 s; slots then carry their usage
+        public var waiting: Int?    // response to hosts: acquires waiting for a warm VM
 
         public init(type: String, nonce: Data? = nil, host: String? = nil, signature: Data? = nil, name: String? = nil,
                     version: String? = nil, macos: String? = nil, image: String? = nil, cpus: Int? = nil,
                     memory: UInt64? = nil, diskFree: UInt64? = nil, slots: [SlotReport]? = nil, client: String? = nil,
                     id: String? = nil, op: String? = nil, done: Bool? = nil, line: String? = nil,
-                    data: Data? = nil, serve: String? = nil) {
+                    data: Data? = nil, serve: String? = nil, usage: MacUsage? = nil) {
             self.type = type
             self.nonce = nonce
             self.host = host
@@ -137,6 +139,7 @@ public enum ControlLink {
             self.memory = memory
             self.diskFree = diskFree
             self.slots = slots
+            self.usage = usage
         }
     }
 
@@ -146,6 +149,9 @@ public enum ControlLink {
         public var state: String  // warm, assigned, preparing or empty
         public var vm: String?
         public var reason: String?
+        public var age: Int?      // status: seconds the slot has been in this state
+        public var usage: VMUsage? // status: what its VM costs this Mac, while one runs
+        public var holder: String? // through the control plane: the client its VM was handed out to
 
         public init(number: Int, emptyReason: String?, assigned: Bool, warm: Bool, vm: String?) {
             self.number = number
@@ -171,6 +177,7 @@ public enum ControlLink {
         public var memory: UInt64?
         public var diskFree: UInt64?
         public var slots: [SlotReport]?
+        public var usage: MacUsage?
     }
 
     public struct EnrollRequest: Codable, Sendable {

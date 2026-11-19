@@ -9,7 +9,7 @@
 | `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](golden-images.md#what-a-golden-image-allows)). |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
-| `paddock serve <source> [--slots 2] [--userspace] [--control url [--join token]]` | Keeps a warm clone of the source running headless in each of its slots: two by default, as many VMs as macOS runs at once, or one with `--slots 1` on a Mac that also runs another VM. At startup it boots a clone in each slot, at the same time, with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from its slot's state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If a warm VM stops, its slot restores another. A slot that can't start, for example because another VM is already running, stays empty with the reason, and the other serves on. serve warns when its VMs together would leave the Mac little memory. Ctrl-C stops it and deletes the slots' VMs. With `--control`, it also links this Mac to a control plane and reports its slots there; `--join` the first time (see [A pool of Macs](control-plane.md)). |
+| `paddock serve <source> [--slots 2] [--userspace] [--control url [--join token]]` | Keeps a warm clone of the source running headless in each of its slots: two by default, as many VMs as macOS runs at once, or one with `--slots 1` on a Mac that also runs another VM. At startup it boots a clone in each slot, at the same time, with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from its slot's state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If a warm VM stops, its slot restores another. A slot that can't start, for example because another VM is already running, stays empty with the reason, and the other serves on. serve warns when its VMs together would leave the Mac little memory. Ctrl-C stops it and deletes the slots' VMs. It samples what this Mac and its VMs use every 2 s, for `paddock top`. With `--control`, it also links this Mac to a control plane and reports its slots and that usage there; `--join` the first time (see [A pool of Macs](control-plane.md)). |
 | `paddock acquire [--allow names] [--image name]` | Takes a warm VM from `serve` and prints its name and address, waiting while the slots fill. On a Mac logged in to a control plane it takes one from the pool, and `--image` names the golden image when the pool serves more than one. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](network.md)); `--allow` against a `serve` on NAT fails. |
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
@@ -20,6 +20,7 @@
 | `paddock key <vm> <combination>...` | Presses key combinations in turn, such as `cmd+s`, `cmd+shift+z` or `return`. |
 | `paddock scroll <vm> <x> <y> [--down n] [--up n] [--right n] [--left n]` | Scrolls by about n lines at a point of the guest's screen. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
+| `paddock top [--local] [--json]` | Shows this Mac's `serve`, or on a Mac logged in to a control plane the whole pool: each Mac's CPU, memory, memory pressure, free disk and thermal state, and each slot's VM, who holds it, how long it has been in its state and what it uses. Redraws every 2 s until Ctrl-C; with `--json`, or when the output isn't a terminal, prints one snapshot (see [Watching with paddock top](#watching-with-paddock-top)). |
 | `paddock mcp` | Serves `serve`'s VMs, or the pool's on a logged-in Mac, to an agent as an MCP server on stdin and stdout (see [Agents over MCP](agents.md#agents-over-mcp)). |
 
 These commands reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its owner can
@@ -33,6 +34,28 @@ control plane's own commands, with `paddock login`, `logout` and `hosts`, are in
 VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned
 mid-write.
+
+## Watching with paddock top
+
+`serve` samples, every 2 s, what this Mac and each of its VMs use, and answers a `status`
+request on its socket with it; with `--control`, it sends the same to the control plane. Every
+number is measured on the Mac, so no guest is asked and none can change them:
+
+| Column | What it is |
+| --- | --- |
+| CPU, for a Mac | Its whole CPU in use, as a share of all its cores. |
+| MEMORY, for a Mac | Memory in use, as Activity Monitor's Memory Used counts it (app memory, wired and compressed), of the Mac's total, in binary GB. |
+| PRESSURE | macOS's memory pressure: normal, warn or critical. |
+| DISK FREE | Free space on the volume `serve` clones VMs to, in decimal GB or TB, as Finder counts it. |
+| THERMAL | macOS's thermal state: nominal, fair, serious or critical. |
+| HELD BY | Through a control plane: the client the VM was handed out to. A VM acquired with `--local` shows none. |
+| FOR | How long the slot has been in its state. |
+| CPU, for a VM | Its Virtualization.framework process's CPU, as a share of one core, as `top` counts it: 200% is two cores busy. |
+| MEMORY, for a VM | That process's memory footprint: the guest's memory and the VM's own, so more than the VM's configured memory (see [Limits](limits.md)). |
+
+`serve` finds each VM's process by the bundle's `disk.img` it holds open. CPU figures are the
+change since the last sample, so a slot shows none for its first 2 s. On the pool, `top` keeps
+one link to the control plane open while it runs.
 
 ## Run a task from another Mac
 

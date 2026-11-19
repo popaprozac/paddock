@@ -84,6 +84,10 @@ func (s *server) answer(ctx context.Context, client string, l *clientLink, reque
 	switch request.Op {
 	case "hosts":
 		reply.Hosts = s.status()
+		s.mu.Lock()
+		waiting := len(s.waiters)
+		s.mu.Unlock()
+		reply.Waiting = &waiting
 	case "acquire":
 		go s.relayAcquire(ctx, client, l, request)
 		return
