@@ -14,7 +14,8 @@ struct Serve: AsyncParsableCommand {
             'paddock acquire' takes a warm VM and 'paddock release' hands it back to be wiped \
             and replaced; they reach serve through a socket in the paddock home that only you \
             can open. A slot that can't start stays empty, with the reason, and the other keeps \
-            serving. Press Ctrl-C to stop serve and delete the slots' VMs.
+            serving. Press Ctrl-C, or send SIGTERM as launchd does, to stop serve and delete \
+            the slots' VMs.
 
             With --control, serve also links this Mac to paddock-control, the control plane, and \
             reports its slots there. The first time, add --join with a token from \
@@ -113,7 +114,8 @@ final class WarmPool {
     private let slots: [Slot]
     private var waiting: [(responder: Responder, allow: [String])] = []  // acquires that came in before a VM was warm
     private var server: LineServer?
-    private var interrupt: (any DispatchSourceSignal)?
+    private var interrupts: [any DispatchSourceSignal] = []
+    private var awake: (any NSObjectProtocol)?
     private var stopping = false
     private var sessionHelper: Bool?  // whether the source has paddock-session, asked once
     private var checkedSource = false  // the first slot to boot checks the source for both
@@ -198,8 +200,8 @@ final class WarmPool {
                          })
     }
 
-    /// Prepares the slots at the same time, fills them and serves until Ctrl-C, which exits the
-    /// process. Fails only if no slot could start.
+    /// Prepares the slots at the same time, fills them and serves until Ctrl-C or SIGTERM, which
+    /// exit the process. Fails only if no slot could start.
     private func run(source name: String) async throws {
         let source = try home.bundle(named: name)
         warnAboutMemory(source)
@@ -208,7 +210,12 @@ final class WarmPool {
         server = try LineServer(path: home.socketURL.path, queue: .main) { [weak self] line, responder in
             MainActor.assumeIsolated { self?.handle(line, responder) }
         }
-        interrupt = onInterrupt { [weak self] in self?.shutDown() }
+        // SIGTERM is how launchd stops a job, and how shutdown and logout stop everything.
+        interrupts = [SIGINT, SIGTERM].map { number in onInterrupt(number) { [weak self] in self?.shutDown() } }
+        // Neither serve nor macOS's VM service otherwise keeps a host with a sleep timer from
+        // idle sleep, which would stop every slot. Lid close and Sleep from the menu still work.
+        awake = ProcessInfo.processInfo.beginActivity(options: .idleSystemSleepDisabled,
+                                                      reason: "paddock serve keeps its slots' VMs running")
         deleteLeftoverSlots(of: name)
         sampleUsage()
         if let control {

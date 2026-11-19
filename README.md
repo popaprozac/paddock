@@ -97,6 +97,7 @@ every Mac in it. See
 | [Golden images](docs/golden-images.md) | Image files, how `build` sets up each macOS version, setting up by hand, `grant`, what an image allows, MDM |
 | [Commands](docs/commands.md) | Every command and its flags, what `paddock top` shows, where paddock keeps its files, running a task over SSH, what `bench` measures |
 | [Agents, screenshots and input](docs/agents.md) | `paddock mcp` and its tools, how screenshots and input work |
+| [Setting up Macs](docs/hosts.md) | What `serve` needs from a Mac, running it at login, and how each kind of host comes back after a restart, FileVault and EC2 Mac included |
 | [A pool of Macs](docs/control-plane.md) | The control plane: setup, commands, placement, where it can run, how it keeps the pool safe |
 | [The userspace network](docs/network.md) | A network per VM that reaches only the names its session allows |
 | [The guest agent](docs/guest-agent.md) | `paddock-guestd` and `paddock-session`: their protocols, and how they answer only the host |
