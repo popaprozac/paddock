@@ -112,6 +112,7 @@ func (s *server) admin(request adminRequest, urls func() []string) adminResponse
 			return adminResponse{Error: err.Error()}
 		}
 		s.disconnectClient(client.ID, websocket.StatusPolicyViolation, "this client was removed from the control plane")
+		go s.releaseAll(client.ID)
 		s.audit.record(auditEvent{Event: "client-removed", Client: client.ID, Name: client.Name})
 		log.Printf("removed client %s (%s)", client.Name, client.ID)
 		return adminResponse{Removed: client.ID}

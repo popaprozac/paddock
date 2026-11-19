@@ -4,65 +4,82 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/coder/websocket/wsjson"
 )
 
 // answersBuffer is how many of a request's answers wait for whoever forwarded it before the
 // host's link stops reading: back-pressure on a fast host, not a limit on how many there are.
+// shortcut: one slow reader holds up the other requests on that host's link; per-session
+// connections (or the direct path) would lift that once pools are busy enough to notice.
 const answersBuffer = 256
 
+// pendingRequest is a request forwarded to a host, waiting for its answers.
+type pendingRequest struct {
+	answers chan message
+	gone    chan struct{} // closed when whoever forwarded it stops reading
+	once    sync.Once
+}
+
 // forward sends one of serve's request lines down a host's link and returns the host's answers as
-// they come, the last marked done. A host that isn't online fails at once; a link that closes
-// before the host is done ends the answers with an error.
-func (s *server) forward(ctx context.Context, host, serveLine string) (<-chan message, error) {
+// they come, the last marked done, and a cancel to call once done reading, early or not: after it,
+// the host's further answers are dropped instead of holding up its link. A host that isn't online
+// fails at once; a link that closes before the host is done ends the answers with an error.
+func (s *server) forward(ctx context.Context, host, serveLine string) (<-chan message, func(), error) {
 	s.mu.Lock()
 	l := s.links[host]
 	s.mu.Unlock()
 	if l == nil {
-		return nil, fmt.Errorf("%s isn't online", host)
+		return nil, nil, fmt.Errorf("%s isn't online", host)
 	}
-	answers := make(chan message, answersBuffer)
+	p := &pendingRequest{answers: make(chan message, answersBuffer), gone: make(chan struct{})}
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
-		return nil, fmt.Errorf("%s's link just closed", host)
+		return nil, nil, fmt.Errorf("%s's link just closed", host)
 	}
 	l.nextID++
 	id := "r" + strconv.Itoa(l.nextID)
 	if l.pending == nil {
-		l.pending = map[string]chan message{}
+		l.pending = map[string]*pendingRequest{}
 	}
-	l.pending[id] = answers
+	l.pending[id] = p
 	l.mu.Unlock()
-	if err := wsjson.Write(ctx, l.conn, message{Type: "request", ID: id, Serve: serveLine}); err != nil {
+	cancel := func() {
+		p.once.Do(func() { close(p.gone) })
 		l.mu.Lock()
-		if _, ok := l.pending[id]; ok {
+		if l.pending[id] == p {
 			delete(l.pending, id)
-			close(answers)
 		}
 		l.mu.Unlock()
-		return nil, err
 	}
-	return answers, nil
+	if err := wsjson.Write(ctx, l.conn, message{Type: "request", ID: id, Serve: serveLine}); err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return p.answers, cancel, nil
 }
 
 // deliver hands a host's answer to the request it's for, and ends the request once it's done.
-// Only the link's read loop calls it, so only it closes a request's channel, apart from forward
-// when its request never went out.
+// Only the link's read loop calls it and failPending, so only they close a request's answers.
 func (l *link) deliver(m message) {
 	l.mu.Lock()
-	answers := l.pending[m.ID]
-	if answers != nil && m.Done {
+	p := l.pending[m.ID]
+	if p != nil && m.Done {
 		delete(l.pending, m.ID)
 	}
 	l.mu.Unlock()
-	if answers == nil {
+	if p == nil {
 		return
 	}
-	answers <- m
+	select {
+	case p.answers <- m:
+	case <-p.gone:
+		return
+	}
 	if m.Done {
-		close(answers)
+		close(p.answers)
 	}
 }
 
@@ -73,11 +90,12 @@ func (l *link) failPending() {
 	pending := l.pending
 	l.pending = nil
 	l.mu.Unlock()
-	for _, answers := range pending {
+	for _, p := range pending {
 		select {
-		case answers <- message{Type: "response", Error: "the Mac's link closed before it answered", Done: true}:
+		case p.answers <- message{Type: "response", Error: "the Mac's link closed before it answered", Done: true}:
+		case <-p.gone:
 		default:
 		}
-		close(answers)
+		close(p.answers)
 	}
 }

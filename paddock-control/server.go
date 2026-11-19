@@ -57,6 +57,8 @@ type message struct {
 	ID    string       `json:"id,omitempty"`    // request and response: pairs them on one link
 	Serve string       `json:"serve,omitempty"` // request to a host: one of serve's request lines
 	Line  string       `json:"line,omitempty"`  // response from a host: one of serve's answer lines
+	Data  []byte       `json:"data,omitempty"`  // response: a piece of a file, such as a screenshot, in order
+	Note  string       `json:"note,omitempty"`  // response: news for the person waiting, such as no free VM
 	Op    string       `json:"op,omitempty"`    // request: hosts or logout
 	Hosts []hostStatus `json:"hosts,omitempty"` // response to hosts
 	Error string       `json:"error,omitempty"` // response: why the request failed
@@ -82,7 +84,7 @@ type link struct {
 	slots     []slot
 	diskFree  uint64
 	nextID    int
-	pending   map[string]chan message // requests forwarded to the host, by ID, until done
+	pending   map[string]*pendingRequest // requests forwarded to the host, by ID, until done
 	closed    bool
 }
 
@@ -96,14 +98,16 @@ type server struct {
 	mu           sync.Mutex
 	links        map[string]*link // by host ID, for hosts online now
 	clientLinks  map[string]map[*clientLink]bool
-	pending      int         // links not yet authenticated
-	stopping     bool        // closeAll has run
-	enrollFailed []time.Time // failed enrollments in the last enrollFailWindow
+	waiters      []*waiter      // acquires waiting for a warm slot, oldest first
+	reserved     map[string]int // by host: warm slots acquires on their way are counting on
+	pending      int            // links not yet authenticated
+	stopping     bool           // closeAll has run
+	enrollFailed []time.Time    // failed enrollments in the last enrollFailWindow
 }
 
 func newServer(st *state, authority *authority, audit *auditLog) *server {
 	return &server{state: st, authority: authority, audit: audit, now: time.Now, links: map[string]*link{},
-		clientLinks: map[string]map[*clientLink]bool{}}
+		clientLinks: map[string]map[*clientLink]bool{}, reserved: map[string]int{}}
 }
 
 func (s *server) routes() http.Handler {
@@ -295,8 +299,11 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 			l.slots, l.diskFree = m.Slots, m.DiskFree
 		}
 		l.mu.Unlock()
-		if m.Type == "response" {
+		switch m.Type {
+		case "response":
 			l.deliver(m)
+		case "hello", "capacity":
+			s.poolChanged()
 		}
 	}
 }
@@ -380,6 +387,7 @@ func (s *server) register(host string, l *link) *link {
 	defer s.mu.Unlock()
 	previous := s.links[host]
 	s.links[host] = l
+	s.dispatchLocked()
 	return previous
 }
 
@@ -393,6 +401,7 @@ func (s *server) unregister(host string, l *link, reason string) {
 	if s.stopping {
 		reason = "the control plane is stopping"
 	}
+	s.dispatchLocked()
 	s.mu.Unlock()
 	if current {
 		s.audit.record(auditEvent{Event: "link-closed", Host: host, Remote: l.remote, Reason: reason})

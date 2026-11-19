@@ -79,8 +79,13 @@ func (s *server) answer(ctx context.Context, client string, l *clientLink, reque
 	switch request.Op {
 	case "hosts":
 		reply.Hosts = s.status()
+	case "acquire":
+		go s.relayAcquire(ctx, client, l, request)
+		return
 	case "logout":
-		// The client removes itself: its key is forgotten, and this and its other links close.
+		// The client removes itself: its VMs go back, its key is forgotten, and this and its other
+		// links close.
+		s.releaseAll(client)
 		if member, err := s.state.remove(clientKind, client); err == nil {
 			s.audit.record(auditEvent{Event: "client-removed", Client: client, Name: member.Name, Reason: "logged out"})
 			log.Printf("client %s (%s) logged out", member.Name, client)
@@ -89,6 +94,10 @@ func (s *server) answer(ctx context.Context, client string, l *clientLink, reque
 		s.disconnectClient(client, websocket.StatusNormalClosure, "logged out")
 		return
 	default:
+		if relayedOperations[request.Op] {
+			go s.relayVM(ctx, client, l, request)
+			return
+		}
 		reply.Error = "unknown request " + request.Op
 	}
 	_ = l.write(ctx, reply)

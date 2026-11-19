@@ -115,7 +115,8 @@ import Testing
     /// A Mac takes only VM operations from its link, never one naming a file on it.
     @Test func takesOnlyVMOperationsThatNameNoFileFromTheLink() throws {
         for line in [#"{"op":"acquire","allow":["github.com"]}"#, #"{"op":"exec","vm":"v","command":"ls"}"#,
-                     #"{"op":"release","vm":"v"}"#, #"{"op":"axtree","vm":"v"}"#, #"{"op":"input","vm":"v"}"#] {
+                     #"{"op":"release","vm":"v"}"#, #"{"op":"axtree","vm":"v"}"#, #"{"op":"input","vm":"v"}"#,
+                     #"{"op":"screenshot","vm":"v"}"#] {
             #expect(try ControlLink.checkRemote(line) == line)
         }
         for line in [#"{"op":"task","vm":"v","bundle":"/etc/passwd","result":"/tmp/x"}"#,

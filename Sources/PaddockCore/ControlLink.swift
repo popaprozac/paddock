@@ -58,11 +58,14 @@ public enum ControlLink {
         return Data(SHA256.hash(data: p256KeyInfoPrefix + point))
     }
 
-    /// What a Mac takes from the control plane over its link: serve's VM operations, which name no
-    /// file on the Mac. task and screenshot name paths on the Mac to read and write, so a request
-    /// from the link could reach any file serve's user can; they come over the link only with
-    /// paths the Mac picks itself.
-    public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input"]
+    /// What a Mac takes from the control plane over its link: serve's VM operations, naming no file
+    /// on the Mac. A request from the link that named one could reach any file serve's user can,
+    /// so a screenshot from the link gets a file the Mac picks itself, and task, which reads and
+    /// writes bundles, doesn't come over the link yet.
+    public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input", "screenshot"]
+
+    /// The most a piece of a file sent over a link holds.
+    public static let chunkSize = 256 * 1024
 
     /// `line`, one of serve's requests, if a Mac takes it from the control plane; or why not.
     public static func checkRemote(_ line: String) throws -> String {
@@ -106,11 +109,14 @@ public enum ControlLink {
         public var done: Bool?      // response: the request's last answer
         public var serve: String?   // request to a host: one of serve's request lines
         public var line: String?    // response from a host: one of serve's answer lines
+        public var data: Data?      // response: a piece of a file, such as a screenshot, in order
+        public var note: String?    // response: news for whoever waits, such as no free VM
 
         public init(type: String, nonce: Data? = nil, host: String? = nil, signature: Data? = nil, name: String? = nil,
                     version: String? = nil, macos: String? = nil, image: String? = nil, cpus: Int? = nil,
                     memory: UInt64? = nil, diskFree: UInt64? = nil, slots: [SlotReport]? = nil, client: String? = nil,
-                    id: String? = nil, op: String? = nil, done: Bool? = nil, line: String? = nil) {
+                    id: String? = nil, op: String? = nil, done: Bool? = nil, line: String? = nil,
+                    data: Data? = nil, serve: String? = nil) {
             self.type = type
             self.nonce = nonce
             self.host = host
@@ -119,6 +125,8 @@ public enum ControlLink {
             self.op = op
             self.done = done
             self.line = line
+            self.data = data
+            self.serve = serve
             self.signature = signature
             self.name = name
             self.version = version

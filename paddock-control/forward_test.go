@@ -38,10 +38,11 @@ func TestForwardSendsServesLineAndStreamsTheHostsAnswers(t *testing.T) {
 	defer conn.CloseNow()
 	ctx, cancel := contextWithTimeout()
 	defer cancel()
-	answers, err := c.srv.forward(ctx, enrolled.Host, `{"op":"exec","vm":"golden-slot1","command":"uname"}`)
+	answers, cancelForward, err := c.srv.forward(ctx, enrolled.Host, `{"op":"exec","vm":"golden-slot1","command":"uname"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cancelForward()
 	var request message
 	if err := wsjson.Read(ctx, conn, &request); err != nil {
 		t.Fatal(err)
@@ -62,7 +63,7 @@ func TestForwardToAHostThatIsntOnlineFails(t *testing.T) {
 	c := newTestControl(t)
 	_, publicKey := newHostKey(t)
 	_, enrolled := c.enroll(t, c.token(t), "studio", publicKey)
-	if _, err := c.srv.forward(context.Background(), enrolled.Host, `{"op":"release"}`); err == nil {
+	if _, _, err := c.srv.forward(context.Background(), enrolled.Host, `{"op":"release"}`); err == nil {
 		t.Fatal("forwarded to a host with no link")
 	}
 }
@@ -77,15 +78,52 @@ func TestALinkThatClosesEndsItsRequestsWithAnError(t *testing.T) {
 	}
 	ctx, cancel := contextWithTimeout()
 	defer cancel()
-	answers, err := c.srv.forward(ctx, enrolled.Host, `{"op":"acquire"}`)
+	answers, cancelForward, err := c.srv.forward(ctx, enrolled.Host, `{"op":"acquire"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cancelForward()
 	var request message
 	wsjson.Read(ctx, conn, &request)
 	conn.Close(websocket.StatusNormalClosure, "")
 	got := collect(t, answers)
 	if len(got) != 1 || got[0].Error == "" || !got[0].Done {
 		t.Fatalf("answers after the link closed: %+v", got)
+	}
+}
+
+// A request whose reader went away must not hold up the host's other requests.
+func TestAnAbandonedRequestDoesntBlockTheHostsLink(t *testing.T) {
+	c := newTestControl(t)
+	key, publicKey := newHostKey(t)
+	_, enrolled := c.enroll(t, c.token(t), "studio", publicKey)
+	conn, _, err := c.link(t, enrolled.Host, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	_, abandon, err := c.srv.forward(ctx, enrolled.Host, `{"op":"axtree","vm":"v"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first message
+	wsjson.Read(ctx, conn, &first)
+	abandon()
+	// Far more answers than the buffer holds, for a request nobody reads any more.
+	for i := 0; i < answersBuffer*2; i++ {
+		wsjson.Write(ctx, conn, message{Type: "response", ID: first.ID, Line: `{"output":"x"}`})
+	}
+	answers, done, err := c.srv.forward(ctx, enrolled.Host, `{"op":"input","vm":"v"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	var second message
+	wsjson.Read(ctx, conn, &second)
+	wsjson.Write(ctx, conn, message{Type: "response", ID: second.ID, Line: `{"exit":0}`, Done: true})
+	if got := collect(t, answers); len(got) != 1 || got[0].Line != `{"exit":0}` {
+		t.Fatalf("the next request's answers: %+v", got)
 	}
 }

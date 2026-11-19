@@ -313,8 +313,17 @@ final class ControlClient {
     /// link gets serve's kind of error line instead.
     private func answer(_ id: String, serve line: String?, on socket: URLSessionWebSocketTask) {
         let lines: AsyncStream<String>
+        var screenshot: URL?
         do {
-            let request = try ControlLink.checkRemote(line ?? "")
+            var request = try ControlLink.checkRemote(line ?? "")
+            // A screenshot goes to a file this Mac picks, never one the control plane names.
+            if var fields = try JSONSerialization.jsonObject(with: Data(request.utf8)) as? [String: Any],
+               fields["op"] as? String == "screenshot" {
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("paddock-screen-\(UUID().uuidString).png")
+                fields["result"] = file.path
+                request = String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+                screenshot = file
+            }
             let (responder, stream) = try ResponderPipe.make()
             lines = stream
             onRequest(request, responder)
@@ -331,9 +340,31 @@ final class ControlClient {
                 }
                 last = answer
             }
+            if let screenshot {
+                last = await sendFile(screenshot, answered: last, id: id, on: socket)
+            }
             // The last line goes out marked done, so the control plane knows the request is over.
             try? await send(ControlLink.Message(type: "response", id: id, done: true, line: last), on: socket)
         }
+    }
+
+    /// Sends the screenshot serve saved, in pieces, and deletes it; returns the answer line to end
+    /// with, without the file's path, which is this Mac's business.
+    private func sendFile(_ file: URL, answered line: String?, id: String, on socket: URLSessionWebSocketTask) async -> String? {
+        defer { try? FileManager.default.removeItem(at: file) }
+        if let line, line.contains("\"error\"") {
+            return line
+        }
+        guard let data = try? Data(contentsOf: file) else {
+            return ServeResponse(error: "the screenshot wasn't saved").line
+        }
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + ControlLink.chunkSize, data.count)
+            try? await send(ControlLink.Message(type: "response", id: id, data: data.subdata(in: offset..<end)), on: socket)
+            offset = end
+        }
+        return "{}"
     }
 
     /// Sends the slots when they change, checked every second, and free disk at least every minute.

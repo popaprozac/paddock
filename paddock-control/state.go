@@ -66,9 +66,10 @@ type state struct {
 	path string
 	mu   sync.Mutex
 	data struct {
-		Hosts   map[string]*enrolled    `json:"hosts"`
-		Clients map[string]*enrolled    `json:"clients,omitempty"`
-		Tokens  map[string]pendingToken `json:"tokens"` // by hex SHA-256 of the secret
+		Hosts    map[string]*enrolled    `json:"hosts"`
+		Clients  map[string]*enrolled    `json:"clients,omitempty"`
+		Tokens   map[string]pendingToken `json:"tokens"`             // by hex SHA-256 of the secret
+		Handouts map[string]*handout     `json:"handouts,omitempty"` // by VM name
 	}
 }
 
@@ -93,7 +94,61 @@ func openState(dir string) (*state, error) {
 	if s.data.Tokens == nil {
 		s.data.Tokens = map[string]pendingToken{}
 	}
+	if s.data.Handouts == nil {
+		s.data.Handouts = map[string]*handout{}
+	}
 	return s, nil
+}
+
+// handout is a VM the pool handed to a client: only that client may use or release it. Kept on
+// disk, so a restarted control plane still knows whose VMs its Macs are running.
+type handout struct {
+	VM     string    `json:"vm"`
+	Host   string    `json:"host"`
+	Client string    `json:"client"`
+	Image  string    `json:"image,omitempty"`
+	Since  time.Time `json:"since"`
+}
+
+func (s *state) addHandout(h handout) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data.Handouts[h.VM] = &h
+	return s.save()
+}
+
+// handout is the hand-out of this VM, or nil.
+func (s *state) handout(vm string) *handout {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if h := s.data.Handouts[vm]; h != nil {
+		copied := *h
+		return &copied
+	}
+	return nil
+}
+
+func (s *state) removeHandout(vm string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.Handouts[vm] == nil {
+		return nil
+	}
+	delete(s.data.Handouts, vm)
+	return s.save()
+}
+
+// handoutsWhere is every hand-out that match picks.
+func (s *state) handoutsWhere(match func(handout) bool) []handout {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var list []handout
+	for _, h := range s.data.Handouts {
+		if match(*h) {
+			list = append(list, *h)
+		}
+	}
+	return list
 }
 
 // save writes the state; the caller holds mu.
