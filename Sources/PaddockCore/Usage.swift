@@ -10,6 +10,11 @@ public struct MacUsage: Codable, Equatable, Sendable {
     public var thermal: String       // nominal, fair, serious or critical
     public var diskFree: UInt64?     // bytes free on the volume VMs are cloned to
 
+    /// The pressure as a level to compare: 0 normal, 1 warn, 2 critical.
+    public var pressureLevel: Int {
+        ["warn": 1, "critical": 2][pressure] ?? 0
+    }
+
     public init(cpu: Double?, memoryUsed: UInt64, memoryTotal: UInt64, pressure: String, thermal: String,
                 diskFree: UInt64?) {
         self.cpu = cpu

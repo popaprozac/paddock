@@ -131,6 +131,7 @@ final class WarmPool {
     private let image: String
     private let sampler = UsageSampler()
     private var usage: (mac: MacUsage, vms: [String: VMUsage])?
+    private var pressureWarned = 0  // the highest pressure level serve has warned about
 
     private init(source: String, slots: Int, userspaceNetwork: Bool, control: ControlIdentity?) {
         self.slots = (1...slots).map { Slot(number: $0, source: source) }
@@ -153,6 +154,19 @@ final class WarmPool {
 
     private func keep(_ sample: (mac: MacUsage, vms: [String: VMUsage])) {
         usage = sample
+        warnAboutPressure(sample)
+    }
+
+    /// Warns when macOS's memory pressure rises past what it already warned about: once at warn
+    /// and once at critical, with what the Mac and its VMs use, measured.
+    private func warnAboutPressure(_ sample: (mac: MacUsage, vms: [String: VMUsage])) {
+        guard sample.mac.pressureLevel > pressureWarned else { return }
+        pressureWarned = sample.mac.pressureLevel
+        let vms = sample.vms.values.reduce(0) { $0 + $1.memory }
+        print("  warning: memory pressure is \(sample.mac.pressure): this Mac uses "
+            + "\(ByteFormat.memory(sample.mac.memoryUsed)) of its \(ByteFormat.memory(sample.mac.memoryTotal)), "
+            + "\(ByteFormat.memory(vms)) of it for \(sample.vms.count == 1 ? "1 VM" : "\(sample.vms.count) VMs"); "
+            + "the VMs and the Mac slow down from here, so use fewer slots or give the image less memory")
     }
 
     /// This Mac and its slots as `paddock top` shows them, from the last sample.
@@ -234,11 +248,14 @@ final class WarmPool {
     /// Warns when the slots' VMs together would leave this Mac little memory of its own.
     private func warnAboutMemory(_ source: VMBundle) {
         guard let memory = try? source.readConfig().memorySize else { return }
-        let total = ProcessInfo.processInfo.physicalMemory, wanted = UInt64(slots.count) * memory
-        // shortcut: a fixed 8 GB for macOS and its apps; tune once hosts run other workloads.
-        guard wanted + (8 << 30) > total else { return }
-        print("  warning: \(slots.count) VMs of \(memory >> 30) GB leave this Mac \(Int64(total >> 30) - Int64(wanted >> 30)) GB "
-            + "of its \(total >> 30) GB; use fewer slots or give '\(source.name)' less memory if the host slows down")
+        let total = ProcessInfo.processInfo.physicalMemory
+        let wanted = UInt64(slots.count) * VMSizing.hostMemory(for: memory)
+        // shortcut: 10 GB for macOS and its apps, from the Studio, whose pressure reached warn with two
+        // 8 GB VMs on 36 GB; tune once hosts run other workloads.
+        guard wanted + (10 << 30) > total else { return }
+        print("  warning: \(slots.count) VMs of \(memory >> 30) GB take about \(ByteFormat.memory(wanted)) of this Mac's "
+            + "\(ByteFormat.memory(total)), since a VM costs its Mac more than its own memory; use fewer slots or give "
+            + "'\(source.name)' less memory if the Mac slows down")
     }
 
     /// Boots a clone of `source` with the slot's fresh identity until its agent answers, then
