@@ -11,8 +11,12 @@ import (
 )
 
 // relayedOperations is what a client may ask of a VM it acquired, through the pool: serve's VM
-// operations. task comes later, with its bundles carried as data.
-var relayedOperations = map[string]bool{"release": true, "exec": true, "axtree": true, "input": true, "screenshot": true}
+// operations, task's bundles carried as data both ways.
+var relayedOperations = map[string]bool{"release": true, "exec": true, "axtree": true, "input": true, "screenshot": true, "task": true}
+
+// maxTransfer is the most one request may send to a host, such as a task's bundle, so one can't
+// fill a Mac's disk.
+const maxTransfer = 1 << 30
 
 // waiter is an acquire waiting for a warm slot of its image, first come, first served.
 type waiter struct {
@@ -255,23 +259,12 @@ func (s *server) relayVM(ctx context.Context, client string, l *clientLink, requ
 	fail := func(err error) {
 		_ = l.write(ctx, message{Type: "response", ID: request.ID, Error: err.Error(), Done: true})
 	}
-	asked, err := parseServe(request.Serve)
+	asked, h, err := s.ownedRequest(client, request)
 	if err != nil {
 		fail(err)
 		return
 	}
 	op, vm := asked.str("op"), asked.str("vm")
-	if !relayedOperations[op] {
-		fail(fmt.Errorf("the pool doesn't relay '%s'", op))
-		return
-	}
-	h := s.state.handout(vm)
-	if h == nil || h.Client != client {
-		fail(fmt.Errorf("'%s' isn't a VM you acquired from this pool", vm))
-		return
-	}
-	delete(asked, "bundle")
-	delete(asked, "result")
 	s.audit.record(auditEvent{Event: "request", Client: client, Host: h.Host, VM: vm, Op: op})
 	answers, cancel, err := s.forward(ctx, h.Host, asked.line())
 	if err != nil {
@@ -280,23 +273,102 @@ func (s *server) relayVM(ctx context.Context, client string, l *clientLink, requ
 	}
 	defer cancel()
 	released := false
-	for answer := range answers {
+	pass(ctx, l, request.ID, answers, func(answer message) {
 		if op == "release" && answer.Line != "" {
 			if got, err := parseServe(answer.Line); err == nil && got.str("error") == "" {
 				released = true
 			}
 		}
-		reply := message{Type: "response", ID: request.ID, Line: answer.Line, Data: answer.Data, Error: answer.Error, Done: answer.Done}
-		if err := l.write(ctx, reply); err != nil {
-			return
-		}
-	}
+	})
 	if released {
 		if err := s.state.removeHandout(vm); err != nil {
 			log.Printf("can't save a release: %v", err)
 		}
 		s.audit.record(auditEvent{Event: "released", Client: client, Host: h.Host, VM: vm})
 	}
+}
+
+// pass sends a host's answers on to the client, each seen by look first, until they end or the
+// client goes away.
+func pass(ctx context.Context, l *clientLink, id string, answers <-chan message, look func(message)) {
+	for answer := range answers {
+		look(answer)
+		reply := message{Type: "response", ID: id, Line: answer.Line, Data: answer.Data, Error: answer.Error, Done: answer.Done}
+		if err := l.write(ctx, reply); err != nil {
+			return
+		}
+	}
+}
+
+// ownedRequest reads a client's request for a VM, checks it's the operation the request is routed
+// as and the VM is the client's, and drops any path naming a file on the host; it returns the
+// request and the VM's hand-out.
+func (s *server) ownedRequest(client string, request message) (serveRequest, *handout, error) {
+	asked, err := parseServe(request.Serve)
+	if err != nil {
+		return nil, nil, err
+	}
+	op, vm := asked.str("op"), asked.str("vm")
+	if !relayedOperations[op] {
+		return nil, nil, fmt.Errorf("the pool doesn't relay '%s'", op)
+	}
+	if op != request.Op {
+		return nil, nil, fmt.Errorf("the request is for '%s' but carries '%s'", request.Op, op)
+	}
+	h := s.state.handout(vm)
+	if h == nil || h.Client != client {
+		return nil, nil, fmt.Errorf("'%s' isn't a VM you acquired from this pool", vm)
+	}
+	delete(asked, "bundle")
+	delete(asked, "result")
+	return asked, h, nil
+}
+
+// relayTask runs a task in a VM the client acquired: the client's bundle goes to the VM's host in
+// pieces as they come, and the host's answers, with the bundle of new commits as data, come back.
+func (s *server) relayTask(ctx context.Context, client string, l *clientLink, request message, uploads <-chan message) {
+	defer l.dropUpload(request.ID)
+	fail := func(err error) {
+		_ = l.write(ctx, message{Type: "response", ID: request.ID, Error: err.Error(), Done: true})
+	}
+	asked, h, err := s.ownedRequest(client, request)
+	if err != nil {
+		fail(err)
+		return
+	}
+	s.audit.record(auditEvent{Event: "request", Client: client, Host: h.Host, VM: h.VM, Op: "task"})
+	f, err := s.send(ctx, h.Host, asked.line())
+	if err != nil {
+		fail(fmt.Errorf("the Mac running '%s' isn't reachable: %v", h.VM, err))
+		return
+	}
+	defer f.cancel()
+	uploaded := make(chan error, 1)
+	go func() {
+		total := 0
+		for piece := range uploads {
+			total += len(piece.Data)
+			if total > maxTransfer {
+				uploaded <- fmt.Errorf("the bundle is over %d GB, the most a task takes", maxTransfer>>30)
+				return
+			}
+			if err := f.upload(ctx, piece.Data, piece.Done); err != nil {
+				uploaded <- err
+				return
+			}
+		}
+		uploaded <- nil
+	}()
+	select {
+	case err := <-uploaded:
+		if err != nil {
+			fail(err)
+			return
+		}
+	case <-ctx.Done():
+		return
+	}
+	pass(ctx, l, request.ID, f.answers, func(message) {})
 }
 
 // releaseAll hands back every VM a client holds, as when it's removed or logs out, so a removed

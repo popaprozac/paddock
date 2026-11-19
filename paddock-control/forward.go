@@ -27,17 +27,39 @@ type pendingRequest struct {
 // the host's further answers are dropped instead of holding up its link. A host that isn't online
 // fails at once; a link that closes before the host is done ends the answers with an error.
 func (s *server) forward(ctx context.Context, host, serveLine string) (<-chan message, func(), error) {
+	f, err := s.send(ctx, host, serveLine)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f.answers, f.cancel, nil
+}
+
+// forwarded is a request sent down a host's link: its answers, its cancel, and its ID there, for
+// sending the host data that goes with it, such as a task's bundle.
+type forwarded struct {
+	answers <-chan message
+	cancel  func()
+	id      string
+	link    *link
+}
+
+// upload sends the host a piece of the data that goes with the request, the last marked done.
+func (f *forwarded) upload(ctx context.Context, data []byte, done bool) error {
+	return wsjson.Write(ctx, f.link.conn, message{Type: "upload", ID: f.id, Data: data, Done: done})
+}
+
+func (s *server) send(ctx context.Context, host, serveLine string) (*forwarded, error) {
 	s.mu.Lock()
 	l := s.links[host]
 	s.mu.Unlock()
 	if l == nil {
-		return nil, nil, fmt.Errorf("%s isn't online", host)
+		return nil, fmt.Errorf("%s isn't online", host)
 	}
 	p := &pendingRequest{answers: make(chan message, answersBuffer), gone: make(chan struct{})}
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
-		return nil, nil, fmt.Errorf("%s's link just closed", host)
+		return nil, fmt.Errorf("%s's link just closed", host)
 	}
 	l.nextID++
 	id := "r" + strconv.Itoa(l.nextID)
@@ -56,9 +78,9 @@ func (s *server) forward(ctx context.Context, host, serveLine string) (<-chan me
 	}
 	if err := wsjson.Write(ctx, l.conn, message{Type: "request", ID: id, Serve: serveLine}); err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, err
 	}
-	return p.answers, cancel, nil
+	return &forwarded{answers: p.answers, cancel: cancel, id: id, link: l}, nil
 }
 
 // deliver hands a host's answer to the request it's for, and ends the request once it's done.

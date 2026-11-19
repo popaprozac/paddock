@@ -266,6 +266,7 @@ final class ControlClient {
             work.cancel()
         }
         let error = await end.wait()
+        abandonUploads()
         switch socket.closeCode {
         case .policyViolation: throw Removed()
         case .goingAway: throw PaddockError(Task.isCancelled ? "serve is stopping" : "the control plane stopped or restarted")
@@ -300,6 +301,8 @@ final class ControlClient {
                     let message = try await self.receive(socket)
                     if message.type == "request", let id = message.id {
                         await self.answer(id, serve: message.serve, on: socket)
+                    } else if message.type == "upload" {
+                        await self.receiveUpload(message, on: socket)
                     }
                 }
             }
@@ -308,31 +311,92 @@ final class ControlClient {
         }
     }
 
+    /// A task's bundle on its way from the control plane, into a file this Mac picked.
+    private struct Upload {
+        var request: [String: Any]
+        var bundle: URL
+        var handle: FileHandle
+        var size = 0
+    }
+
+    private var uploads: [String: Upload] = [:]
+
     /// Runs one of the control plane's requests through serve's handler and sends its answer lines
     /// back with the request's ID, the last marked done. A request this Mac doesn't take from its
-    /// link gets serve's kind of error line instead.
+    /// link gets serve's kind of error line instead. Files a request needs are ones this Mac picks,
+    /// never ones the control plane names: a screenshot's, and a task's bundle and result.
     private func answer(_ id: String, serve line: String?, on socket: URLSessionWebSocketTask) {
-        let lines: AsyncStream<String>
-        var screenshot: URL?
         do {
-            var request = try ControlLink.checkRemote(line ?? "")
-            // A screenshot goes to a file this Mac picks, never one the control plane names.
-            if var fields = try JSONSerialization.jsonObject(with: Data(request.utf8)) as? [String: Any],
-               fields["op"] as? String == "screenshot" {
-                let file = FileManager.default.temporaryDirectory.appendingPathComponent("paddock-screen-\(UUID().uuidString).png")
-                fields["result"] = file.path
-                request = String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
-                screenshot = file
+            let request = try ControlLink.checkRemote(line ?? "")
+            guard var fields = try JSONSerialization.jsonObject(with: Data(request.utf8)) as? [String: Any] else {
+                throw PaddockError("that isn't one of serve's requests")
             }
-            let (responder, stream) = try ResponderPipe.make()
-            lines = stream
-            onRequest(request, responder)
+            switch fields["op"] as? String {
+            case "screenshot":
+                let file = Self.temporaryFile("paddock-screen", "png")
+                fields["result"] = file.path
+                try run(fields, id: id, on: socket, sendBack: file, required: true, cleanup: [file])
+            case "task":
+                // The bundle comes next, in pieces; the task runs once it's all here.
+                let bundle = Self.temporaryFile("paddock-task-in", "bundle")
+                guard FileManager.default.createFile(atPath: bundle.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                    throw PaddockError("can't make a file for the task's bundle")
+                }
+                uploads[id] = Upload(request: fields, bundle: bundle, handle: try FileHandle(forWritingTo: bundle))
+            default:
+                try run(fields, id: id, on: socket, sendBack: nil, required: false, cleanup: [])
+            }
         } catch {
-            let refusal = ServeResponse(error: error.localizedDescription).line
-            Task { try? await self.send(ControlLink.Message(type: "response", id: id, done: true, line: refusal), on: socket) }
-            return
+            refuse(id, error, on: socket)
         }
+    }
+
+    /// Takes a piece of a task's bundle; with the last, runs the task.
+    private func receiveUpload(_ message: ControlLink.Message, on socket: URLSessionWebSocketTask) {
+        guard let id = message.id, var upload = uploads[id] else { return }
+        do {
+            if let data = message.data {
+                upload.size += data.count
+                guard upload.size <= ControlLink.maxTransfer else {
+                    throw PaddockError("the bundle is over \(ControlLink.maxTransfer >> 30) GB, the most a task takes")
+                }
+                try upload.handle.write(contentsOf: data)
+            }
+            uploads[id] = upload
+            guard message.done == true else { return }
+            uploads[id] = nil
+            try upload.handle.close()
+            let result = Self.temporaryFile("paddock-task-out", "bundle")
+            var fields = upload.request
+            fields["bundle"] = upload.bundle.path
+            fields["result"] = result.path
+            try run(fields, id: id, on: socket, sendBack: result, required: false, cleanup: [upload.bundle, result])
+        } catch {
+            uploads[id] = nil
+            try? upload.handle.close()
+            try? FileManager.default.removeItem(at: upload.bundle)
+            refuse(id, error, on: socket)
+        }
+    }
+
+    /// Drops the bundles of tasks that never got all their pieces, as when the link closes.
+    private func abandonUploads() {
+        for upload in uploads.values {
+            try? upload.handle.close()
+            try? FileManager.default.removeItem(at: upload.bundle)
+        }
+        uploads.removeAll()
+    }
+
+    /// Runs the request through serve's handler and sends back its lines; then, if serve wrote
+    /// `sendBack`, its bytes, before the last line. Deletes `cleanup` once done.
+    private func run(_ fields: [String: Any], id: String, on socket: URLSessionWebSocketTask, sendBack: URL?, required: Bool,
+                     cleanup: [URL]) throws {
+        let request = String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        let (responder, lines) = try ResponderPipe.make()
+        onRequest(request, responder)
         Task {
+            defer { cleanup.forEach { try? FileManager.default.removeItem(at: $0) } }
             var last: String?
             for await answer in lines {
                 if let previous = last {
@@ -340,23 +404,30 @@ final class ControlClient {
                 }
                 last = answer
             }
-            if let screenshot {
-                last = await sendFile(screenshot, answered: last, id: id, on: socket)
+            if let sendBack {
+                last = await sendFile(sendBack, answered: last, required: required, id: id, on: socket)
             }
             // The last line goes out marked done, so the control plane knows the request is over.
             try? await send(ControlLink.Message(type: "response", id: id, done: true, line: last), on: socket)
         }
     }
 
-    /// Sends the screenshot serve saved, in pieces, and deletes it; returns the answer line to end
-    /// with, without the file's path, which is this Mac's business.
-    private func sendFile(_ file: URL, answered line: String?, id: String, on socket: URLSessionWebSocketTask) async -> String? {
-        defer { try? FileManager.default.removeItem(at: file) }
+    private func refuse(_ id: String, _ error: Error, on socket: URLSessionWebSocketTask) {
+        let refusal = ServeResponse(error: error.localizedDescription).line
+        Task { try? await self.send(ControlLink.Message(type: "response", id: id, done: true, line: refusal), on: socket) }
+    }
+
+    /// Sends the file serve wrote, in pieces; returns the answer line to end with, without the
+    /// file's path, which is this Mac's business. A file that isn't there is an error if
+    /// `required` (a screenshot), and nothing to send otherwise (a task with no new commits).
+    private func sendFile(_ file: URL, answered line: String?, required: Bool, id: String,
+                          on socket: URLSessionWebSocketTask) async -> String? {
         if let line, line.contains("\"error\"") {
             return line
         }
+        let ending = Self.withoutResult(line) ?? "{}"
         guard let data = try? Data(contentsOf: file) else {
-            return ServeResponse(error: "the screenshot wasn't saved").line
+            return required ? ServeResponse(error: "serve didn't save the file").line : ending
         }
         var offset = 0
         while offset < data.count {
@@ -364,7 +435,20 @@ final class ControlClient {
             try? await send(ControlLink.Message(type: "response", id: id, data: data.subdata(in: offset..<end)), on: socket)
             offset = end
         }
-        return "{}"
+        return ending
+    }
+
+    /// serve's answer line without its "result", which names a file on this Mac.
+    private static func withoutResult(_ line: String?) -> String? {
+        guard let line, var fields = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else {
+            return line
+        }
+        fields["result"] = nil
+        return (try? JSONSerialization.data(withJSONObject: fields)).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    private static func temporaryFile(_ name: String, _ ext: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString).\(ext)")
     }
 
     /// Sends the slots when they change, checked every second, and free disk at least every minute.

@@ -116,7 +116,7 @@ import Testing
     @Test func takesOnlyVMOperationsThatNameNoFileFromTheLink() throws {
         for line in [#"{"op":"acquire","allow":["github.com"]}"#, #"{"op":"exec","vm":"v","command":"ls"}"#,
                      #"{"op":"release","vm":"v"}"#, #"{"op":"axtree","vm":"v"}"#, #"{"op":"input","vm":"v"}"#,
-                     #"{"op":"screenshot","vm":"v"}"#] {
+                     #"{"op":"screenshot","vm":"v"}"#, #"{"op":"task","vm":"v","command":"make"}"#] {
             #expect(try ControlLink.checkRemote(line) == line)
         }
         for line in [#"{"op":"task","vm":"v","bundle":"/etc/passwd","result":"/tmp/x"}"#,

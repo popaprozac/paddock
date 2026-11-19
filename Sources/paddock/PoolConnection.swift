@@ -79,9 +79,9 @@ final class PoolConnection: @unchecked Sendable {
         }
     }
 
-    /// Sends a request and returns its answers as they come, ending after the one marked done,
-    /// or with the request's error, or with why the link ended.
-    func request(_ message: ControlLink.Message) -> AsyncThrowingStream<ControlLink.Message, Error> {
+    /// Sends a request, then `upload` in pieces if given, and returns its answers as they come,
+    /// ending after the one marked done, or with the request's error, or with why the link ended.
+    func request(_ message: ControlLink.Message, upload: URL? = nil) -> AsyncThrowingStream<ControlLink.Message, Error> {
         var message = message
         let (stream, continuation) = AsyncThrowingStream<ControlLink.Message, Error>.makeStream()
         let ended: Error? = lock.withLock {
@@ -96,14 +96,30 @@ final class PoolConnection: @unchecked Sendable {
             return stream
         }
         message.type = "request"
+        let id = message.id ?? ""
         Task { [self] in
             do {
                 try await send(message)
+                if let upload {
+                    try await send(upload, as: id)
+                }
             } catch {
                 end(error)
             }
         }
         return stream
+    }
+
+    /// Sends a file after its request, in pieces, the last marked done.
+    private func send(_ file: URL, as id: String) async throws {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        while true {
+            let data = try handle.read(upToCount: ControlLink.chunkSize) ?? Data()
+            let last = data.count < ControlLink.chunkSize
+            try await send(ControlLink.Message(type: "upload", id: id, done: last ? true : nil, data: data.isEmpty ? nil : data))
+            if last { return }
+        }
     }
 
     /// The answers to one request, all of them, or its error.

@@ -64,6 +64,25 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 				reply(`{}`, true)
 			case "release":
 				reply(`{"vm":"`+request["vm"].(string)+`"}`, true)
+			case "task":
+				// The bundle arrives as uploads after the request; the result goes back as data.
+				var bundle []byte
+				for {
+					var piece message
+					if err := wsjson.Read(ctx, conn, &piece); err != nil {
+						return
+					}
+					if piece.Type != "upload" || piece.ID != m.ID {
+						continue
+					}
+					bundle = append(bundle, piece.Data...)
+					if piece.Done {
+						break
+					}
+				}
+				reply(`{"output":"got `+string(bundle)+`"}`, false)
+				wsjson.Write(ctx, conn, message{Type: "response", ID: m.ID, Data: []byte("NEW-COMMITS")})
+				reply(`{"exit":0}`, true)
 			default:
 				reply(`{"error":"unexpected"}`, true)
 			}
@@ -243,5 +262,50 @@ func TestRemovingAClientReleasesItsVMs(t *testing.T) {
 	}
 	if c.srv.state.handout("golden-slot1-abc") != nil || !host.sawRequest("release") {
 		t.Fatalf("the removed client's VM wasn't released: %v", host.all())
+	}
+}
+
+func TestATasksBundleGoesUpAndItsResultComesBack(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	task := `{"op":"task","vm":"golden-slot1-abc","command":"make","bundle":"/etc/hosts","result":"/etc/passwd"}`
+	wsjson.Write(ctx, conn, message{Type: "request", ID: "2", Op: "task", Serve: task})
+	wsjson.Write(ctx, conn, message{Type: "upload", ID: "2", Data: []byte("BUN")})
+	wsjson.Write(ctx, conn, message{Type: "upload", ID: "2", Data: []byte("DLE"), Done: true})
+	var answers []message
+	for {
+		var m message
+		if err := wsjson.Read(ctx, conn, &m); err != nil {
+			t.Fatalf("task answers: %v; so far %+v", err, answers)
+		}
+		answers = append(answers, m)
+		if m.Done {
+			break
+		}
+	}
+	if len(answers) != 3 || answers[0].Line != `{"output":"got BUNDLE"}` || string(answers[1].Data) != "NEW-COMMITS" {
+		t.Fatalf("task answers %+v", answers)
+	}
+	for _, line := range host.all() {
+		if strings.Contains(line, "/etc/") {
+			t.Fatalf("a client's path reached the host: %s", line)
+		}
+	}
+}
+
+func TestARequestMustCarryTheOperationItsRoutedAs(t *testing.T) {
+	c := newTestControl(t)
+	c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	got := ask(t, conn, message{ID: "2", Op: "exec", Serve: `{"op":"task","vm":"golden-slot1-abc","command":"make"}`})
+	if !strings.Contains(got[0].Error, "carries 'task'") {
+		t.Fatalf("a task sent as exec: %+v", got)
 	}
 }

@@ -20,6 +20,7 @@ type clientLink struct {
 	writeMu   sync.Mutex // answers to requests on one link go out one at a time
 	mu        sync.Mutex
 	lastSeen  time.Time
+	uploads   map[string]chan message // data the client sends after a request, by the request's ID
 }
 
 // clientLink takes a client's WebSocket, has it prove it holds its enrolled key, then answers its
@@ -66,6 +67,10 @@ func (s *server) clientLink(w http.ResponseWriter, r *http.Request) {
 		l.mu.Lock()
 		l.lastSeen = s.now()
 		l.mu.Unlock()
+		if m.Type == "upload" && m.ID != "" {
+			l.passUpload(m)
+			continue
+		}
 		if m.Type != "request" || m.ID == "" {
 			continue
 		}
@@ -81,6 +86,11 @@ func (s *server) answer(ctx context.Context, client string, l *clientLink, reque
 		reply.Hosts = s.status()
 	case "acquire":
 		go s.relayAcquire(ctx, client, l, request)
+		return
+	case "task":
+		// Expected before the next message is read, which may already be the bundle's first piece.
+		uploads := l.expectUpload(request.ID)
+		go s.relayTask(ctx, client, l, request, uploads)
 		return
 	case "logout":
 		// The client removes itself: its VMs go back, its key is forgotten, and this and its other
@@ -101,6 +111,43 @@ func (s *server) answer(ctx context.Context, client string, l *clientLink, reque
 		reply.Error = "unknown request " + request.Op
 	}
 	_ = l.write(ctx, reply)
+}
+
+// expectUpload makes room for the data the client sends after request id.
+func (l *clientLink) expectUpload(id string) <-chan message {
+	uploads := make(chan message, 16)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.uploads == nil {
+		l.uploads = map[string]chan message{}
+	}
+	l.uploads[id] = uploads
+	return uploads
+}
+
+// passUpload hands a piece of a client's data to the request it's for; data nobody expects, or
+// no longer does, is dropped.
+func (l *clientLink) passUpload(m message) {
+	l.mu.Lock()
+	uploads := l.uploads[m.ID]
+	if uploads != nil && m.Done {
+		delete(l.uploads, m.ID)
+	}
+	l.mu.Unlock()
+	if uploads == nil {
+		return
+	}
+	uploads <- m
+	if m.Done {
+		close(uploads)
+	}
+}
+
+// dropUpload stops expecting data for request id.
+func (l *clientLink) dropUpload(id string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.uploads, id)
 }
 
 func (l *clientLink) write(ctx context.Context, m message) error {

@@ -60,12 +60,13 @@ public enum ControlLink {
 
     /// What a Mac takes from the control plane over its link: serve's VM operations, naming no file
     /// on the Mac. A request from the link that named one could reach any file serve's user can,
-    /// so a screenshot from the link gets a file the Mac picks itself, and task, which reads and
-    /// writes bundles, doesn't come over the link yet.
-    public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input", "screenshot"]
+    /// so the files a screenshot or a task needs are ones the Mac picks itself.
+    public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input", "screenshot", "task"]
 
     /// The most a piece of a file sent over a link holds.
     public static let chunkSize = 256 * 1024
+    /// The most one request sends, such as a task's bundle, so one can't fill a Mac's disk.
+    public static let maxTransfer = 1 << 30
 
     /// `line`, one of serve's requests, if a Mac takes it from the control plane; or why not.
     public static func checkRemote(_ line: String) throws -> String {
