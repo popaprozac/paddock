@@ -64,7 +64,9 @@ paddock top                          # watch the Mac and each VM, live; Ctrl-C q
 ```
 
 `paddock task` runs a command on a git branch in the VM and brings back what it commits; it needs
-the Command Line Tools in the golden image, for `git`. See [Commands](docs/commands.md).
+the Command Line Tools in the golden image, for `git`. `paddock init golden.yaml --template ci`
+writes an image file that installs them; the default template has the same steps commented out.
+See [Golden images](docs/golden-images.md#build-one-from-an-image-file).
 
 **4. Give it to an agent.** In Claude Code, for example:
 

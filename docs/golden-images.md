@@ -8,7 +8,7 @@ A golden image is the VM every clone starts from. Make one from an image file wi
 With macOS 27 on this Mac and macOS 15, 26 or 27 in the VM, `paddock build` makes a golden image
 from an image file, with no one at the keyboard. `paddock init golden.yaml` writes a commented one
 to start from, with `--template minimal` (the default: the latest macOS, for your own agents and for
-you), `ci` (a pinned macOS plus the tools CI jobs need) or `managed` (a pinned macOS, with a person
+you), `ci` (a pinned macOS plus the Command Line Tools, for `git` and the compilers) or `managed` (a pinned macOS, with a person
 making the privacy grants in the image, so paddock never writes the privacy database). Templates are
 starting points: any file can take any setting. None accepts Apple's license for you: its license
 line ships commented out.
@@ -83,6 +83,14 @@ shared folder at `/Volumes/My Shared Files`. Each step's output is shown as it r
 step that fails stops the build. Then it checks the image as `serve` does, has the guest shut
 itself down, and says what is left for a person, if anything. A build that stops leaves the VM in
 place to look at; delete it to build again.
+
+`paddock task`, and most CI jobs, need `git`, which comes with Apple's Command Line Tools. The
+`ci` template installs them with two steps: as root, Apple's on-demand install, which asks
+`softwareupdate` for the newest Command Line Tools and installs them, about 1 GB from Apple's
+update servers; then, as the account, `git --version`, so a build without them fails. Installing
+them accepts Apple's Xcode and SDK license for the image. The `minimal` and `managed` templates
+have the same steps commented out. Tested with a macOS 27.2.1 guest, which got the Command Line
+Tools for Xcode 27.2.
 
 For a macOS 27 guest, the app paddock runs in, such as Terminal, needs Local Network access in
 System Settings > Privacy & Security to reach the guest over SSH.

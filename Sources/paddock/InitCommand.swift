@@ -9,7 +9,7 @@ struct Init: ParsableCommand {
         abstract: "Write a starter image file for 'paddock build'.",
         discussion: """
             minimal: the latest macOS with nothing left to click, for your own agents and for you. \
-            ci: a pinned macOS plus the tools CI jobs need. managed: a pinned macOS, with a person \
+            ci: a pinned macOS plus the Command Line Tools, for git and the compilers. managed: a pinned macOS, with a person \
             making the privacy grants in the image, so paddock never writes the privacy database. \
             Templates are starting points: any file can take any setting. Every template leaves \
             accepting Apple's license to you: uncomment its license line to accept it for the image.

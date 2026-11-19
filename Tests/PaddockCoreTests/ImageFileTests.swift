@@ -89,7 +89,8 @@ import Yams
         for template in ImageTemplate.allCases {
             let file = try decode(template.text)
             #expect(!file.acceptsLicense, "\(template)")
-            #expect(file.steps.isEmpty, "\(template)")
+            #expect(file.steps.map(\.name) == (template == .ci
+                ? ["Install the Command Line Tools", "Check that git works for the account"] : []), "\(template)")
             #expect(template.text.contains("# license: accept"), "\(template)")
         }
         #expect(try decode(ImageTemplate.minimal.text).from == .latest)
@@ -104,6 +105,7 @@ import Yams
             .replacingOccurrences(of: "#   ", with: "  ")
         let file = try decode(uncommented)
         #expect(file.share == "installers")
-        #expect(file.steps.map(\.user) == [.root, .user])
+        #expect(file.steps.map(\.user) == [.root, .user, .root, .user])
+        #expect(file.steps.first?.run.contains("softwareupdate --install") == true)
     }
 }
