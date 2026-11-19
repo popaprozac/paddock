@@ -344,10 +344,13 @@ func (s *server) relayVM(ctx context.Context, client string, l *clientLink, requ
 		}
 	})
 	if released {
-		if err := s.state.removeHandout(vm); err != nil {
+		removed, err := s.state.removeHandout(vm)
+		if err != nil {
 			log.Printf("can't save a release: %v", err)
 		}
-		s.audit.record(auditEvent{Event: "released", Client: client, Host: h.Host, VM: vm})
+		if removed {
+			s.audit.record(auditEvent{Event: "released", Client: client, Host: h.Host, VM: vm})
+		}
 	}
 }
 
@@ -451,10 +454,13 @@ func (s *server) forgetMissing(host string, slots []slot) {
 		reported[slot.VM] = true
 	}
 	for _, h := range s.state.handoutsWhere(func(h handout) bool { return h.Host == host && !reported[h.VM] }) {
-		if err := s.state.removeHandout(h.VM); err != nil {
+		removed, err := s.state.removeHandout(h.VM)
+		if err != nil {
 			log.Printf("can't save a release: %v", err)
 		}
-		s.audit.record(auditEvent{Event: "released", Client: h.Client, Host: host, VM: h.VM, Reason: "the Mac no longer has it"})
+		if removed {
+			s.audit.record(auditEvent{Event: "released", Client: h.Client, Host: host, VM: h.VM, Reason: "the Mac no longer has it"})
+		}
 	}
 }
 
@@ -467,6 +473,7 @@ func (s *server) releaseOn(client, host, vm, reason string) {
 		}
 		stop()
 	}
-	_ = s.state.removeHandout(vm)
-	s.audit.record(auditEvent{Event: "released", Client: client, Host: host, VM: vm, Reason: reason})
+	if removed, _ := s.state.removeHandout(vm); removed {
+		s.audit.record(auditEvent{Event: "released", Client: client, Host: host, VM: vm, Reason: reason})
+	}
 }

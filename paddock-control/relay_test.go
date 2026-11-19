@@ -405,6 +405,28 @@ func TestAHandOutIsForgottenWhenItsMacNoLongerReportsTheVM(t *testing.T) {
 	if c.srv.state.handout("golden-slot1-abc") == nil {
 		t.Fatal("a VM the Mac still reports was forgotten")
 	}
+	// A release that lost the race to that report records nothing more.
+	c.srv.releaseOn(client, host.id, "golden-slot1-abc2", "client removed")
+	audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+	if n := strings.Count(string(audited), `"event":"released"`); n != 1 {
+		t.Fatalf("%d released events for one hand-out:\n%s", n, audited)
+	}
+}
+
+// Of the paths racing to end a hand-out, only the one that removes it gets told so.
+func TestAHandOutIsRemovedOnce(t *testing.T) {
+	st, err := openState(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.addHandout(handout{VM: "golden-slot1-abc", Host: "host", Client: "client"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err1 := st.removeHandout("golden-slot1-abc")
+	second, err2 := st.removeHandout("golden-slot1-abc")
+	if !first || second || err1 != nil || err2 != nil {
+		t.Fatalf("removals: %v (%v), then %v (%v); want true, then false", first, err1, second, err2)
+	}
 }
 
 func TestATasksBundleGoesUpAndItsResultComesBack(t *testing.T) {

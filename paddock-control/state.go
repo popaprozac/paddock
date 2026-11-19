@@ -128,14 +128,16 @@ func (s *state) handout(vm string) *handout {
 	return nil
 }
 
-func (s *state) removeHandout(vm string) error {
+// removeHandout forgets the VM's hand-out and says whether there was one, so that of the paths
+// racing to end it, such as a release and the Mac's report without the VM, only one records it.
+func (s *state) removeHandout(vm string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.data.Handouts[vm] == nil {
-		return nil
+		return false, nil
 	}
 	delete(s.data.Handouts, vm)
-	return s.save()
+	return true, s.save()
 }
 
 // handoutsWhere is every hand-out that match picks.
