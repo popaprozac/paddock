@@ -44,9 +44,7 @@ enum PoolRoute {
         let answers = Answers()
         let work = Task.detached {
             do {
-                let connection = try await PoolConnection.open(identity)
-                answers.hold(connection)
-                defer { connection.close() }
+                let connection = try await SharedLink.shared.connection(for: identity)
                 var file = Data()
                 let asked = ControlLink.Message(type: "request", image: image, op: request.op, serve: line)
                 for try await answer in connection.request(asked, upload: upload) {
@@ -71,10 +69,8 @@ enum PoolRoute {
                 answers.put(.failure(error))
             }
         }
-        defer {
-            work.cancel()
-            answers.close()
-        }
+        // Stopping early ends only this request: the link stays open for the next.
+        defer { work.cancel() }
         while true {
             switch answers.take() {
             case let .note(note):
@@ -106,7 +102,6 @@ private final class Answers: @unchecked Sendable {
 
     private let condition = NSCondition()
     private var items: [Item] = []
-    private var connection: PoolConnection?
 
     func put(_ item: Item) {
         condition.withLock {
@@ -123,14 +118,26 @@ private final class Answers: @unchecked Sendable {
             return items.removeFirst()
         }
     }
+}
 
-    func hold(_ connection: PoolConnection) {
-        condition.withLock { self.connection = connection }
-    }
+/// The process's one link to the control plane, opened by its first request and kept for the
+/// rest: paddock mcp makes a request per tool call, and a link each would cost every call a
+/// handshake and the audit log two events. A link that ended is opened again on the next request.
+private actor SharedLink {
+    static let shared = SharedLink()
+    private var current: Task<PoolConnection, Error>?
 
-    /// Closes the link if the caller stops early, so its request ends at the control plane too.
-    func close() {
-        let connection = condition.withLock { self.connection }
-        connection?.close()
+    func connection(for identity: ControlIdentity) async throws -> PoolConnection {
+        // Kept as a task, so requests that come while it opens wait for the same link.
+        while let pending = current {
+            if let connection = try? await pending.value, connection.isOpen {
+                return connection
+            }
+            // While this waited, another request may have started a new link: use that one.
+            if current == pending { break }
+        }
+        let opening = Task { try await PoolConnection.open(identity) }
+        current = opening
+        return try await opening.value
     }
 }
