@@ -115,6 +115,7 @@ final class WarmPool {
     private var waiting: [(responder: Responder, allow: [String])] = []  // acquires that came in before a VM was warm
     private var server: LineServer?
     private var interrupts: [any DispatchSourceSignal] = []
+    private var awake: (any NSObjectProtocol)?
     private var stopping = false
     private var sessionHelper: Bool?  // whether the source has paddock-session, asked once
     private var checkedSource = false  // the first slot to boot checks the source for both
@@ -211,6 +212,10 @@ final class WarmPool {
         }
         // SIGTERM is how launchd stops a job, and how shutdown and logout stop everything.
         interrupts = [SIGINT, SIGTERM].map { number in onInterrupt(number) { [weak self] in self?.shutDown() } }
+        // Neither serve nor macOS's VM service otherwise keeps a host with a sleep timer from
+        // idle sleep, which would stop every slot. Lid close and Sleep from the menu still work.
+        awake = ProcessInfo.processInfo.beginActivity(options: .idleSystemSleepDisabled,
+                                                      reason: "paddock serve keeps its slots' VMs running")
         deleteLeftoverSlots(of: name)
         sampleUsage()
         if let control {
