@@ -142,6 +142,21 @@ final class HeadlessVM: NSObject {
         try drivenScreen().scroll(x: x, y: y, down: down, right: right)
     }
 
+    /// Puts the VM's window on this Mac's screen for a person; `handBack` runs when they close it.
+    func show(title: String, handBack: @escaping () -> Void) throws {
+        try drivenScreen().show(title: title, handBack: handBack)
+    }
+
+    /// Puts the VM's window back off screen, if a person has it.
+    func hide() {
+        screen?.hide()
+    }
+
+    /// Whether a person has the VM's window on screen.
+    var isShown: Bool {
+        screen?.isShown ?? false
+    }
+
     private func drivenScreen() throws -> VMScreen {
         if let failure { throw failure }
         try attachScreen()

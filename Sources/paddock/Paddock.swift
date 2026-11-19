@@ -7,7 +7,7 @@ struct Paddock: AsyncParsableCommand {
         commandName: "paddock",
         abstract: "macOS sandboxes on Apple silicon: install, run, clone, benchmark and serve VMs.",
         version: "0.1.0",
-        subcommands: [Install.self, Run.self, Clone.self, Bench.self, Serve.self, Acquire.self, Exec.self, RunTask.self, Screenshot.self, AXTreeCommand.self, Click.self, TypeText.self, Key.self, Scroll.self, Release.self, MCPCommand.self, Init.self, Build.self, GrantCommand.self, Login.self, Logout.self, Hosts.self, Top.self, Askpass.self]
+        subcommands: [Install.self, Run.self, Clone.self, Bench.self, Serve.self, Acquire.self, Exec.self, RunTask.self, Screenshot.self, AXTreeCommand.self, Click.self, TypeText.self, Key.self, Scroll.self, Release.self, Show.self, Hide.self, MCPCommand.self, Init.self, Build.self, GrantCommand.self, Login.self, Logout.self, Hosts.self, Top.self, Askpass.self]
     )
 }
 
@@ -52,7 +52,12 @@ enum Entry {
             }
             Paddock.exit()
         }
-        CFRunLoopRun()
-        Paddock.exit()
+        // The command ends the process when it's done. AppKit stops this run loop once a window
+        // takes events, as serve's on paddock show, so run it again rather than end the command.
+        while true {
+            if CFRunLoopRunInMode(.defaultMode, .greatestFiniteMagnitude, false) == .finished {
+                usleep(10_000)  // nothing to run yet: don't spin
+            }
+        }
     }
 }

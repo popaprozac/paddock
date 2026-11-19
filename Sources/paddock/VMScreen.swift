@@ -13,25 +13,135 @@ import Virtualization
 /// shortcut: Apple doesn't document that the framebuffer view keeps its frame as an IOSurface in
 /// its layer; if a macOS release changes that, `capture` throws instead of returning a frame.
 @MainActor
-final class VMScreen {
+final class VMScreen: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let view: VZVirtualMachineView
+    private let size: NSSize           // the guest's pixels, one view point each while off screen
+    private var handBack: (() -> Void)?  // set while a person has the window on screen
+    private static var shown: [VMScreen] = []  // on screen now: paddock shows in the Dock while any is
+    private static var pump: Timer?            // hands AppKit's events to windows while any is on screen
+    private static let dock = Dock()
+
+    /// Where the window waits: off every display. The view only receives frames once it is in a
+    /// window, visible or not.
+    private static let offScreen = NSPoint(x: -20_000, y: -20_000)
 
     init(machine: VZVirtualMachine, display: VMConfig.Display) throws {
         guard CGSessionCopyCurrentDictionary() != nil else {
             throw PaddockError("this paddock can't reach the window server; start it from a logged-in session to read VM screens")
         }
         _ = NSApplication.shared  // AppKit needs it before any window; without a bundle it shows no Dock icon
-        let size = NSSize(width: display.widthInPixels, height: display.heightInPixels)
+        size = NSSize(width: display.widthInPixels, height: display.heightInPixels)
         view = VZVirtualMachineView(frame: NSRect(origin: .zero, size: size))
         view.virtualMachine = machine
-        // Off every display: the view only receives frames once it is in a window, visible or not.
-        window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -20_000, y: -20_000), size: size),
+        window = NSWindow(contentRect: NSRect(origin: Self.offScreen, size: size),
                           styleMask: .borderless, backing: .buffered, defer: false)
+        super.init()
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.transient, .ignoresCycle]
         window.contentView = view
         window.orderFrontRegardless()
+    }
+
+    /// Whether a person has the window on screen.
+    var isShown: Bool { handBack != nil }
+
+    /// Puts the window on this Mac's screen for a person: titled, resizable and taking the mouse
+    /// and keyboard, with the guest's resolution kept, scaled down only to fit. `handBack` runs
+    /// when they close the window, which hands the VM back instead of closing it.
+    func show(title: String, handBack: @escaping () -> Void) {
+        if !isShown {
+            Self.shown.append(self)
+            NSApplication.shared.setActivationPolicy(.regular)
+            Self.startEvents()
+        }
+        self.handBack = handBack
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.title = title
+        window.collectionBehavior = []
+        window.hasShadow = true  // a window made borderless starts without one
+        window.delegate = self
+        window.contentAspectRatio = size
+        let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame.size ?? size
+        let scale = min(1, visible.width * 0.9 / size.width, visible.height * 0.9 / size.height)
+        window.setContentSize(NSSize(width: size.width * scale, height: size.height * scale))
+        window.center()
+        view.capturesSystemKeys = true
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(view)
+        NSApplication.shared.activate()
+    }
+
+    /// Puts the window back off every display at the guest's size, where a guest pixel is a view
+    /// point again for paddock's own input.
+    func hide() {
+        guard isShown else { return }
+        handBack = nil
+        Self.shown.removeAll { $0 === self }
+        view.capturesSystemKeys = false
+        window.delegate = nil
+        window.styleMask = .borderless
+        window.collectionBehavior = [.transient, .ignoresCycle]
+        window.hasShadow = false
+        window.contentResizeIncrements = NSSize(width: 1, height: 1)  // clears the aspect ratio
+        window.setFrame(NSRect(origin: Self.offScreen, size: size), display: false)
+        window.orderFrontRegardless()
+        if Self.shown.isEmpty {
+            Self.pump?.invalidate()
+            Self.pump = nil
+            NSApplication.shared.setActivationPolicy(.prohibited)
+        }
+    }
+
+    /// serve's main thread runs a plain run loop, not AppKit's event loop, so a window on screen
+    /// would get no clicks, keys or activation: hand AppKit's events on while any window is shown.
+    private static func startEvents() {
+        if NSApplication.shared.delegate == nil {
+            NSApplication.shared.delegate = dock
+            NSApplication.shared.finishLaunching()
+        }
+        guard pump == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                while let event = NSApplication.shared.nextEvent(matching: .any, until: .distantPast,
+                                                                 inMode: .default, dequeue: true) {
+                    NSApplication.shared.sendEvent(event)
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pump = timer
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        handBack?()
+        return false
+    }
+
+    /// paddock in the Dock, while a person has a window: clicking it brings the windows to the
+    /// front, and Quit hands them all back instead of stopping serve and every slot with it.
+    /// Logging out, restarting or shutting down still stop it; Force Quit can't be caught.
+    private final class Dock: NSObject, NSApplicationDelegate {
+        func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+            let event = NSAppleEventManager.shared().currentAppleEvent
+            if let reason = event?.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue,
+               [kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAERestart, kAEShowShutdownDialog, kAEShutDown]
+                   .map({ OSType($0) }).contains(reason) {
+                return .terminateNow
+            }
+            for screen in VMScreen.shown {
+                screen.handBack?()
+            }
+            return .terminateCancel
+        }
+
+        func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+            for screen in VMScreen.shown {
+                screen.window.makeKeyAndOrderFront(nil)
+            }
+            sender.activate()
+            return false
+        }
     }
 
     /// The latest frame, copied, or nil until the first frame arrives.
@@ -175,6 +285,7 @@ final class VMScreen {
     }
 
     func close() {
+        hide()
         window.orderOut(nil)
         view.virtualMachine = nil
         window.close()

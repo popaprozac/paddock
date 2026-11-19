@@ -20,6 +20,8 @@
 | `paddock key <vm> <combination>...` | Presses key combinations in turn, such as `cmd+s`, `cmd+shift+z` or `return`. |
 | `paddock scroll <vm> <x> <y> [--down n] [--up n] [--right n] [--left n]` | Scrolls by about n lines at a point of the guest's screen. |
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
+| `paddock show <vm>` | On the Mac whose `serve` runs it, puts a VM that `acquire` handed out on screen for a person, in a window that takes the mouse and keyboard, with the guest's resolution kept (see [Taking a VM over by hand](agents.md#taking-a-vm-over-by-hand)). |
+| `paddock hide <vm>` | Hands a VM that `show` put on screen back to agents: its window goes off screen again. |
 | `paddock top [--local] [--json]` | Shows this Mac's `serve`, or on a Mac logged in to a control plane the whole pool: each Mac's CPU, memory, memory pressure, free disk and thermal state, and each slot's VM, who holds it, how long it has been in its state and what it uses. Redraws every 2 s until Ctrl-C; with `--json`, or when the output isn't a terminal, prints one snapshot (see [Watching with paddock top](#watching-with-paddock-top)). |
 | `paddock mcp` | Serves `serve`'s VMs, or the pool's on a logged-in Mac, to an agent as an MCP server on stdin and stdout (see [Agents over MCP](agents.md#agents-over-mcp)). |
 

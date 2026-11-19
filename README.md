@@ -12,7 +12,8 @@ Apache 2.0.
 - **Warm clones.** APFS copy-on-write clones, restored from a saved state, one per slot.
 - **Commands and git tasks** in the guest, through an agent that listens only on vsock.
 - **A network per VM** that reaches only the host names you allow.
-- **Screen and input from the host:** screenshots, the accessibility tree, mouse and keyboard.
+- **Screen and input from the host:** screenshots, the accessibility tree, mouse and keyboard,
+  and `paddock show` to take a VM over by hand while agents wait.
 - **A live view**, `paddock top`, of each Mac's CPU, memory and disk, and what each VM uses.
 - **An MCP server**, `paddock mcp`, so an agent can drive a VM.
 - **A pool of Macs.** A control plane hands out VMs from every Mac in it; the Macs only connect
