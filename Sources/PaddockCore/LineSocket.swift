@@ -141,6 +141,18 @@ public final class Responder: @unchecked Sendable {
         UnixSocket.read(upTo: count, from: fd)
     }
 
+    /// Whether the client has closed its end, as when a waiting `paddock acquire` is stopped. Only
+    /// for clients that send nothing more after their request line: anything but end of file
+    /// counts as still there.
+    public var clientHungUp: Bool {
+        finished.withLock { finished in
+            if finished { return true }
+            var byte: UInt8 = 0
+            let count = recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
+            return count == 0 || (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+        }
+    }
+
     /// Sends a last line, if given, and closes the connection. Later calls do nothing.
     public func finish(_ line: String? = nil) {
         finished.withLock { finished in

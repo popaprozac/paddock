@@ -28,6 +28,10 @@ type waiter struct {
 // caller holds s.mu.
 func (s *server) warmFree(host string, l *link) int {
 	l.mu.Lock()
+	if l.busy {
+		l.mu.Unlock()
+		return 0
+	}
 	warm := 0
 	for _, slot := range l.slots {
 		if slot.State == "warm" {
@@ -119,12 +123,18 @@ func (s *server) chooseImage(asked string) (string, error) {
 }
 
 // waitForSlot returns a host with a warm slot of image reserved for this acquire, waiting its
-// turn behind earlier ones; note tells the client it's waiting.
-func (s *server) waitForSlot(ctx context.Context, image string, note func(string)) (string, error) {
+// turn behind earlier ones, or ahead of them all when it's back after a busy host; note tells the
+// client it's waiting.
+func (s *server) waitForSlot(ctx context.Context, image string, front bool, note func(string)) (string, error) {
 	w := &waiter{image: image, assigned: make(chan string, 1)}
 	s.mu.Lock()
-	s.waiters = append(s.waiters, w)
-	ahead := len(s.waiters) - 1
+	ahead := 0
+	if front {
+		s.waiters = append([]*waiter{w}, s.waiters...)
+	} else {
+		ahead = len(s.waiters)
+		s.waiters = append(s.waiters, w)
+	}
 	s.dispatchLocked()
 	s.mu.Unlock()
 	select {
@@ -207,50 +217,103 @@ func (s *server) relayAcquire(ctx context.Context, client string, l *clientLink,
 		fail(err)
 		return
 	}
-	host, err := s.waitForSlot(ctx, image, func(note string) {
+	note := func(note string) {
 		_ = l.write(ctx, message{Type: "response", ID: request.ID, Note: note})
-	})
-	if err != nil {
-		return // the client went away
 	}
-	defer s.unreserve(host)
-	answers, cancel, err := s.forward(ctx, host, forward.line())
-	if err != nil {
-		fail(err)
-		return
-	}
-	defer cancel()
-	hostName := ""
-	if member := s.state.member(hostKind, host); member != nil {
-		hostName = member.Name
-	}
-	for answer := range answers {
-		if answer.Error != "" {
-			fail(fmt.Errorf("%s", answer.Error))
-			return
+	var host string
+	var got serveRequest
+	for busy := false; ; {
+		if host, err = s.waitForSlot(ctx, image, busy, note); err != nil {
+			return // the client went away
 		}
-		got, err := parseServe(answer.Line)
-		if err != nil {
+		if got, busy, err = s.acquireOn(ctx, host, forward); err != nil {
 			fail(err)
 			return
 		}
+		if !busy {
+			break
+		}
+	}
+	vm := got.str("vm")
+	if err := s.state.addHandout(handout{VM: vm, Host: host, Client: client, Image: image, Since: s.now()}); err != nil {
+		log.Printf("can't save a hand-out: %v", err)
+	}
+	s.audit.record(auditEvent{Event: "handed-out", Client: client, Host: host, VM: vm, Image: image})
+	if member := s.state.member(hostKind, host); member != nil {
+		got["host"] = member.Name
+	}
+	// A client that left while its acquire was on its way would never know to release the VM.
+	if ctx.Err() != nil || l.write(ctx, message{Type: "response", ID: request.ID, Line: got.line(), Done: true}) != nil {
+		s.releaseOn(client, host, vm, "the client left before its VM reached it")
+	}
+}
+
+// acquireOn asks host's serve for a warm VM, with a slot reserved for it. Busy means the host had
+// none free after all: its last report is up to a second old, and a person at that Mac may have
+// taken the slot. The host is then offered no acquire until it reports again.
+func (s *server) acquireOn(ctx context.Context, host string, forward serveRequest) (serveRequest, bool, error) {
+	defer s.unreserve(host)
+	answers, cancel, err := s.forward(ctx, host, forward.line())
+	if err != nil {
+		return nil, false, err
+	}
+	defer cancel()
+	for answer := range answers {
+		if answer.Error != "" {
+			return nil, false, fmt.Errorf("%s", answer.Error)
+		}
+		got, err := parseServe(answer.Line)
+		if err != nil {
+			return nil, false, err
+		}
+		if got["busy"] == true {
+			s.markHost(host, func(l *link) { l.busy = true })
+			return nil, true, nil
+		}
 		if problem := got.str("error"); problem != "" {
-			fail(fmt.Errorf("%s", problem))
-			return
+			return nil, false, fmt.Errorf("%s", problem)
 		}
-		vm := got.str("vm")
-		if vm == "" {
-			continue
+		if vm := got.str("vm"); vm != "" {
+			// Until the host's next report says so, the slot it handed out isn't free.
+			s.markHost(host, func(l *link) { l.markAssigned(vm) })
+			return got, false, nil
 		}
-		if err := s.state.addHandout(handout{VM: vm, Host: host, Client: client, Image: image, Since: s.now()}); err != nil {
-			log.Printf("can't save a hand-out: %v", err)
-		}
-		s.audit.record(auditEvent{Event: "handed-out", Client: client, Host: host, VM: vm, Image: image})
-		got["host"] = hostName
-		_ = l.write(ctx, message{Type: "response", ID: request.ID, Line: got.line(), Done: true})
+	}
+	return nil, false, fmt.Errorf("%s didn't hand out a VM", host)
+}
+
+// markHost changes what the control plane knows of an online host until the host reports again.
+func (s *server) markHost(host string, change func(*link)) {
+	s.mu.Lock()
+	l := s.links[host]
+	s.mu.Unlock()
+	if l == nil {
 		return
 	}
-	fail(fmt.Errorf("%s didn't hand out a VM", host))
+	l.mu.Lock()
+	change(l)
+	l.mu.Unlock()
+}
+
+// markAssigned marks the slot that held vm, or failing that the first warm one, as handed out;
+// the caller holds l.mu.
+func (l *link) markAssigned(vm string) {
+	first := -1
+	for i, slot := range l.slots {
+		if slot.State != "warm" {
+			continue
+		}
+		if slot.VM == vm {
+			l.slots[i].State = "assigned"
+			return
+		}
+		if first < 0 {
+			first = i
+		}
+	}
+	if first >= 0 {
+		l.slots[first].State = "assigned"
+	}
 }
 
 // relayVM passes a client's request for a VM it acquired to the VM's host, and the host's answers
@@ -375,14 +438,19 @@ func (s *server) relayTask(ctx context.Context, client string, l *clientLink, re
 // person keeps nothing.
 func (s *server) releaseAll(client string) {
 	for _, h := range s.state.handoutsWhere(func(h handout) bool { return h.Client == client }) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if answers, stop, err := s.forward(ctx, h.Host, serveRequest{"op": "release", "vm": h.VM}.line()); err == nil {
-			for range answers {
-			}
-			stop()
-		}
-		cancel()
-		_ = s.state.removeHandout(h.VM)
-		s.audit.record(auditEvent{Event: "released", Client: client, Host: h.Host, VM: h.VM, Reason: "client removed"})
+		s.releaseOn(client, h.Host, h.VM, "client removed")
 	}
+}
+
+// releaseOn hands a VM back to its host and forgets its hand-out, recording why.
+func (s *server) releaseOn(client, host, vm, reason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if answers, stop, err := s.forward(ctx, host, serveRequest{"op": "release", "vm": vm}.line()); err == nil {
+		for range answers {
+		}
+		stop()
+	}
+	_ = s.state.removeHandout(vm)
+	s.audit.record(auditEvent{Event: "released", Client: client, Host: host, VM: vm, Reason: reason})
 }

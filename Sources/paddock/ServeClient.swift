@@ -11,6 +11,7 @@ struct ServeRequest: Codable {
     var result: String?  // task and screenshot: absolute path to save the result at
     var allow: [String]?  // acquire: the names the VM may reach on the userspace network
     var input: InputAction?  // input: what to send to the VM's pointer or keyboard
+    var wait: Bool?  // acquire: false answers busy at once when no warm VM is free, instead of waiting
 }
 
 /// One piece of input for a VM, sent with the "input" request. Coordinates are the guest's screen
@@ -36,6 +37,7 @@ struct ServeResponse: Codable {
     var result: String?  // task: where the bundle of new commits was saved, if there are any
     var error: String?
     var host: String?    // acquire through the pool: the name of the Mac the VM runs on
+    var busy: Bool?      // acquire that doesn't wait: no warm VM was free
 
     var line: String {
         (try? JSONEncoder().encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"

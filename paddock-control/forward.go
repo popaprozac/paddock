@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket/wsjson"
 )
@@ -45,7 +46,21 @@ type forwarded struct {
 
 // upload sends the host a piece of the data that goes with the request, the last marked done.
 func (f *forwarded) upload(ctx context.Context, data []byte, done bool) error {
-	return wsjson.Write(ctx, f.link.conn, message{Type: "upload", ID: f.id, Data: data, Done: done})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.link.write(message{Type: "upload", ID: f.id, Data: data, Done: done})
+}
+
+// hostWriteTimeout bounds one write down a host's link.
+const hostWriteTimeout = 30 * time.Second
+
+// write sends a message down the host's link. A write whose context ends partway closes the whole
+// connection, so these never take a client's context, which ends when that client goes away.
+func (l *link) write(m message) error {
+	ctx, cancel := context.WithTimeout(context.Background(), hostWriteTimeout)
+	defer cancel()
+	return wsjson.Write(ctx, l.conn, m)
 }
 
 func (s *server) send(ctx context.Context, host, serveLine string) (*forwarded, error) {
@@ -76,7 +91,11 @@ func (s *server) send(ctx context.Context, host, serveLine string) (*forwarded, 
 		}
 		l.mu.Unlock()
 	}
-	if err := wsjson.Write(ctx, l.conn, message{Type: "request", ID: id, Serve: serveLine}); err != nil {
+	if err := ctx.Err(); err != nil {
+		cancel()
+		return nil, err
+	}
+	if err := l.write(message{Type: "request", ID: id, Serve: serveLine}); err != nil {
 		cancel()
 		return nil, err
 	}

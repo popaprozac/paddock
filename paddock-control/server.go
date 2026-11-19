@@ -86,6 +86,7 @@ type link struct {
 	nextID    int
 	pending   map[string]*pendingRequest // requests forwarded to the host, by ID, until done
 	closed    bool
+	busy      bool // answered an acquire busy: offered none until its next report
 }
 
 // server is the control plane: enrollment and host links over HTTPS.
@@ -296,7 +297,7 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		case "hello":
 			l.hello = m
 		case "capacity":
-			l.slots, l.diskFree = m.Slots, m.DiskFree
+			l.slots, l.diskFree, l.busy = m.Slots, m.DiskFree, false
 		}
 		l.mu.Unlock()
 		switch m.Type {

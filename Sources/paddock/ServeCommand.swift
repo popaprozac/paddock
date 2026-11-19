@@ -271,6 +271,9 @@ final class WarmPool {
             if !allow.isEmpty && !userspaceNetwork {
                 return responder.finish(ServeResponse(error: "--allow needs 'paddock serve --userspace'; the NAT network has no allowlist").line)
             }
+            if request?.wait == false && !(waiting.isEmpty && freeSlot != nil) {
+                return responder.finish(ServeResponse(error: "no warm VM is free on this Mac", busy: true).line)
+            }
             waiting.append((responder, allow))
             handOut()
         case "release":
@@ -290,13 +293,21 @@ final class WarmPool {
         }
     }
 
+    /// A slot with a warm VM nobody has been given.
+    private var freeSlot: Slot? {
+        slots.first { !$0.assigned && $0.warmAddress != nil && $0.vm != nil }
+    }
+
     /// Gives a warm VM to the acquire that has waited longest, once there are both, with that
     /// acquire's list in force on the userspace network. Until then the VM reaches nothing there.
     private func handOut() {
-        guard !waiting.isEmpty,
-              let slot = slots.first(where: { !$0.assigned && $0.warmAddress != nil && $0.vm != nil }),
+        guard !waiting.isEmpty, let slot = freeSlot,
               let warmAddress = slot.warmAddress, let current = slot.current, let vm = slot.vm else { return }
         let (responder, allow) = waiting.removeFirst()
+        // An acquire stopped while it waited gets nothing: the VM stays warm for the next.
+        if responder.clientHungUp {
+            return handOut()
+        }
         if !allow.isEmpty {
             do {
                 try vm.allow(allow)

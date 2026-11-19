@@ -332,6 +332,11 @@ final class ControlClient {
                 throw PaddockError("that isn't one of serve's requests")
             }
             switch fields["op"] as? String {
+            case "acquire":
+                // The control plane keeps the pool's one queue, so this Mac answers at once: a
+                // warm VM, or busy, and the control plane tries another Mac or waits.
+                fields["wait"] = false
+                try run(fields, id: id, on: socket, sendBack: nil, required: false, cleanup: [])
             case "screenshot":
                 let file = Self.temporaryFile("paddock-screen", "png")
                 fields["result"] = file.path

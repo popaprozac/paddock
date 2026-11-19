@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,9 @@ type fakeHost struct {
 	conn     *websocket.Conn
 	mu       sync.Mutex
 	requests []string
+	acquired int
+	busy     bool          // answers acquires as a Mac with no warm VM free does
+	hold     chan struct{} // if set, acquires are answered once it's closed
 }
 
 // startFakeHost enrolls and links a host serving image with warm warm slots, and answers
@@ -54,7 +58,24 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 			}
 			switch request["op"] {
 			case "acquire":
-				reply(`{"vm":"`+image+`-slot1-abc","ip":"192.168.64.2"}`, true)
+				h.mu.Lock()
+				busy, hold := h.busy, h.hold
+				h.acquired++
+				vm := image + "-slot1-abc"
+				if h.acquired > 1 {
+					vm += strconv.Itoa(h.acquired)
+				}
+				h.mu.Unlock()
+				if busy {
+					reply(`{"error":"no warm VM is free on this Mac","busy":true}`, true)
+					continue
+				}
+				go func() {
+					if hold != nil {
+						<-hold
+					}
+					reply(`{"vm":"`+vm+`","ip":"192.168.64.2"}`, true)
+				}()
 			case "exec":
 				reply(`{"output":"hello"}`, false)
 				reply(`{"exit":0}`, true)
@@ -229,6 +250,96 @@ func TestAcquireWaitsForAWarmSlotThenGetsIt(t *testing.T) {
 	if err := wsjson.Read(ctx, conn, &answer); err != nil || !strings.Contains(answer.Line, "golden-slot1-abc") || !answer.Done {
 		t.Fatalf("after a slot went warm: %+v, %v", answer, err)
 	}
+}
+
+// eventually fails the test unless check comes true within 5 s.
+func eventually(t *testing.T, what string, check func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !check(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+// A host reports its slots up to a second late, so a slot just handed out isn't offered again
+// before the host says what's in it.
+func TestASlotJustHandedOutIsntOfferedAgain(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	wsjson.Write(ctx, conn, message{Type: "request", ID: "2", Op: "acquire"})
+	var note message
+	if err := wsjson.Read(ctx, conn, &note); err != nil || !strings.Contains(note.Note, "waiting") {
+		t.Fatalf("the second acquire: %+v, %v; the host got %v", note, err, host.all())
+	}
+	host.report(1)
+	var answer message
+	if err := wsjson.Read(ctx, conn, &answer); err != nil || !strings.Contains(answer.Line, "golden-slot1-abc2") {
+		t.Fatalf("after the host reported a warm slot: %+v, %v", answer, err)
+	}
+}
+
+// A Mac with no warm VM free after all, as when a person there took it, answers busy; the acquire
+// goes back to the front of the queue and another Mac's warm VM serves it.
+func TestABusyMacSendsTheAcquireToAnother(t *testing.T) {
+	c := newTestControl(t)
+	busy := c.startFakeHost(t, "golden", 2)
+	busy.mu.Lock()
+	busy.busy = true
+	busy.mu.Unlock()
+	free := c.startFakeHost(t, "golden", 1)
+	c.waitFor(t, "both hosts warm", func(list []hostStatus) bool {
+		warm := 0
+		for _, h := range list {
+			if h.Online && len(h.Slots) > 0 {
+				warm++
+			}
+		}
+		return warm == 2
+	})
+	_, conn := c.newClient(t)
+	got := ask(t, conn, message{ID: "1", Op: "acquire"})
+	if last := got[len(got)-1]; last.Error != "" || !strings.Contains(last.Line, "golden-slot1-abc") {
+		t.Fatalf("acquire answers %+v", got)
+	}
+	if !busy.sawRequest("acquire") {
+		t.Fatal("the Mac with the most warm slots wasn't asked first")
+	}
+	if h := c.srv.state.handout("golden-slot1-abc"); h == nil || h.Host != free.id {
+		t.Fatalf("hand-out %+v, want it on %s", h, free.id)
+	}
+}
+
+// A VM that reaches the control plane after its client left goes back to its Mac, rather than
+// staying handed out to someone who never learned its name.
+func TestAVMWhoseClientLeftIsReleased(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	hold := make(chan struct{})
+	host.mu.Lock()
+	host.hold = hold
+	host.mu.Unlock()
+	c.waitUntilOnline(t, "golden")
+	client, conn := c.newClient(t)
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	wsjson.Write(ctx, conn, message{Type: "request", ID: "1", Op: "acquire"})
+	eventually(t, "the host to get the acquire", func() bool { return host.sawRequest("acquire") })
+	conn.Close(websocket.StatusNormalClosure, "")
+	eventually(t, "the client's link to close", func() bool {
+		c.srv.mu.Lock()
+		defer c.srv.mu.Unlock()
+		return len(c.srv.clientLinks[client]) == 0
+	})
+	close(hold)
+	eventually(t, "the VM to go back", func() bool {
+		return host.sawRequest("release") && c.srv.state.handout("golden-slot1-abc") == nil
+	})
 }
 
 func TestAcquireNamesTheImagesThePoolServes(t *testing.T) {
