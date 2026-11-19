@@ -60,6 +60,30 @@ import Testing
         withExtendedLifetime(server) {}
     }
 
+    @Test func knowsWhenAWaitingClientHangsUp() async throws {
+        let path = socketPath()
+        let held = OSAllocatedUnfairLock<Responder?>(initialState: nil)
+        let server = try LineServer(path: path, queue: queue) { _, responder in held.withLock { $0 = responder } }
+        let client = try UnixSocket.connect(path)
+        UnixSocket.writeLine("acquire", to: client)
+        var responder: Responder?
+        for _ in 0..<200 where responder == nil {
+            try await Task.sleep(for: .milliseconds(10))
+            responder = held.withLock { $0 }
+        }
+        let waiting = try #require(responder)
+        #expect(!waiting.clientHungUp)
+        close(client)
+        var hungUp = false
+        for _ in 0..<200 where !hungUp {
+            hungUp = waiting.clientHungUp
+            if !hungUp { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        #expect(hungUp)
+        waiting.finish()
+        withExtendedLifetime(server) {}
+    }
+
     @Test func droppingTheResponderClosesTheConnection() throws {
         let path = socketPath()
         let server = try LineServer(path: path, queue: queue) { _, _ in }

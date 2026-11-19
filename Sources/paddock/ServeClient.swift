@@ -11,6 +11,7 @@ struct ServeRequest: Codable {
     var result: String?  // task and screenshot: absolute path to save the result at
     var allow: [String]?  // acquire: the names the VM may reach on the userspace network
     var input: InputAction?  // input: what to send to the VM's pointer or keyboard
+    var wait: Bool?  // acquire: false answers busy at once when no warm VM is free, instead of waiting
 }
 
 /// One piece of input for a VM, sent with the "input" request. Coordinates are the guest's screen
@@ -35,16 +36,20 @@ struct ServeResponse: Codable {
     var exit: Int32?     // exec and task: the command's exit status, last
     var result: String?  // task: where the bundle of new commits was saved, if there are any
     var error: String?
+    var host: String?    // acquire through the pool: the name of the Mac the VM runs on
+    var busy: Bool?      // acquire that doesn't wait: no warm VM was free
 
     var line: String {
         (try? JSONEncoder().encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 }
 
+/// Sends serve's requests: to the pool of the control plane this Mac is logged in to, or, with
+/// `local`, PADDOCK_LOCAL=1 or no login, to this Mac's serve.
 enum ServeClient {
-    static func send(_ request: ServeRequest) throws -> ServeResponse {
+    static func send(_ request: ServeRequest, image: String? = nil, local: Bool = false) throws -> ServeResponse {
         var first: ServeResponse?
-        try stream(request) { first = $0; return false }
+        try stream(request, image: image, local: local) { first = $0; return false }
         guard let first else {
             throw PaddockError("paddock serve closed the connection without answering")
         }
@@ -53,7 +58,11 @@ enum ServeClient {
 
     /// Passes each answer line to `onResponse` until serve closes the connection or
     /// `onResponse` returns false. An error answer throws.
-    static func stream(_ request: ServeRequest, onResponse: (ServeResponse) throws -> Bool) throws {
+    static func stream(_ request: ServeRequest, image: String? = nil, local: Bool = false,
+                       onResponse: (ServeResponse) throws -> Bool) throws {
+        if let identity = try PoolRoute.identity(local: local) {
+            return try PoolRoute.stream(request, image: image, as: identity, onResponse: onResponse)
+        }
         let line = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
         try LineClient.stream(line, to: PaddockHome.fromEnvironment().socketURL.path) { answer in
             guard let response = try? JSONDecoder().decode(ServeResponse.self, from: Data(answer.utf8)) else {
@@ -73,18 +82,26 @@ struct Acquire: ParsableCommand {
         discussion: """
             Prints the VM's name and address. Hand it back with 'paddock release <vm>'. With \
             'serve --userspace', the VM reaches only the names given with --allow, and nothing \
-            without it.
+            without it. Logged in to a control plane, it takes a warm VM from any Mac in the pool \
+            serving the image, waiting its turn if none is free; --local takes this Mac's.
             """)
 
     @Option(help: "Names the VM may reach, comma-separated, as host.example or *.example (any name under example). Needs 'serve --userspace'.")
     var allow: String?
 
+    @Option(help: "In the pool: the golden image the VM is a clone of, when the pool serves more than one.")
+    var image: String?
+
+    @OptionGroup var target: Target
+
     func run() throws {
         let names = allow?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let started = ContinuousClock.now
-        let response = try ServeClient.send(ServeRequest(op: "acquire", allow: names))
+        let response = try ServeClient.send(ServeRequest(op: "acquire", allow: names), image: image, local: target.local)
         let waited = ContinuousClock.now - started
-        print("Assigned '\(response.vm ?? "?")' at \(response.ip ?? "?") in \(DurationFormat.short(waited))")
+        // A VM in the pool has its address on its own Mac's private network, no use from here.
+        let place = response.host.map { "on \($0)" } ?? "at \(response.ip ?? "?")"
+        print("Assigned '\(response.vm ?? "?")' \(place) in \(DurationFormat.short(waited))")
     }
 }
 
@@ -99,6 +116,8 @@ struct Screenshot: ParsableCommand {
     @Option(name: .shortAndLong, help: "Where to save the PNG. Defaults to <vm>.png in the current folder.")
     var output: String?
 
+    @OptionGroup var target: Target
+
     func validate() throws {
         try BundleName.validate(vm)
     }
@@ -106,7 +125,7 @@ struct Screenshot: ParsableCommand {
     func run() throws {
         let url = URL(fileURLWithPath: output ?? "\(vm).png").standardizedFileURL
         let started = ContinuousClock.now
-        _ = try ServeClient.send(ServeRequest(op: "screenshot", vm: vm, result: url.path))
+        _ = try ServeClient.send(ServeRequest(op: "screenshot", vm: vm, result: url.path), local: target.local)
         print("Saved \(url.path) in \(DurationFormat.short(ContinuousClock.now - started))")
     }
 }
@@ -125,12 +144,14 @@ struct AXTreeCommand: ParsableCommand {
     @Argument(help: "VM that 'paddock acquire' printed.")
     var vm: String
 
+    @OptionGroup var target: Target
+
     func validate() throws {
         try BundleName.validate(vm)
     }
 
     func run() throws {
-        try ServeClient.stream(ServeRequest(op: "axtree", vm: vm)) { response in
+        try ServeClient.stream(ServeRequest(op: "axtree", vm: vm), local: target.local) { response in
             if let output = response.output {
                 print(output)
             }
@@ -140,8 +161,8 @@ struct AXTreeCommand: ParsableCommand {
 }
 
 /// The input commands: each sends one input request to serve for a VM it handed out.
-private func sendInput(_ vm: String, _ action: InputAction) throws {
-    _ = try ServeClient.send(ServeRequest(op: "input", vm: vm, input: action))
+private func sendInput(_ vm: String, _ action: InputAction, local: Bool) throws {
+    _ = try ServeClient.send(ServeRequest(op: "input", vm: vm, input: action), local: local)
 }
 
 private let inputDiscussion = """
@@ -163,11 +184,13 @@ struct Click: ParsableCommand {
     @Argument(help: "Pixels from the top of the guest's screen.") var y: Int
     @Flag(help: "Click the right button.") var right = false
     @Flag(help: "Click twice in a row.") var double = false
+    @OptionGroup var target: Target
 
     func validate() throws { try BundleName.validate(vm) }
 
     func run() throws {
-        try sendInput(vm, InputAction(kind: "click", x: x, y: y, button: right ? "right" : "left", count: double ? 2 : 1))
+        try sendInput(vm, InputAction(kind: "click", x: x, y: y, button: right ? "right" : "left", count: double ? 2 : 1),
+                      local: target.local)
     }
 }
 
@@ -183,13 +206,14 @@ struct TypeText: ParsableCommand {
 
     @Argument(help: "VM that 'paddock acquire' printed.") var vm: String
     @Argument(help: "Text to type.") var text: String
+    @OptionGroup var target: Target
 
     func validate() throws {
         try BundleName.validate(vm)
         do { _ = try KeyInput.strokes(typing: text) } catch let error as PaddockError { throw ValidationError(error.message) }
     }
 
-    func run() throws { try sendInput(vm, InputAction(kind: "type", text: text)) }
+    func run() throws { try sendInput(vm, InputAction(kind: "type", text: text), local: target.local) }
 }
 
 struct Key: ParsableCommand {
@@ -205,6 +229,7 @@ struct Key: ParsableCommand {
 
     @Argument(help: "VM that 'paddock acquire' printed.") var vm: String
     @Argument(help: "Key combinations, such as cmd+s.") var combinations: [String]
+    @OptionGroup var target: Target
 
     func validate() throws {
         try BundleName.validate(vm)
@@ -214,7 +239,7 @@ struct Key: ParsableCommand {
         }
     }
 
-    func run() throws { try sendInput(vm, InputAction(kind: "key", keys: combinations)) }
+    func run() throws { try sendInput(vm, InputAction(kind: "key", keys: combinations), local: target.local) }
 }
 
 struct Scroll: ParsableCommand {
@@ -232,13 +257,16 @@ struct Scroll: ParsableCommand {
     @Option(help: "Lines to scroll up.") var up = 0
     @Option(help: "Lines to scroll right.") var right = 0
     @Option(help: "Lines to scroll left.") var left = 0
+    @OptionGroup var target: Target
 
     func validate() throws {
         try BundleName.validate(vm)
         guard [down, up, right, left].allSatisfy({ $0 >= 0 }) else { throw ValidationError("give lines as positive numbers") }
     }
 
-    func run() throws { try sendInput(vm, InputAction(kind: "scroll", x: x, y: y, down: down - up, right: right - left)) }
+    func run() throws {
+        try sendInput(vm, InputAction(kind: "scroll", x: x, y: y, down: down - up, right: right - left), local: target.local)
+    }
 }
 
 struct Release: ParsableCommand {
@@ -248,12 +276,14 @@ struct Release: ParsableCommand {
     @Argument(help: "VM that 'paddock acquire' printed.")
     var vm: String
 
+    @OptionGroup var target: Target
+
     func validate() throws {
         try BundleName.validate(vm)
     }
 
     func run() throws {
-        _ = try ServeClient.send(ServeRequest(op: "release", vm: vm))
+        _ = try ServeClient.send(ServeRequest(op: "release", vm: vm), local: target.local)
         print("Released '\(vm)'; serve is restoring a fresh clone")
     }
 }
@@ -273,6 +303,8 @@ struct Exec: ParsableCommand {
     @Argument(parsing: .postTerminator, help: "Command to run, after --.")
     var command: [String] = []
 
+    @OptionGroup var target: Target
+
     func validate() throws {
         try BundleName.validate(vm)
         guard !command.isEmpty else { throw ValidationError("give the command after --") }
@@ -280,7 +312,8 @@ struct Exec: ParsableCommand {
 
     func run() throws {
         var status: Int32?
-        try ServeClient.stream(ServeRequest(op: "exec", vm: vm, command: command.joined(separator: " "))) { response in
+        let request = ServeRequest(op: "exec", vm: vm, command: command.joined(separator: " "))
+        try ServeClient.stream(request, local: target.local) { response in
             if let output = response.output {
                 print(output)
             }
@@ -317,6 +350,8 @@ struct RunTask: ParsableCommand {
     @Option(help: "Where to save a bundle of the new commits.")
     var result: String
 
+    @OptionGroup var target: Target
+
     @Argument(parsing: .postTerminator, help: "Command to run in the clone, after --.")
     var command: [String] = []
 
@@ -332,7 +367,7 @@ struct RunTask: ParsableCommand {
             bundle: URL(fileURLWithPath: bundle).standardizedFileURL.path,
             result: URL(fileURLWithPath: result).standardizedFileURL.path)
         var last: ServeResponse?
-        try ServeClient.stream(request) { response in
+        try ServeClient.stream(request, local: target.local) { response in
             if let output = response.output {
                 print(output)
             }

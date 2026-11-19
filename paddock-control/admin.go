@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // The admin socket is how `paddock-control join-token`, `hosts` and `remove-host` reach the
@@ -17,18 +19,19 @@ import (
 // admin request ever crosses a network.
 
 type adminRequest struct {
-	Op   string        `json:"op"`             // join-token, hosts, remove-host
-	Host string        `json:"host,omitempty"` // remove-host: ID or name
+	Op   string        `json:"op"`             // join-token, login-token, hosts, clients, remove-host, remove-client
+	Host string        `json:"host,omitempty"` // remove-host and remove-client: ID or name
 	TTL  time.Duration `json:"ttl,omitempty"`  // join-token: how long it lasts
 }
 
 type adminResponse struct {
-	Error   string       `json:"error,omitempty"`
-	Token   string       `json:"token,omitempty"`
-	Expires time.Time    `json:"expires,omitzero"`
-	URLs    []string     `json:"urls,omitempty"` // join-token: the addresses hosts may use
-	Hosts   []hostStatus `json:"hosts,omitempty"`
-	Removed string       `json:"removed,omitempty"`
+	Error   string         `json:"error,omitempty"`
+	Token   string         `json:"token,omitempty"`
+	Expires time.Time      `json:"expires,omitzero"`
+	URLs    []string       `json:"urls,omitempty"` // join-token: the addresses hosts may use
+	Hosts   []hostStatus   `json:"hosts,omitempty"`
+	Clients []clientStatus `json:"clients,omitempty"`
+	Removed string         `json:"removed,omitempty"`
 }
 
 func adminSocketPath(dir string) string {
@@ -72,7 +75,11 @@ func (s *server) serveAdmin(conn net.Conn, urls func() []string) {
 
 func (s *server) admin(request adminRequest, urls func() []string) adminResponse {
 	switch request.Op {
-	case "join-token":
+	case "join-token", "login-token":
+		k := hostKind
+		if request.Op == "login-token" {
+			k = clientKind
+		}
 		ttl := request.TTL
 		if ttl <= 0 {
 			ttl = defaultTokenTTL
@@ -80,16 +87,18 @@ func (s *server) admin(request adminRequest, urls func() []string) adminResponse
 		if ttl > maxTokenTTL {
 			return adminResponse{Error: fmt.Sprintf("a join token lasts at most %s", maxTokenTTL)}
 		}
-		token, expires, err := s.state.newJoinToken(s.authority.pin(), ttl, s.now())
+		token, expires, err := s.state.newToken(k, s.authority.pin(), ttl, s.now())
 		if err != nil {
 			return adminResponse{Error: err.Error()}
 		}
-		s.audit.record(auditEvent{Event: "join-token-made", Reason: "expires " + expires.UTC().Format(time.RFC3339)})
+		s.audit.record(auditEvent{Event: request.Op + "-made", Reason: "expires " + expires.UTC().Format(time.RFC3339)})
 		return adminResponse{Token: token, Expires: expires, URLs: urls()}
 	case "hosts":
 		return adminResponse{Hosts: s.status()}
+	case "clients":
+		return adminResponse{Clients: s.clientStatus()}
 	case "remove-host":
-		host, err := s.state.remove(request.Host)
+		host, err := s.state.remove(hostKind, request.Host)
 		if err != nil {
 			return adminResponse{Error: err.Error()}
 		}
@@ -97,6 +106,16 @@ func (s *server) admin(request adminRequest, urls func() []string) adminResponse
 		s.audit.record(auditEvent{Event: "host-removed", Host: host.ID, Name: host.Name})
 		log.Printf("removed %s (%s)", host.Name, host.ID)
 		return adminResponse{Removed: host.ID}
+	case "remove-client":
+		client, err := s.state.remove(clientKind, request.Host)
+		if err != nil {
+			return adminResponse{Error: err.Error()}
+		}
+		s.disconnectClient(client.ID, websocket.StatusPolicyViolation, "this client was removed from the control plane")
+		go s.releaseAll(client.ID)
+		s.audit.record(auditEvent{Event: "client-removed", Client: client.ID, Name: client.Name})
+		log.Printf("removed client %s (%s)", client.Name, client.ID)
+		return adminResponse{Removed: client.ID}
 	default:
 		return adminResponse{Error: fmt.Sprintf("unknown admin request %q", request.Op)}
 	}

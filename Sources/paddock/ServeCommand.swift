@@ -51,7 +51,7 @@ struct Serve: AsyncParsableCommand {
 
     func run() async throws {
         // Joined before any VM boots, so a bad token or URL fails in seconds.
-        var identity: HostIdentity?
+        var identity: ControlIdentity?
         if let control {
             identity = try await ControlEnrollment.identity(control: try ControlEnrollment.url(control), join: join,
                                                             home: .fromEnvironment())
@@ -104,16 +104,16 @@ final class WarmPool {
     private var checkedSource = false  // the first slot to boot checks the source for both
     private var controlClient: ControlClient?
 
-    static func serve(source: String, slots: Int, userspaceNetwork: Bool, control: HostIdentity? = nil) async throws {
+    static func serve(source: String, slots: Int, userspaceNetwork: Bool, control: ControlIdentity? = nil) async throws {
         let pool = WarmPool(source: source, slots: slots, userspaceNetwork: userspaceNetwork, control: control)
         defer { withExtendedLifetime(pool) {} }
         try await pool.run(source: source)
     }
 
     private let userspaceNetwork: Bool
-    private let control: HostIdentity?
+    private let control: ControlIdentity?
 
-    private init(source: String, slots: Int, userspaceNetwork: Bool, control: HostIdentity?) {
+    private init(source: String, slots: Int, userspaceNetwork: Bool, control: ControlIdentity?) {
         self.slots = (1...slots).map { Slot(number: $0, source: source) }
         self.userspaceNetwork = userspaceNetwork
         self.control = control
@@ -133,7 +133,8 @@ final class WarmPool {
         if let control {
             controlClient = ControlClient(identity: control, image: name,
                                           slots: { [weak self] in self?.slotReports() ?? [] },
-                                          diskFree: { [weak self] in self?.freeDisk() })
+                                          diskFree: { [weak self] in self?.freeDisk() },
+                                          onRequest: { [weak self] line, responder in self?.handle(line, responder) })
             controlClient?.start()
         }
         await withTaskGroup(of: Void.self) { group in
@@ -270,6 +271,9 @@ final class WarmPool {
             if !allow.isEmpty && !userspaceNetwork {
                 return responder.finish(ServeResponse(error: "--allow needs 'paddock serve --userspace'; the NAT network has no allowlist").line)
             }
+            if request?.wait == false && !(waiting.isEmpty && freeSlot != nil) {
+                return responder.finish(ServeResponse(error: "no warm VM is free on this Mac", busy: true).line)
+            }
             waiting.append((responder, allow))
             handOut()
         case "release":
@@ -289,13 +293,21 @@ final class WarmPool {
         }
     }
 
+    /// A slot with a warm VM nobody has been given.
+    private var freeSlot: Slot? {
+        slots.first { !$0.assigned && $0.warmAddress != nil && $0.vm != nil }
+    }
+
     /// Gives a warm VM to the acquire that has waited longest, once there are both, with that
     /// acquire's list in force on the userspace network. Until then the VM reaches nothing there.
     private func handOut() {
-        guard !waiting.isEmpty,
-              let slot = slots.first(where: { !$0.assigned && $0.warmAddress != nil && $0.vm != nil }),
+        guard !waiting.isEmpty, let slot = freeSlot,
               let warmAddress = slot.warmAddress, let current = slot.current, let vm = slot.vm else { return }
         let (responder, allow) = waiting.removeFirst()
+        // An acquire stopped while it waited gets nothing: the VM stays warm for the next.
+        if responder.clientHungUp {
+            return handOut()
+        }
         if !allow.isEmpty {
             do {
                 try vm.allow(allow)

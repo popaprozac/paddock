@@ -99,15 +99,20 @@ enum ControlEnrollment {
 
     /// Joins with `token` and saves the identity, replacing any other; or, with no token, the
     /// identity this Mac saved when it joined, for `url`.
-    static func identity(control url: URL, join token: String?, home: PaddockHome) async throws -> HostIdentity {
-        let folder = HostIdentity.folder(in: home)
+    static func identity(control url: URL, join token: String?, home: PaddockHome) async throws -> ControlIdentity {
+        let folder = ControlIdentity.folder(in: home, for: .host)
         if let token {
-            let joined = try await join(url, token: try ControlLink.JoinToken(token))
+            let parsed = try ControlLink.Token(token)
+            guard parsed.kind == .host else {
+                throw PaddockError("that's a login token, for 'paddock login'; a Mac joins with a token from "
+                    + "'paddock-control join-token'")
+            }
+            let joined = try await join(url, token: parsed, as: .host, name: ControlClient.computerName)
             try joined.save(to: folder)
-            print("Joined the control plane at \(url.absoluteString) as \(joined.host)")
+            print("Joined the control plane at \(url.absoluteString) as \(joined.id)")
             return joined
         }
-        guard let saved = try HostIdentity.load(from: folder) else {
+        guard let saved = try ControlIdentity.load(.host, from: folder) else {
             throw PaddockError("this Mac hasn't joined \(url.absoluteString) yet: add --join with a token from "
                 + "'paddock-control join-token' there")
         }
@@ -118,8 +123,9 @@ enum ControlEnrollment {
         return identity
     }
 
-    /// Makes this Mac's key and enrolls its public half, trusting only the CA the token pins.
-    static func join(_ url: URL, token: ControlLink.JoinToken) async throws -> HostIdentity {
+    /// Makes a key and enrolls its public half as `kind`, trusting only the CA the token pins.
+    static func join(_ url: URL, token: ControlLink.Token, as kind: ControlLink.Kind, name: String) async throws
+        -> ControlIdentity {
         let trust = PinnedTrust(.pin(token.pin))
         let session = URLSession(configuration: .ephemeral, delegate: trust, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
@@ -128,7 +134,7 @@ enum ControlEnrollment {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(ControlLink.EnrollRequest(
-            token: token.text, name: ControlClient.computerName, publicKey: key.publicKey.derRepresentation))
+            token: token.text, name: ControlLink.hostName(name), publicKey: key.publicKey.derRepresentation, as: kind))
         let data: Data, response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
@@ -137,10 +143,13 @@ enum ControlEnrollment {
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let decoded = try? JSONDecoder().decode(ControlLink.EnrollResponse.self, from: data)
-        guard status == 200, let host = decoded?.host, let authority = trust.matchedAuthority else {
-            throw PaddockError("the control plane didn't enroll this Mac: \(decoded?.error ?? "HTTP status \(status)")")
+        guard status == 200, let id = kind == .host ? decoded?.host : decoded?.client,
+              let authority = trust.matchedAuthority
+        else {
+            throw PaddockError("the control plane didn't enroll this \(kind == .host ? "Mac" : "client"): "
+                + (decoded?.error ?? "HTTP status \(status)"))
         }
-        return HostIdentity(url: url, host: host, authority: SecCertificateCopyData(authority) as Data, key: key)
+        return ControlIdentity(kind: kind, url: url, id: id, authority: SecCertificateCopyData(authority) as Data, key: key)
     }
 }
 
@@ -149,22 +158,26 @@ enum ControlEnrollment {
 /// serving: VMs go on being handed out here whether the link is up or not.
 @MainActor
 final class ControlClient {
-    private let identity: HostIdentity
+    private let identity: ControlIdentity
     private let image: String
     private let slots: @MainActor () -> [ControlLink.SlotReport]
     private let diskFree: @MainActor () -> UInt64?
+    private let onRequest: @MainActor (String, Responder) -> Void
     private var task: Task<Void, Never>?
     private var socket: URLSessionWebSocketTask?
 
     /// The removed Mac's link is closed by the control plane, which then refuses it.
     private struct Removed: Error {}
 
-    init(identity: HostIdentity, image: String, slots: @escaping @MainActor () -> [ControlLink.SlotReport],
-         diskFree: @escaping @MainActor () -> UInt64?) {
+    /// `onRequest` is serve's own handler: requests from the control plane run through it, with
+    /// the same checks as one from this Mac, once `ControlLink.checkRemote` takes them.
+    init(identity: ControlIdentity, image: String, slots: @escaping @MainActor () -> [ControlLink.SlotReport],
+         diskFree: @escaping @MainActor () -> UInt64?, onRequest: @escaping @MainActor (String, Responder) -> Void) {
         self.identity = identity
         self.image = image
         self.slots = slots
         self.diskFree = diskFree
+        self.onRequest = onRequest
     }
 
     /// The name the Mac goes by for people: its computer name, as in Sharing settings.
@@ -190,7 +203,7 @@ final class ControlClient {
             let started = ContinuousClock.now
             do {
                 try await link {
-                    print("Linked to the control plane at \(self.identity.url.absoluteString) as \(self.identity.host)")
+                    print("Linked to the control plane at \(self.identity.url.absoluteString) as \(self.identity.id)")
                     down = false
                 }
             } catch is Removed {
@@ -253,6 +266,7 @@ final class ControlClient {
             work.cancel()
         }
         let error = await end.wait()
+        abandonUploads()
         switch socket.closeCode {
         case .policyViolation: throw Removed()
         case .goingAway: throw PaddockError(Task.isCancelled ? "serve is stopping" : "the control plane stopped or restarted")
@@ -269,7 +283,7 @@ final class ControlClient {
         guard challenge.type == "challenge", let nonce = challenge.nonce, nonce.count == 32 else {
             throw PaddockError("the control plane didn't start with a challenge")
         }
-        try await send(ControlLink.Message(type: "auth", host: identity.host,
+        try await send(ControlLink.Message(type: "auth", host: identity.id,
                                            signature: ControlLink.answer(nonce, with: identity.key)), on: socket)
         let welcome = try await receive(socket)
         guard welcome.type == "welcome" else { throw PaddockError("the control plane didn't accept the link") }
@@ -280,13 +294,166 @@ final class ControlClient {
             macos: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)", image: image,
             cpus: ProcessInfo.processInfo.activeProcessorCount, memory: ProcessInfo.processInfo.physicalMemory), on: socket)
         try await withThrowingTaskGroup(of: Void.self) { group in
-            // Reading keeps the link's pings answered and sees it close.
+            // Reading keeps the link's pings answered, takes the control plane's requests and sees
+            // the link close.
             group.addTask {
-                while true { _ = try await socket.receive() }
+                while true {
+                    let message = try await self.receive(socket)
+                    if message.type == "request", let id = message.id {
+                        await self.answer(id, serve: message.serve, on: socket)
+                    } else if message.type == "upload" {
+                        await self.receiveUpload(message, on: socket)
+                    }
+                }
             }
             group.addTask { try await self.reportSlots(on: socket) }
             _ = try await group.next()
         }
+    }
+
+    /// A task's bundle on its way from the control plane, into a file this Mac picked.
+    private struct Upload {
+        var request: [String: Any]
+        var bundle: URL
+        var handle: FileHandle
+        var size = 0
+    }
+
+    private var uploads: [String: Upload] = [:]
+
+    /// Runs one of the control plane's requests through serve's handler and sends its answer lines
+    /// back with the request's ID, the last marked done. A request this Mac doesn't take from its
+    /// link gets serve's kind of error line instead. Files a request needs are ones this Mac picks,
+    /// never ones the control plane names: a screenshot's, and a task's bundle and result.
+    private func answer(_ id: String, serve line: String?, on socket: URLSessionWebSocketTask) {
+        do {
+            let request = try ControlLink.checkRemote(line ?? "")
+            guard var fields = try JSONSerialization.jsonObject(with: Data(request.utf8)) as? [String: Any] else {
+                throw PaddockError("that isn't one of serve's requests")
+            }
+            switch fields["op"] as? String {
+            case "acquire":
+                // The control plane keeps the pool's one queue, so this Mac answers at once: a
+                // warm VM, or busy, and the control plane tries another Mac or waits.
+                fields["wait"] = false
+                try run(fields, id: id, on: socket, sendBack: nil, required: false, cleanup: [])
+            case "screenshot":
+                let file = Self.temporaryFile("paddock-screen", "png")
+                fields["result"] = file.path
+                try run(fields, id: id, on: socket, sendBack: file, required: true, cleanup: [file])
+            case "task":
+                // The bundle comes next, in pieces; the task runs once it's all here.
+                let bundle = Self.temporaryFile("paddock-task-in", "bundle")
+                guard FileManager.default.createFile(atPath: bundle.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                    throw PaddockError("can't make a file for the task's bundle")
+                }
+                uploads[id] = Upload(request: fields, bundle: bundle, handle: try FileHandle(forWritingTo: bundle))
+            default:
+                try run(fields, id: id, on: socket, sendBack: nil, required: false, cleanup: [])
+            }
+        } catch {
+            refuse(id, error, on: socket)
+        }
+    }
+
+    /// Takes a piece of a task's bundle; with the last, runs the task.
+    private func receiveUpload(_ message: ControlLink.Message, on socket: URLSessionWebSocketTask) {
+        guard let id = message.id, var upload = uploads[id] else { return }
+        do {
+            if let data = message.data {
+                upload.size += data.count
+                guard upload.size <= ControlLink.maxTransfer else {
+                    throw PaddockError("the bundle is over \(ControlLink.maxTransfer >> 30) GB, the most a task takes")
+                }
+                try upload.handle.write(contentsOf: data)
+            }
+            uploads[id] = upload
+            guard message.done == true else { return }
+            uploads[id] = nil
+            try upload.handle.close()
+            let result = Self.temporaryFile("paddock-task-out", "bundle")
+            var fields = upload.request
+            fields["bundle"] = upload.bundle.path
+            fields["result"] = result.path
+            try run(fields, id: id, on: socket, sendBack: result, required: false, cleanup: [upload.bundle, result])
+        } catch {
+            uploads[id] = nil
+            try? upload.handle.close()
+            try? FileManager.default.removeItem(at: upload.bundle)
+            refuse(id, error, on: socket)
+        }
+    }
+
+    /// Drops the bundles of tasks that never got all their pieces, as when the link closes.
+    private func abandonUploads() {
+        for upload in uploads.values {
+            try? upload.handle.close()
+            try? FileManager.default.removeItem(at: upload.bundle)
+        }
+        uploads.removeAll()
+    }
+
+    /// Runs the request through serve's handler and sends back its lines; then, if serve wrote
+    /// `sendBack`, its bytes, before the last line. Deletes `cleanup` once done.
+    private func run(_ fields: [String: Any], id: String, on socket: URLSessionWebSocketTask, sendBack: URL?, required: Bool,
+                     cleanup: [URL]) throws {
+        let request = String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        let (responder, lines) = try ResponderPipe.make()
+        onRequest(request, responder)
+        Task {
+            defer { cleanup.forEach { try? FileManager.default.removeItem(at: $0) } }
+            var last: String?
+            for await answer in lines {
+                if let previous = last {
+                    try? await send(ControlLink.Message(type: "response", id: id, line: previous), on: socket)
+                }
+                last = answer
+            }
+            if let sendBack {
+                last = await sendFile(sendBack, answered: last, required: required, id: id, on: socket)
+            }
+            // The last line goes out marked done, so the control plane knows the request is over.
+            try? await send(ControlLink.Message(type: "response", id: id, done: true, line: last), on: socket)
+        }
+    }
+
+    private func refuse(_ id: String, _ error: Error, on socket: URLSessionWebSocketTask) {
+        let refusal = ServeResponse(error: error.localizedDescription).line
+        Task { try? await self.send(ControlLink.Message(type: "response", id: id, done: true, line: refusal), on: socket) }
+    }
+
+    /// Sends the file serve wrote, in pieces; returns the answer line to end with, without the
+    /// file's path, which is this Mac's business. A file that isn't there is an error if
+    /// `required` (a screenshot), and nothing to send otherwise (a task with no new commits).
+    private func sendFile(_ file: URL, answered line: String?, required: Bool, id: String,
+                          on socket: URLSessionWebSocketTask) async -> String? {
+        if let line, line.contains("\"error\"") {
+            return line
+        }
+        let ending = Self.withoutResult(line) ?? "{}"
+        guard let data = try? Data(contentsOf: file) else {
+            return required ? ServeResponse(error: "serve didn't save the file").line : ending
+        }
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + ControlLink.chunkSize, data.count)
+            try? await send(ControlLink.Message(type: "response", id: id, data: data.subdata(in: offset..<end)), on: socket)
+            offset = end
+        }
+        return ending
+    }
+
+    /// serve's answer line without its "result", which names a file on this Mac.
+    private static func withoutResult(_ line: String?) -> String? {
+        guard let line, var fields = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else {
+            return line
+        }
+        fields["result"] = nil
+        return (try? JSONSerialization.data(withJSONObject: fields)).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    private static func temporaryFile(_ name: String, _ ext: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString).\(ext)")
     }
 
     /// Sends the slots when they change, checked every second, and free disk at least every minute.

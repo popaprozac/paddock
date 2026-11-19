@@ -18,6 +18,10 @@ type auditEvent struct {
 	Time   time.Time `json:"time"`
 	Event  string    `json:"event"`
 	Host   string    `json:"host,omitempty"`
+	Client string    `json:"client,omitempty"`
+	VM     string    `json:"vm,omitempty"`
+	Op     string    `json:"op,omitempty"`
+	Image  string    `json:"image,omitempty"`
 	Name   string    `json:"name,omitempty"`
 	Remote string    `json:"remote,omitempty"`
 	Reason string    `json:"reason,omitempty"`
