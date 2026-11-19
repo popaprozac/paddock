@@ -140,6 +140,23 @@ final class WarmPool {
         image = source
     }
 
+    /// Deletes the slot bundles of `source` that a serve stopped without cleaning up left, as
+    /// Force Quit does. Only one serve listens in a paddock home and this one listens now, so none
+    /// of them is a slot's; one that something else holds, such as paddock run, is left alone.
+    private func deleteLeftoverSlots(of source: String) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: home.vmsDirectory.path)) ?? []
+        for name in names.sorted() where BundleName.isSlotBundle(name, of: source) {
+            guard let bundle = try? home.bundle(named: name), let lock = try? BundleLock(bundle: bundle) else { continue }
+            do {
+                try FileManager.default.removeItem(at: bundle.url)
+                print("Deleted '\(name)', which a serve stopped without cleaning up left behind")
+            } catch {
+                print("  warning: can't delete '\(name)', left by an earlier serve: \(error.localizedDescription)")
+            }
+            withExtendedLifetime(lock) {}
+        }
+    }
+
     /// Samples this Mac's usage and its VMs' every 2 s, off the main actor, for `status`.
     private func sampleUsage() {
         let sampler = sampler, folder = home.vmsDirectory
@@ -192,6 +209,7 @@ final class WarmPool {
             MainActor.assumeIsolated { self?.handle(line, responder) }
         }
         interrupt = onInterrupt { [weak self] in self?.shutDown() }
+        deleteLeftoverSlots(of: name)
         sampleUsage()
         if let control {
             controlClient = ControlClient(identity: control, image: name,
@@ -354,6 +372,10 @@ final class WarmPool {
             input(request, responder)
         case "status":
             responder.finish(ServeResponse(status: status()).line)
+        case "show":
+            show(request?.vm, responder)
+        case "hide":
+            hide(request?.vm, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -449,8 +471,13 @@ final class WarmPool {
     /// its virtual pointer and keyboard. Answers once the input is sent, before the guest has acted
     /// on it.
     private func input(_ request: ServeRequest?, _ responder: Responder) {
-        guard let request, let (_, vm, _) = handedOut(request.vm) else {
+        guard let request, let (_, vm, current) = handedOut(request.vm) else {
             return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
+        }
+        // A person and an agent sharing one pointer and keyboard would undo each other.
+        guard !vm.isShown else {
+            return responder.finish(ServeResponse(error: "a person has '\(current.name)' on this Mac's screen, so input "
+                + "waits until they hand it back, with paddock hide or by closing its window").line)
         }
         Task {
             do {
@@ -520,6 +547,40 @@ final class WarmPool {
     }
 
     /// The slot that handed out the VM named `name`, with that VM, if one did.
+    /// Puts a VM this serve handed out on this Mac's screen for a person. Screenshots, the
+    /// accessibility tree and commands go on; input from agents and the CLI waits for the hand-back.
+    private func show(_ name: String?, _ responder: Responder) {
+        guard let (slot, vm, current) = handedOut(name) else {
+            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
+        }
+        let wasShown = vm.isShown
+        do {
+            try vm.show(title: "\(current.name): handed to you; close this window to hand it back") { [weak self] in
+                self?.handBack(slot, vm, current)
+            }
+        } catch {
+            return responder.finish(ServeResponse(error: error.localizedDescription).line)
+        }
+        if !wasShown {
+            print("Slot \(slot.number): '\(current.name)' is on screen; input from agents waits until it's handed back")
+        }
+        responder.finish(ServeResponse(vm: current.name).line)
+    }
+
+    private func hide(_ name: String?, _ responder: Responder) {
+        guard let (slot, vm, current) = handedOut(name) else {
+            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
+        }
+        handBack(slot, vm, current)
+        responder.finish(ServeResponse(vm: current.name).line)
+    }
+
+    private func handBack(_ slot: Slot, _ vm: HeadlessVM, _ current: VMBundle) {
+        guard vm.isShown else { return }
+        vm.hide()
+        print("Slot \(slot.number): '\(current.name)' is off screen again; input from agents goes through")
+    }
+
     private func handedOut(_ name: String?) -> (Slot, HeadlessVM, VMBundle)? {
         for slot in slots {
             if let (vm, bundle) = slot.handedOut(name) { return (slot, vm, bundle) }

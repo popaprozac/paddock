@@ -4,7 +4,7 @@ import PaddockCore
 
 /// A request to `paddock serve`, sent as one line of JSON over its socket.
 struct ServeRequest: Codable {
-    var op: String  // "acquire", "release", "exec", "task", "screenshot", "axtree", "input" or "status"
+    var op: String  // "acquire", "release", "exec", "task", "screenshot", "axtree", "input", "status", "show" or "hide"
     var vm: String?
     var command: String?
     var bundle: String?  // task: absolute path of the git bundle to work on
@@ -286,6 +286,46 @@ struct Release: ParsableCommand {
     func run() throws {
         _ = try ServeClient.send(ServeRequest(op: "release", vm: vm), local: target.local)
         print("Released '\(vm)'; serve is restoring a fresh clone")
+    }
+}
+
+struct Show: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Put a VM that paddock acquire handed out on this Mac's screen, for a person to use.",
+        discussion: """
+            Run it on the Mac whose paddock serve runs the VM. The window takes your mouse and \
+            keyboard, and the VM keeps its resolution. Agents can still take screenshots, read the \
+            accessibility tree and run commands, but their clicks, typing and scrolling are refused \
+            until you hand the VM back: with 'paddock hide', by closing the window, or by quitting paddock from the Dock, which leaves serve running.
+            """)
+
+    @Argument(help: "VM that 'paddock acquire' printed.")
+    var vm: String
+
+    func validate() throws {
+        try BundleName.validate(vm)
+    }
+
+    func run() throws {
+        _ = try ServeClient.send(ServeRequest(op: "show", vm: vm), local: true)
+        print("'\(vm)' is on screen; close its window or run 'paddock hide \(vm)' to hand it back")
+    }
+}
+
+struct Hide: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Hand a VM that paddock show put on screen back to agents: its window goes off screen.")
+
+    @Argument(help: "VM that 'paddock acquire' printed.")
+    var vm: String
+
+    func validate() throws {
+        try BundleName.validate(vm)
+    }
+
+    func run() throws {
+        _ = try ServeClient.send(ServeRequest(op: "hide", vm: vm), local: true)
+        print("'\(vm)' is off screen; input from agents goes through again")
     }
 }
 

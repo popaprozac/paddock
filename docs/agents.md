@@ -53,13 +53,35 @@ about 50 ms, mostly encoding the PNG.
   display before the VM resumes and draws. A guest that doesn't redraw as it resumes still shows
   a black screen until its screen next changes: 2 of 10 hand-outs in testing.
 
+## Taking a VM over by hand
+
+`paddock show <vm>`, on the Mac whose `serve` runs the VM, moves its window on screen for a
+person: titled, resizable and taking the mouse and keyboard, with the guest's resolution kept
+and the window scaled down only to fit the display, so an agent's coordinates stay right.
+While it's on screen:
+
+- Input from agents and the CLI (`click`, `type`, `key`, `scroll`, and MCP's input tools) is
+  refused with the reason, so a person and an agent don't share one pointer. Screenshots, the
+  accessibility tree and commands go on, so an agent can watch.
+- paddock shows in the Dock; clicking it brings the window to the front.
+- `paddock hide <vm>`, closing the window or quitting paddock from the Dock or its menu hands
+  the VM back: the window goes off screen at the guest's size and agents' input goes through
+  again. The VM runs throughout, and `serve` keeps serving. Logging out, restarting or shutting
+  down still stop `serve`. Force Quit stops `serve` and every slot with it, since it can't be
+  caught.
+- The VM's process uses more CPU while its window is drawn on screen: about 19% of a core,
+  against about 5% off screen, in testing.
+
+Only the Mac running a VM can show it; seeing one from another Mac isn't built yet.
+
 ## Input
 
 `click`, `type`, `key` and `scroll` drive the guest from the host. `serve` sends mouse and
 keyboard events to the `VZVirtualMachineView` it attaches for screenshots, and the guest gets them
 from its virtual pointer and keyboard, so the guest grants nothing and runs nothing for them. A
 command returns once its events are sent, not once the guest has acted on them; read the screen
-or the accessibility tree to see the result.
+or the accessibility tree to see the result. While a person has the VM on screen with
+`paddock show`, they're refused, with the reason, until the VM is handed back.
 
 - `type` and `key` press keys of a US keyboard, so the guest must use a US keyboard layout for
   text to come out as typed, and `type` refuses characters a US keyboard can't type, such as
