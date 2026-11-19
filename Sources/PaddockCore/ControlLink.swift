@@ -146,6 +146,8 @@ public enum ControlLink {
         public var state: String  // warm, assigned, preparing or empty
         public var vm: String?
         public var reason: String?
+        public var age: Int?      // status: seconds the slot has been in this state
+        public var usage: VMUsage? // status: what its VM costs this Mac, while one runs
 
         public init(number: Int, emptyReason: String?, assigned: Bool, warm: Bool, vm: String?) {
             self.number = number

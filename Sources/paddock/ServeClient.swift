@@ -4,7 +4,7 @@ import PaddockCore
 
 /// A request to `paddock serve`, sent as one line of JSON over its socket.
 struct ServeRequest: Codable {
-    var op: String  // "acquire", "release", "exec", "task", "screenshot", "axtree" or "input"
+    var op: String  // "acquire", "release", "exec", "task", "screenshot", "axtree", "input" or "status"
     var vm: String?
     var command: String?
     var bundle: String?  // task: absolute path of the git bundle to work on
@@ -38,6 +38,7 @@ struct ServeResponse: Codable {
     var error: String?
     var host: String?    // acquire through the pool: the name of the Mac the VM runs on
     var busy: Bool?      // acquire that doesn't wait: no warm VM was free
+    var status: MacStatus?  // status: this Mac's usage and its slots', for paddock top
 
     var line: String {
         (try? JSONEncoder().encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"

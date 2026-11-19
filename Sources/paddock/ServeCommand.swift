@@ -69,15 +69,30 @@ final class Slot {
     let number: Int
     let name: String
     var saved: VMBundle?    // the slot's paused VM, cloned for every refill
-    var current: VMBundle?  // the clone that is booting, restoring or warm
+    var current: VMBundle? { didSet { noteState() } }  // the clone that is booting, restoring or warm
     var vm: HeadlessVM?
-    var warmAddress: String?  // set once the current VM's agent answers
-    var assigned = false      // the current VM has been handed out
-    var emptyReason: String?  // why the slot holds no VM, after a refill failed
+    var warmAddress: String? { didSet { noteState() } }  // set once the current VM's agent answers
+    var assigned = false { didSet { noteState() } }      // the current VM has been handed out
+    var emptyReason: String? { didSet { noteState() } }  // why the slot holds no VM, after a refill failed
+    private(set) var stateSince = ContinuousClock.now
+    private var lastState = "preparing"
 
     init(number: Int, source: String) {
         self.number = number
         name = "\(source.prefix(40))-slot\(number)-\(WarmPool.shortID())"
+    }
+
+    /// What the slot reports: its state, and its VM's name while it has one.
+    var report: ControlLink.SlotReport {
+        ControlLink.SlotReport(number: number, emptyReason: emptyReason, assigned: assigned,
+                               warm: warmAddress != nil, vm: current?.name)
+    }
+
+    private func noteState() {
+        let state = report.state
+        guard state != lastState else { return }
+        lastState = state
+        stateSince = .now
     }
 
     /// The VM this slot handed out as `name`, if it did.
@@ -113,10 +128,43 @@ final class WarmPool {
     private let userspaceNetwork: Bool
     private let control: ControlIdentity?
 
+    private let image: String
+    private let sampler = UsageSampler()
+    private var usage: (mac: MacUsage, vms: [String: VMUsage])?
+
     private init(source: String, slots: Int, userspaceNetwork: Bool, control: ControlIdentity?) {
         self.slots = (1...slots).map { Slot(number: $0, source: source) }
         self.userspaceNetwork = userspaceNetwork
         self.control = control
+        image = source
+    }
+
+    /// Samples this Mac's usage and its VMs' every 2 s, off the main actor, for `status`.
+    private func sampleUsage() {
+        let sampler = sampler, folder = home.vmsDirectory
+        Task.detached { [weak self] in
+            while let pool = self {
+                let disk = await pool.freeDisk()
+                await pool.keep(sampler.sample(vms: folder, diskFree: disk))
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func keep(_ sample: (mac: MacUsage, vms: [String: VMUsage])) {
+        usage = sample
+    }
+
+    /// This Mac and its slots as `paddock top` shows them, from the last sample.
+    private func status() -> MacStatus {
+        let now = ContinuousClock.now
+        return MacStatus(name: ControlClient.computerName, image: image, online: true, usage: usage?.mac,
+                         slots: slots.map { slot in
+                             var report = slot.report
+                             report.age = Int((now - slot.stateSince).components.seconds)
+                             report.usage = slot.current.flatMap { usage?.vms[$0.name] }
+                             return report
+                         })
     }
 
     /// Prepares the slots at the same time, fills them and serves until Ctrl-C, which exits the
@@ -130,6 +178,7 @@ final class WarmPool {
             MainActor.assumeIsolated { self?.handle(line, responder) }
         }
         interrupt = onInterrupt { [weak self] in self?.shutDown() }
+        sampleUsage()
         if let control {
             controlClient = ControlClient(identity: control, image: name,
                                           slots: { [weak self] in self?.slotReports() ?? [] },
@@ -172,10 +221,7 @@ final class WarmPool {
 
     /// The slots as the control plane sees them.
     private func slotReports() -> [ControlLink.SlotReport] {
-        slots.map {
-            ControlLink.SlotReport(number: $0.number, emptyReason: $0.emptyReason, assigned: $0.assigned,
-                                   warm: $0.warmAddress != nil, vm: $0.current?.name)
-        }
+        slots.map(\.report)
     }
 
     /// Free space on the paddock home's volume, where clones go.
@@ -288,6 +334,8 @@ final class WarmPool {
             accessibilityTree(of: request?.vm, responder)
         case "input":
             input(request, responder)
+        case "status":
+            responder.finish(ServeResponse(status: status()).line)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
