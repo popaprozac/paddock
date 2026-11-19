@@ -10,7 +10,7 @@ struct Build: AsyncParsableCommand {
         discussion: """
             The image file, in YAML, says where macOS comes from, the VM's size, the account, \
             whether you accept Apple's license for the image, how the two privacy grants get in, \
-            a host folder to share and the steps to run; see the README. paddock checks the whole \
+            a host folder to share and the steps to run; see docs/golden-images.md. paddock checks the whole \
             file, then asks for the account's password and installs macOS into a new VM named \
             after the file.
 
@@ -183,7 +183,7 @@ enum ImageBuild {
             print("The build stopped; '\(plan.name)' is left at \(bundle?.url.path ?? plan.name) to look at. Delete it to build again.")
             if !GuestSupport.tested.contains(version) {
                 print("macOS \(version) isn't tested yet and may set up differently: set the image up by hand in "
-                    + "'paddock run' instead (see the README).")
+                    + "'paddock run' instead (see docs/golden-images.md).")
             }
             throw error
         }

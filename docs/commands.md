@@ -1,0 +1,101 @@
+# Commands
+
+| Command | What it does |
+| --- | --- |
+| `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
+| `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`, on a macOS 27 or later guest (older guests ignore it); `--recovery` starts it in macOS Recovery. |
+| `paddock init <file> [--template minimal\|ci\|managed]` | Writes a commented starter image file for `build`. |
+| `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](golden-images.md)). Needs macOS 27 on this Mac and macOS 15 or later in the VM. |
+| `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](golden-images.md#what-a-golden-image-allows)). |
+| `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
+| `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
+| `paddock serve <source> [--slots 2] [--userspace] [--control url [--join token]]` | Keeps a warm clone of the source running headless in each of its slots: two by default, as many VMs as macOS runs at once, or one with `--slots 1` on a Mac that also runs another VM. At startup it boots a clone in each slot, at the same time, with the slot's own identity until it is ready and saves its state; each warm VM is a fresh clone restored from its slot's state, handed out once it is ready again. A VM is ready once its guest agent answers and the guest reports an IPv4 address and an IPv4 DNS server, and, if the source has `paddock-session` installed, once the helper answers and says loginwindow has finished the login, which means the desktop takes input. A helper before 0.2.0 can't say, so `serve` then waits only for it to answer. If a warm VM stops, its slot restores another. A slot that can't start, for example because another VM is already running, stays empty with the reason, and the other serves on. serve warns when its VMs together would leave the Mac little memory. Ctrl-C stops it and deletes the slots' VMs. With `--control`, it also links this Mac to a control plane and reports its slots there; `--join` the first time (see [A pool of Macs](control-plane.md)). |
+| `paddock acquire [--allow names] [--image name]` | Takes a warm VM from `serve` and prints its name and address, waiting while the slots fill. On a Mac logged in to a control plane it takes one from the pool, and `--image` names the golden image when the pool serves more than one. With `serve --userspace`, the VM reaches only the names in `--allow`, comma-separated, and nothing without it (see [The userspace network](network.md)); `--allow` against a `serve` on NAT fails. |
+| `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
+| `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. |
+| `paddock screenshot <vm> [-o file.png]` | Saves the screen of a VM that `acquire` handed out as a PNG, `<vm>.png` in the current folder by default. `serve` reads the VM's framebuffer on this Mac, so the guest grants nothing and runs nothing (see [Screenshots](agents.md#screenshots)). |
+| `paddock axtree <vm>` | Prints the accessibility tree of the focused app in a VM that `acquire` handed out, as JSON, from `paddock-session` in the guest. Its frames are in the same coordinates as `paddock screenshot`'s pixels. |
+| `paddock click <vm> <x> <y> [--right] [--double]` | Clicks at a point of the guest's screen, in pixels from the top left, as in `paddock screenshot` (see [Input](agents.md#input)). |
+| `paddock type <vm> <text>` | Types text into whatever has the keyboard focus in the guest, as key presses. |
+| `paddock key <vm> <combination>...` | Presses key combinations in turn, such as `cmd+s`, `cmd+shift+z` or `return`. |
+| `paddock scroll <vm> <x> <y> [--down n] [--up n] [--right n] [--left n]` | Scrolls by about n lines at a point of the guest's screen. |
+| `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
+| `paddock mcp` | Serves `serve`'s VMs, or the pool's on a logged-in Mac, to an agent as an MCP server on stdin and stdout (see [Agents over MCP](agents.md#agents-over-mcp)). |
+
+These commands reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its owner can
+open. Each connection carries one request line of JSON and gets one or more answer lines back;
+`exec` streams one per line of output, then the exit status. Only one `serve` can listen at a
+time. On a Mac logged in to a control plane, `acquire`, the commands that take a VM and
+`paddock mcp` use its pool instead; `--local`, or `PADDOCK_LOCAL=1`, keeps them on this Mac. The
+control plane's own commands, with `paddock login`, `logout` and `hosts`, are in
+[A pool of Macs](control-plane.md#commands).
+
+VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
+`PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned
+mid-write.
+
+## Run a task from another Mac
+
+With a control plane, log in and run `paddock task` on any Mac: it runs on the pool, with no SSH
+(see [A pool of Macs](control-plane.md)). Without one, `scripts/run-on-studio.sh`
+runs a command in a fresh VM on another Mac, on the current repo's
+last commit, and brings what it commits back as a local branch. It needs only `git` and `ssh` on
+the Mac you run it from. The other Mac needs Remote Login on for your account, `paddock serve`
+running, and the Command Line Tools in its golden image for `git`.
+
+```bash
+scripts/run-on-studio.sh you@studio.local -- 'swift test'
+```
+
+The script bundles `HEAD`, copies it over one SSH connection, runs `acquire`, `task` and
+`release` on the other Mac, and fetches any new commits as `paddock/<date-time>`. It releases the
+VM, which wipes it, and removes its temporary files even when the command fails, then exits with
+the command's status. Uncommitted changes stay where they are. Set `PADDOCK_REMOTE` if paddock
+isn't at `~/code/paddock/.build/out/Products/Release/paddock` on the other Mac.
+
+## What bench measures
+
+| Step | What it covers |
+| --- | --- |
+| clone | Locking the source, `clonefile(2)` of the disk and auxiliary storage, writing the new identity and renaming the clone into place. |
+| start | Building and validating the VM configuration, creating the VM and starting it, until Virtualization.framework reports it running. |
+| running | From the same moment as start until the guest holds a DHCP lease in `/var/db/dhcpd_leases`, checked every 100 ms. |
+| agent | From the same moment as start until `paddock-guestd` answers a health check over vsock, checked every 100 ms. Runs alongside the lease check. |
+| network | From the same moment as start until the guest reports, through its agent's `state` request, an IPv4 address on `en0` and an IPv4 DNS server, checked every 100 ms once the agent answers. An agent before 0.4.0 is asked through a command instead, which takes seconds while the guest's user is logging in. |
+| session | From the same moment as start until `paddock-session` answers a health check over vsock, checked every 100 ms once the network is up. Only when the source has the helper installed; it starts when the user logs in, so it needs automatic login. |
+| desktop | From the same moment as start until `paddock-session` says, through its `state` request, that loginwindow has finished the login, checked every 100 ms once the helper answers. A helper before 0.2.0 can't say, so the step ends as soon as it answers. |
+
+Each run also prints clone to ready, the total from cloning to the last step: desktop when the
+source has `paddock-session`, network otherwise. A run whose agent never answers or that never
+reaches its last step fails. The lease check reads the host's
+lease file and the agent and network checks go over vsock, so nothing in the guest listens on
+the network for paddock. Each vsock connection gives up after 2 s if Virtualization.framework
+hasn't called back, which now and then it never does, and the next check tries again.
+
+With `--restore`, bench first cold-boots one clone until its last step, pauses it and saves its
+memory and device state (printed as save, with the file size, and left out of the summary).
+Each run then clones that saved VM and replaces start and running with:
+
+| Step | What it covers |
+| --- | --- |
+| clone | As above, plus `clonefile(2)` of the saved state. The clone keeps the saved VM's machine identifier and MAC address, because the saved memory still holds them. |
+| restore | Building and validating the VM configuration, creating the VM and loading the saved state, until the VM is paused. |
+| resume | From the same moment as restore until Virtualization.framework reports the VM running. |
+| agent | From the same moment as restore until `paddock-guestd` answers over vsock. The guest keeps the address it leased before it was saved, so there is no running step. |
+| network | From the same moment as restore until the guest reports its IPv4 address and DNS server again. A restored guest renegotiates its network after it resumes, so this comes after the agent answers. Its IPv6 DNS server stays listed throughout, so only IPv4 counts. |
+| session | From the same moment as restore until `paddock-session` answers, as above. |
+| desktop | From the same moment as restore until `paddock-session` says loginwindow has finished the login, as above. |
+
+Restored clones share one identity, so only one can run at a time.
+
+## VM bundle format
+
+```
+~/.paddock/vms/<name>/
+  disk.img     sparse raw disk image
+  aux.img      Mac auxiliary storage
+  config.json  hardware model and machine identifier (base64), MAC address,
+               CPU count, memory, disk size, display and the installed macOS build
+  state.vzvmsave  optional saved memory and device state of a paused VM
+  net.sock     paddock-net's control socket, while the VM runs on the userspace network
+```

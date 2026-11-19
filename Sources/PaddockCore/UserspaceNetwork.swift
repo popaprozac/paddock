@@ -47,8 +47,8 @@ public final class UserspaceNetwork {
         self.controlPath = controlPath
     }
 
-    /// Lets the guest reach `names` and nothing else, replacing the list in force; see the
-    /// README for what an entry matches. Connections already open stay open.
+    /// Lets the guest reach `names` and nothing else, replacing the list in force; see
+    /// docs/network.md for what an entry matches. Connections already open stay open.
     public func allow(_ names: [String]) throws {
         try Self.allow(names, at: controlPath)
     }

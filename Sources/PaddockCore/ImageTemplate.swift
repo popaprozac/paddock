@@ -85,7 +85,7 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
 
             \(Self.steps)
             # A monitoring agent that reports to its own server, such as osquery or fleetd, goes
-            # in as a step; see the README on agents in cloned images.
+            # in as a step; see docs/golden-images.md on agents in cloned images.
 
             """
         }
