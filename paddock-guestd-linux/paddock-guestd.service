@@ -1,0 +1,13 @@
+[Unit]
+Description=paddock guest agent, answering the host over vsock
+
+[Service]
+# The vsock transport usually loads by itself with its virtio device; this covers the first
+# boot, when the agent can start before it does.
+ExecStartPre=-/usr/sbin/modprobe vmw_vsock_virtio_transport
+ExecStart=/usr/local/libexec/paddock-guestd
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
