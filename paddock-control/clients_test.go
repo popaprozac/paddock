@@ -169,6 +169,35 @@ func TestLogoutRemovesTheClient(t *testing.T) {
 	}
 }
 
+func TestClientsMarksOneThatNeverLinkedOrWentQuiet(t *testing.T) {
+	c := newTestControl(t)
+	key, publicKey := newHostKey(t)
+	_, client := c.enrollAs(t, clientKind, c.loginToken(t), publicKey)
+	if status := c.srv.clientStatus()[0]; !status.Stale || !status.LastSeen.IsZero() {
+		t.Fatalf("a client that never linked: %+v", status)
+	}
+	conn, _, err := c.clientLinkAs(t, client.Client, key, clientContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := c.srv.clientStatus()[0]; status.Links != 1 || status.Stale {
+		t.Fatalf("a linked client: %+v", status)
+	}
+	conn.Close(websocket.StatusNormalClosure, "")
+	for deadline := time.Now().Add(5 * time.Second); c.srv.clientStatus()[0].Links != 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the client's link stayed open")
+		}
+	}
+	if status := c.srv.clientStatus()[0]; status.Stale || status.LastSeen.IsZero() {
+		t.Fatalf("a client gone a moment: %+v", status)
+	}
+	c.srv.now = func() time.Time { return time.Now().Add(staleDays*24*time.Hour + time.Hour) }
+	if status := c.srv.clientStatus()[0]; !status.Stale {
+		t.Fatalf("a client gone over %d days: %+v", staleDays, status)
+	}
+}
+
 func TestRemovingAClientClosesAllItsLinks(t *testing.T) {
 	c := newTestControl(t)
 	key, publicKey := newHostKey(t)

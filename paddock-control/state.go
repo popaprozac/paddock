@@ -45,6 +45,7 @@ type enrolled struct {
 	Name      string    `json:"name"`
 	PublicKey []byte    `json:"publicKey"` // PKIX DER of a P-256 key
 	Enrolled  time.Time `json:"enrolled"`
+	LastSeen  time.Time `json:"lastSeen,omitzero"` // its last link's open or close; none if it never linked
 }
 
 // pendingToken is a token not yet used, kept only as the SHA-256 of its secret.
@@ -281,6 +282,20 @@ func (s *state) member(k kind, id string) *enrolled {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.members(k)[id]
+}
+
+// seen keeps now as when the host or client with this ID was last linked. It saves only once a
+// minute has passed, the precision the lists show, so a burst of short client links doesn't
+// rewrite the state for each.
+func (s *state) seen(k kind, id string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	member := s.members(k)[id]
+	if member == nil || now.Sub(member.LastSeen) < time.Minute {
+		return nil
+	}
+	member.LastSeen = now
+	return s.save()
 }
 
 // list is every enrolled identity of a kind.

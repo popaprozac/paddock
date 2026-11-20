@@ -278,15 +278,39 @@ func hosts(args []string) error {
 	}
 	table := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(table, "NAME\tID\tSTATUS\tIMAGE\tSLOTS\tMACOS\tPADDOCK")
+	staleCount := 0
 	for _, host := range list {
-		status := "offline"
-		if host.Online {
+		status := "never linked"
+		switch {
+		case host.Online:
 			status = "online since " + host.Connected.Local().Format("Jan 2 15:04")
+		case !host.LastSeen.IsZero():
+			status = "offline since " + host.LastSeen.Local().Format("Jan 2 15:04")
+		}
+		if host.Stale {
+			status += " (stale)"
+			staleCount++
 		}
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", host.Name, host.ID, status, dash(host.Image),
 			slotSummary(host.Slots), dash(host.MacOS), dash(host.Version))
 	}
-	return table.Flush()
+	if err := table.Flush(); err != nil {
+		return err
+	}
+	printStaleNote(staleCount, "Mac", "If a Mac is gone for good, remove it: paddock-control remove-host <ID>")
+	return nil
+}
+
+// printStaleNote says how many entries a list marked stale and how to remove one; none, nothing.
+func printStaleNote(count int, noun, remove string) {
+	if count == 0 {
+		return
+	}
+	plural := ""
+	if count > 1 {
+		plural = "s"
+	}
+	fmt.Printf("\n%d %s%s marked stale: never linked, or not for over %d days. %s\n", count, noun, plural, staleDays, remove)
 }
 
 func clients(args []string) error {
@@ -311,14 +335,23 @@ func clients(args []string) error {
 	}
 	table := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(table, "NAME\tID\tLINKS\tLAST SEEN\tLOGGED IN")
+	staleCount := 0
 	for _, c := range list {
-		seen := "-"
+		seen := "never"
 		if !c.LastSeen.IsZero() {
 			seen = c.LastSeen.Local().Format("Jan 2 15:04")
 		}
+		if c.Stale {
+			seen += " (stale)"
+			staleCount++
+		}
 		fmt.Fprintf(table, "%s\t%s\t%d\t%s\t%s\n", c.Name, c.ID, c.Links, seen, c.Enrolled.Local().Format("Jan 2 15:04"))
 	}
-	return table.Flush()
+	if err := table.Flush(); err != nil {
+		return err
+	}
+	printStaleNote(staleCount, "client", "If one is no longer used, remove it: paddock-control remove-client <ID>")
+	return nil
 }
 
 // remove removes a host or a client by ID or name.

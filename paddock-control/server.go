@@ -297,6 +297,7 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		// Close waits for the other end's answer, so not on this link's way in.
 		go previous.conn.Close(websocket.StatusGoingAway, "replaced by a newer link from the same host")
 	}
+	s.markSeen(hostKind, host)
 	s.audit.record(auditEvent{Event: "link-opened", Host: host, Name: enrolled.Name, Remote: r.RemoteAddr})
 	log.Printf("%s (%s) connected from %s", enrolled.Name, host, r.RemoteAddr)
 	if err := wsjson.Write(r.Context(), conn, message{Type: "welcome", Host: host}); err != nil {
@@ -423,6 +424,7 @@ func (s *server) register(host string, l *link) *link {
 
 // unregister forgets l, unless a newer link has already replaced it.
 func (s *server) unregister(host string, l *link, reason string) {
+	s.markSeen(hostKind, host)
 	s.mu.Lock()
 	current := s.links[host] == l
 	if current {
@@ -449,12 +451,29 @@ func (s *server) disconnect(host string) {
 	}
 }
 
+// markSeen keeps when a host or client was last linked, so the lists can mark the ones left behind.
+func (s *server) markSeen(k kind, id string) {
+	if err := s.state.seen(k, id, s.now()); err != nil {
+		log.Printf("can't keep when %s was last seen: %v", id, err)
+	}
+}
+
+// staleDays is how long a host or client may go without linking before the lists mark it stale,
+// as one re-provisioned or given up on. One that never linked is stale at once.
+const staleDays = 7
+
+// stale says whether a host or client that isn't linked now looks left behind.
+func stale(lastSeen, now time.Time) bool {
+	return lastSeen.IsZero() || now.Sub(lastSeen) > staleDays*24*time.Hour
+}
+
 // hostStatus is a host as `paddock-control hosts` shows it.
 type hostStatus struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Enrolled  time.Time `json:"enrolled"`
 	Online    bool      `json:"online"`
+	Stale     bool      `json:"stale,omitempty"` // offline, and never linked or not for staleDays
 	Remote    string    `json:"remote,omitempty"`
 	Connected time.Time `json:"connected,omitzero"`
 	LastSeen  time.Time `json:"lastSeen,omitzero"`
@@ -471,10 +490,11 @@ type hostStatus struct {
 func (s *server) status() []hostStatus {
 	var list []hostStatus
 	for _, host := range s.state.list(hostKind) {
-		status := hostStatus{ID: host.ID, Name: host.Name, Enrolled: host.Enrolled}
+		status := hostStatus{ID: host.ID, Name: host.Name, Enrolled: host.Enrolled, LastSeen: host.LastSeen}
 		s.mu.Lock()
 		l := s.links[host.ID]
 		s.mu.Unlock()
+		status.Stale = l == nil && stale(host.LastSeen, s.now())
 		if l != nil {
 			l.mu.Lock()
 			status.Online, status.Remote, status.Connected, status.LastSeen = true, l.remote, l.connected, l.lastSeen
