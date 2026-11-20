@@ -344,6 +344,15 @@ enum UnixSocket {
 public enum ResponderPipe {
     /// A responder to give the handler, and the lines it sends, ending once it finishes.
     public static func make() throws -> (Responder, AsyncStream<String>) {
+        let (responder, lines, input) = try makeDuplex()
+        input.drop()
+        return (responder, lines)
+    }
+
+    /// As `make`, plus a way to send the handler bytes it reads with `Responder.receive`, as a
+    /// client on a socket sends after its request line: for requests whose client keeps sending
+    /// while they answer, such as a view's input.
+    public static func makeDuplex() throws -> (Responder, AsyncStream<String>, Input) {
         var ends: [Int32] = [0, 0]
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &ends) == 0 else {
             throw PaddockError("can't make a socket pair: \(String(cString: strerror(errno)))")
@@ -351,6 +360,14 @@ public enum ResponderPipe {
         UnixSocket.configure(ends[0], readTimeout: nil)
         UnixSocket.configure(ends[1], readTimeout: nil)
         let reader = ends[1]
+        // Its own descriptor, so the reader closing its one when the handler finishes can't hand a
+        // later write to whatever else gets that number.
+        let writer = dup(reader)
+        guard writer >= 0 else {
+            close(ends[0])
+            close(reader)
+            throw PaddockError("can't make a socket pair: \(String(cString: strerror(errno)))")
+        }
         let (lines, continuation) = AsyncStream<String>.makeStream()
         Thread.detachNewThread {
             var pending = Data()
@@ -367,6 +384,46 @@ public enum ResponderPipe {
             close(reader)
             continuation.finish()
         }
-        return (Responder(fd: ends[0]), lines)
+        return (Responder(fd: ends[0]), lines, Input(fd: writer))
+    }
+
+    /// The client's end of a duplex pipe. Sends never block the caller: they're written in order on
+    /// a queue of their own.
+    public final class Input: @unchecked Sendable {
+        private let fd: Int32
+        private let queue = DispatchQueue(label: "paddock.responder-pipe.input")
+        private var closed = false  // only on queue
+
+        init(fd: Int32) {
+            self.fd = fd
+        }
+
+        /// Bytes for the handler. Dropped once finished.
+        public func send(_ data: Data) {
+            queue.async { [self] in
+                guard !closed else { return }
+                _ = UnixSocket.writeAll(data, to: fd)
+            }
+        }
+
+        /// No more bytes: the handler reads end of file next, and `clientHungUp` turns true.
+        public func finish() {
+            queue.async { [self] in
+                guard !closed else { return }
+                closed = true
+                shutdown(fd, SHUT_WR)
+                close(fd)
+            }
+        }
+
+        /// Gives up this end without ending the handler's input, for a request whose client sends
+        /// nothing more: `clientHungUp` stays false, as it did before pipes had an input.
+        func drop() {
+            queue.async { [self] in
+                guard !closed else { return }
+                closed = true
+                close(fd)
+            }
+        }
     }
 }

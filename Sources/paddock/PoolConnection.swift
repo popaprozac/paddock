@@ -81,7 +81,10 @@ final class PoolConnection: @unchecked Sendable {
 
     /// Sends a request, then `upload` in pieces if given, and returns its answers as they come,
     /// ending after the one marked done, or with the request's error, or with why the link ended.
-    func request(_ message: ControlLink.Message, upload: URL? = nil) -> AsyncThrowingStream<ControlLink.Message, Error> {
+    /// With `sending`, for a streaming request such as a view, each piece goes up as it comes while
+    /// the answers come back, and its end ends the request's input.
+    func request(_ message: ControlLink.Message, upload: URL? = nil,
+                 sending: AsyncStream<Data>? = nil) -> AsyncThrowingStream<ControlLink.Message, Error> {
         var message = message
         let (stream, continuation) = AsyncThrowingStream<ControlLink.Message, Error>.makeStream()
         let ended: Error? = lock.withLock {
@@ -104,6 +107,12 @@ final class PoolConnection: @unchecked Sendable {
                 try await send(message)
                 if let upload {
                     try await send(upload, as: id)
+                }
+                if let sending {
+                    for await data in sending {
+                        try await send(ControlLink.Message(type: "upload", id: id, data: data))
+                    }
+                    try await send(ControlLink.Message(type: "upload", id: id, done: true))
                 }
             } catch {
                 end(error)

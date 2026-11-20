@@ -326,6 +326,8 @@ final class ControlClient {
     }
 
     private var uploads: [String: Upload] = [:]
+    /// Requests whose client keeps sending, such as a view, by request ID: where their uploads go.
+    private var streams: [String: ResponderPipe.Input] = [:]
 
     /// Runs one of the control plane's requests through serve's handler and sends its answer lines
     /// back with the request's ID, the last marked done. A request this Mac doesn't take from its
@@ -338,6 +340,8 @@ final class ControlClient {
                 throw PaddockError("that isn't one of serve's requests")
             }
             switch fields["op"] as? String {
+            case let op? where ControlLink.streamingOperations.contains(op):
+                try stream(fields, id: id, on: socket)
             case "acquire":
                 // The control plane keeps the pool's one queue, so this Mac answers at once: a
                 // warm VM, or busy, and the control plane tries another Mac or waits.
@@ -362,8 +366,19 @@ final class ControlClient {
         }
     }
 
-    /// Takes a piece of a task's bundle; with the last, runs the task.
+    /// Takes a piece of a task's bundle; with the last, runs the task. A streaming request's pieces
+    /// go straight to its handler.
     private func receiveUpload(_ message: ControlLink.Message, on socket: URLSessionWebSocketTask) {
+        if let id = message.id, let input = streams[id] {
+            if let data = message.data {
+                input.send(data)
+            }
+            if message.done == true {
+                streams[id] = nil
+                input.finish()
+            }
+            return
+        }
         guard let id = message.id, var upload = uploads[id] else { return }
         do {
             if let data = message.data {
@@ -390,15 +405,21 @@ final class ControlClient {
         }
     }
 
-    /// Drops the bundles of tasks that never got all their pieces, as when the link closes.
+    /// Drops the bundles of tasks that never got all their pieces, and ends streaming requests,
+    /// as when the link closes.
     private func abandonUploads() {
-        for id in Array(uploads.keys) {
+        for id in Array(uploads.keys) + Array(streams.keys) {
             abandonUpload(id)
         }
     }
 
-    /// Drops a task's bundle that won't be finished: its client left, or it grew too big.
+    /// Drops a task's bundle that won't be finished: its client left, or it grew too big. A
+    /// streaming request's handler sees its input end, which stops it.
     private func abandonUpload(_ id: String) {
+        if let input = streams.removeValue(forKey: id) {
+            input.finish()
+            return
+        }
         guard let upload = uploads.removeValue(forKey: id) else { return }
         try? upload.handle.close()
         try? FileManager.default.removeItem(at: upload.bundle)
@@ -425,6 +446,23 @@ final class ControlClient {
             }
             // The last line goes out marked done, so the control plane knows the request is over.
             try? await send(ControlLink.Message(type: "response", id: id, done: true, line: last), on: socket)
+        }
+    }
+
+    /// Runs a request whose client keeps sending (see `receiveUpload`) and sends each answer line
+    /// as it comes, not held for the next: a view's frame can't wait for the one after it. The
+    /// last message only says it's done.
+    private func stream(_ fields: [String: Any], id: String, on socket: URLSessionWebSocketTask) throws {
+        let request = String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        let (responder, lines, input) = try ResponderPipe.makeDuplex()
+        streams[id] = input
+        onRequest(request, responder)
+        Task {
+            for await answer in lines {
+                try? await send(ControlLink.Message(type: "response", id: id, line: answer), on: socket)
+            }
+            streams.removeValue(forKey: id)?.finish()
+            try? await send(ControlLink.Message(type: "response", id: id, done: true), on: socket)
         }
     }
 

@@ -118,6 +118,29 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 				reply(`{"output":"got `+string(bundle)+`"}`, false)
 				wsjson.Write(ctx, conn, message{Type: "response", ID: m.ID, Data: []byte("NEW-COMMITS")})
 				reply(`{"exit":0}`, true)
+			case "view":
+				// A view's input arrives as uploads while it answers: each one answered at once, the
+				// last ending it; a cancel ends it too.
+				for {
+					var piece message
+					if err := wsjson.Read(ctx, conn, &piece); err != nil {
+						return
+					}
+					if piece.Type == "cancel" && piece.ID == m.ID {
+						h.mu.Lock()
+						h.cancelled = append(h.cancelled, m.ID)
+						h.mu.Unlock()
+						break
+					}
+					if piece.Type != "upload" || piece.ID != m.ID {
+						continue
+					}
+					reply(`{"got":"`+string(piece.Data)+`"}`, false)
+					if piece.Done {
+						reply(`{"ended":true}`, true)
+						break
+					}
+				}
 			default:
 				reply(`{"error":"unexpected"}`, true)
 			}
@@ -558,4 +581,76 @@ func TestATaskWhoseClientLeavesMidUploadIsCancelledOnTheMac(t *testing.T) {
 		defer host.mu.Unlock()
 		return len(host.cancelled) == 1
 	})
+}
+
+// readAnswer reads the client link until the next answer to id.
+func readAnswer(t *testing.T, ctx context.Context, conn *websocket.Conn, id string) message {
+	t.Helper()
+	for {
+		var m message
+		if err := wsjson.Read(ctx, conn, &m); err != nil {
+			t.Fatalf("waiting for an answer to %s: %v", id, err)
+		}
+		if m.ID == id {
+			return m
+		}
+	}
+}
+
+// A view's input reaches the Mac while it runs, and the Mac's answers come back before the input
+// is over: each upload is answered before the next is sent.
+func TestAViewCarriesInputUpAndAnswersBackWhileItRuns(t *testing.T) {
+	c := newTestControl(t)
+	c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	wsjson.Write(ctx, conn, message{Type: "request", ID: "2", Op: "view", Serve: `{"op":"view","vm":"golden-slot1-abc"}`})
+	wsjson.Write(ctx, conn, message{Type: "upload", ID: "2", Data: []byte("A")})
+	if got := readAnswer(t, ctx, conn, "2"); got.Line != `{"got":"A"}` || got.Done {
+		t.Fatalf("first answer %+v", got)
+	}
+	wsjson.Write(ctx, conn, message{Type: "upload", ID: "2", Data: []byte("B"), Done: true})
+	if got := readAnswer(t, ctx, conn, "2"); got.Line != `{"got":"B"}` || got.Done {
+		t.Fatalf("second answer %+v", got)
+	}
+	if got := readAnswer(t, ctx, conn, "2"); got.Line != `{"ended":true}` || !got.Done {
+		t.Fatalf("last answer %+v", got)
+	}
+}
+
+// A client that leaves while its view runs has the view stopped on the Mac.
+func TestAViewWhoseClientLeavesIsCancelledOnTheMac(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	wsjson.Write(ctx, conn, message{Type: "request", ID: "2", Op: "view", Serve: `{"op":"view","vm":"golden-slot1-abc"}`})
+	wsjson.Write(ctx, conn, message{Type: "upload", ID: "2", Data: []byte("A")})
+	readAnswer(t, ctx, conn, "2")
+	conn.Close(websocket.StatusNormalClosure, "")
+	eventually(t, "the host to be told to stop the view", func() bool {
+		host.mu.Lock()
+		defer host.mu.Unlock()
+		return len(host.cancelled) == 1
+	})
+}
+
+// Only the client holding a VM can view it.
+func TestAViewOfSomeoneElsesVMIsRefused(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, owner := c.newClient(t)
+	ask(t, owner, message{ID: "1", Op: "acquire"})
+	_, other := c.newClient(t)
+	got := ask(t, other, message{ID: "1", Op: "view", Serve: `{"op":"view","vm":"golden-slot1-abc"}`})
+	if !strings.Contains(got[0].Error, "isn't a VM you acquired") || host.sawRequest("view") {
+		t.Fatalf("another client's view %+v", got)
+	}
 }

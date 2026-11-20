@@ -96,6 +96,11 @@ func (s *server) answer(ctx context.Context, client string, l *clientLink, reque
 		uploads := l.expectUpload(request.ID)
 		go s.relayTask(ctx, client, l, request, uploads)
 		return
+	case "view":
+		// The client's input comes as uploads while the frames go back, for as long as it lasts.
+		uploads := l.expectUpload(request.ID)
+		go s.relayStream(ctx, client, l, request, uploads)
+		return
 	case "logout":
 		// The client removes itself: its VMs go back, its key is forgotten, and this and its other
 		// links close.

@@ -172,4 +172,37 @@ import Testing
     @Test func rejectsPathsTooLongForASocket() {
         #expect(throws: PaddockError.self) { try UnixSocket.address("/tmp/" + String(repeating: "a", count: 200)) }
     }
+
+    /// A duplex pipe's input reaches the handler while it answers, and finishing the input is
+    /// end of file there.
+    @Test func aDuplexPipeCarriesInputToTheHandlerWhileItAnswers() async throws {
+        let (responder, lines, input) = try ResponderPipe.makeDuplex()
+        Thread.detachNewThread {
+            #expect(!responder.clientHungUp)
+            while let data = responder.receive(upTo: 64) {
+                responder.send("got \(String(decoding: data, as: UTF8.self))")
+            }
+            responder.finish("ended")
+        }
+        input.send(Data("A".utf8))
+        var answers: [String] = []
+        for await line in lines {
+            answers.append(line)
+            if line == "got A" {
+                input.send(Data("B".utf8))
+            } else if line == "got B" {
+                input.finish()
+            }
+        }
+        #expect(answers == ["got A", "got B", "ended"])
+    }
+
+    /// A pipe made without an input sends the handler nothing and doesn't look hung up, as an
+    /// acquire waiting for a warm VM relies on.
+    @Test func aPlainPipeDoesntLookHungUp() throws {
+        let (responder, _) = try ResponderPipe.make()
+        Thread.sleep(forTimeInterval: 0.1)  // the input end is dropped on its own queue
+        #expect(!responder.clientHungUp)
+        responder.finish()
+    }
 }

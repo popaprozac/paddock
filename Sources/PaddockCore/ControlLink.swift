@@ -63,6 +63,10 @@ public enum ControlLink {
     /// so the files a screenshot or a task needs are ones the Mac picks itself.
     public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input", "screenshot", "task"]
 
+    /// Operations whose client keeps sending while they answer, such as a view's input: its
+    /// uploads go to the running handler, and its answers go out at once.
+    public static let streamingOperations: Set<String> = ["view"]
+
     /// The most a piece of a file sent over a link holds.
     public static let chunkSize = 256 * 1024
     /// The most one request sends, such as a task's bundle, so one can't fill a Mac's disk.
