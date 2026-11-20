@@ -205,4 +205,28 @@ import Testing
         #expect(!responder.clientHungUp)
         responder.finish()
     }
+
+    /// A line connection sends and reads for as long as it's open, with lines longer than
+    /// LineClient's 64 KB, as a view's frames are.
+    @Test func aLineConnectionTalksBothWaysWithLongLines() throws {
+        let path = socketPath()
+        let long = String(repeating: "x", count: 300_000)
+        let server = try LineServer(path: path, queue: queue) { line, responder in
+            Thread.detachNewThread {
+                responder.send("start \(line)")
+                while let data = responder.receive(upTo: 64) {
+                    if String(decoding: data, as: UTF8.self).contains("long") { responder.send(long) }
+                }
+                responder.finish("ended")
+            }
+        }
+        let connection = try LineConnection(path: path)
+        connection.send("hello")
+        #expect(connection.readLine() == "start hello")
+        connection.send("long")
+        #expect(connection.readLine() == long)
+        connection.close()
+        #expect(connection.readLine() == nil)
+        withExtendedLifetime(server) {}
+    }
 }

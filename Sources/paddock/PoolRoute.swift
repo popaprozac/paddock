@@ -123,7 +123,7 @@ private final class Answers: @unchecked Sendable {
 /// The process's one link to the control plane, opened by its first request and kept for the
 /// rest: paddock mcp makes a request per tool call, and a link each would cost every call a
 /// handshake and the audit log two events. A link that ended is opened again on the next request.
-private actor SharedLink {
+actor SharedLink {
     static let shared = SharedLink()
     private var current: Task<PoolConnection, Error>?
 

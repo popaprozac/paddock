@@ -171,6 +171,46 @@ public final class Responder: @unchecked Sendable {
     }
 }
 
+/// A connection to a line server that sends and reads lines for as long as it stays open, as a
+/// view does, with lines up to `maxLine` long.
+public final class LineConnection: @unchecked Sendable {
+    private let fd: Int32
+    private let writeLock = NSLock()
+    private var pending = Data()  // the reader's alone
+    public static let maxLine = 4 << 20
+
+    public init(path: String) throws {
+        fd = try UnixSocket.connect(path)
+    }
+
+    /// Sends one line; false once the connection is gone.
+    @discardableResult
+    public func send(_ line: String) -> Bool {
+        writeLock.withLock { UnixSocket.writeAll(Data((line + "\n").utf8), to: fd) }
+    }
+
+    /// The next line, or nil once the server closes the connection (or sends a line over `maxLine`).
+    public func readLine() -> String? {
+        while true {
+            if let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
+                defer { pending.removeSubrange(pending.startIndex...newline) }
+                return String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
+            }
+            guard pending.count <= Self.maxLine, let chunk = UnixSocket.read(upTo: 256 * 1024, from: fd) else { return nil }
+            pending.append(chunk)
+        }
+    }
+
+    /// Ends the connection both ways: the server reads end of file, and a waiting `readLine` returns nil.
+    public func close() {
+        shutdown(fd, SHUT_RDWR)
+    }
+
+    deinit {
+        Darwin.close(fd)
+    }
+}
+
 public enum LineClient {
     /// Sends `line` to the server at `path` and waits, without a time limit, for the first line
     /// of its answer.
