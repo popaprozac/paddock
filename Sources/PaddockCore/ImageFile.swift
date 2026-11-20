@@ -40,7 +40,7 @@ public struct ImageFile: Equatable, Sendable {
     }
 
     /// The Debian releases `from: { debian: N }` builds from.
-    public static let debianReleases = [13]
+    public static let debianReleases = LinuxImage.debianCodenames.keys.sorted()
 
     /// How the helpers' privacy grants get into the image: `managed` leaves them to a person or
     /// clicking them once in the image, `recovery` has `paddock grant` write them.

@@ -91,9 +91,18 @@ public enum RestoreImages {
         to destination: URL,
         progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
     ) async throws {
+        try await download(remote.url, to: destination, progress: progress)
+    }
+
+    /// Downloads `url` to `destination` in the same way, for other images such as Linux ones.
+    public static func download(
+        _ url: URL,
+        to destination: URL,
+        progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    ) async throws {
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try await RestoreImageDownload(destination: destination, progress: progress).run(from: remote.url)
+        try await RestoreImageDownload(destination: destination, progress: progress).run(from: url)
     }
 
     static func versionString(_ version: OperatingSystemVersion) -> String {
