@@ -29,14 +29,19 @@ public enum VMClone {
         defer { withExtendedLifetime(lock) {} }
         let staging = try StagingArea(for: destination)
 
-        try cloneFile(source.diskURL, to: staging.bundle.diskURL)
-        try cloneFile(source.auxiliaryStorageURL, to: staging.bundle.auxiliaryStorageURL)
-
         var config = try source.readConfig()
+        try cloneFile(source.diskURL, to: staging.bundle.diskURL)
+        if config.isLinux {
+            try cloneFile(source.efiVariablesURL, to: staging.bundle.efiVariablesURL)
+        } else {
+            try cloneFile(source.auxiliaryStorageURL, to: staging.bundle.auxiliaryStorageURL)
+        }
+
         if keepingSavedState {
             try cloneFile(source.savedStateURL, to: staging.bundle.savedStateURL)
         } else {
-            config.machineIdentifier = VZMacMachineIdentifier().dataRepresentation
+            config.machineIdentifier = config.isLinux
+                ? VZGenericMachineIdentifier().dataRepresentation : VZMacMachineIdentifier().dataRepresentation
             config.macAddress = VZMACAddress.randomLocallyAdministered().string
         }
         try staging.bundle.writeConfig(config)

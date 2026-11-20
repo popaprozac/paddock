@@ -35,6 +35,30 @@ import Virtualization
         #expect(try source.readConfig() == original)
     }
 
+    /// A Linux source: an EFI variable store in place of aux.img, and a generic identity.
+    @Test func clonesALinuxVMWithItsEFIStoreAndAGenericIdentity() throws {
+        let tmp = try TemporaryDirectory()
+        let source = VMBundle(url: tmp.url.appendingPathComponent("vms/debian"))
+        try FileManager.default.createDirectory(at: source.url, withIntermediateDirectories: true)
+        try Data("boot disk".utf8).write(to: source.diskURL)
+        try Data("efi".utf8).write(to: source.efiVariablesURL)
+        try source.writeConfig(VMConfigTests.linuxSample)
+
+        let clone = VMBundle(url: tmp.url.appendingPathComponent("vms/clone-1"))
+        let config = try VMClone.clone(source, to: clone)
+        #expect(try Data(contentsOf: clone.efiVariablesURL) == Data("efi".utf8))
+        #expect(!FileManager.default.fileExists(atPath: clone.auxiliaryStorageURL.path))
+        #expect(config.isLinux)
+        #expect(config.machineIdentifier != VMConfigTests.linuxSample.machineIdentifier)
+        #expect(VZGenericMachineIdentifier(dataRepresentation: config.machineIdentifier) != nil)
+
+        try Data("state".utf8).write(to: clone.savedStateURL)
+        let warm = VMBundle(url: tmp.url.appendingPathComponent("vms/warm-1"))
+        let kept = try VMClone.clone(clone, to: warm, keepingSavedState: true)
+        #expect(kept == config)
+        #expect(try Data(contentsOf: warm.efiVariablesURL) == Data("efi".utf8))
+    }
+
     @Test func clonesDoNotShareAnIdentity() throws {
         let tmp = try TemporaryDirectory()
         let source = try makeSource(in: tmp)

@@ -5,7 +5,15 @@ import Foundation
 /// `hardwareModel` and `machineIdentifier` are the opaque `dataRepresentation` blobs from
 /// Virtualization.framework; JSON stores them as base64. A clone gets a new `machineIdentifier`
 /// and `macAddress` and keeps everything else.
+///
+/// A Linux VM says so in `kind`; a config without it, as every one before Linux VMs, is macOS. A
+/// Linux VM's `machineIdentifier` is a VZGenericMachineIdentifier, its `hardwareModel` is empty,
+/// and it has no display.
 public struct VMConfig: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        case linux
+    }
+
     public struct Display: Codable, Equatable, Sendable {
         public var widthInPixels: Int
         public var heightInPixels: Int
@@ -32,6 +40,7 @@ public struct VMConfig: Codable, Equatable, Sendable {
     }
 
     public var formatVersion: Int
+    public var kind: Kind?  // nil for macOS
     public var hardwareModel: Data
     public var machineIdentifier: Data
     public var macAddress: String
@@ -41,7 +50,10 @@ public struct VMConfig: Codable, Equatable, Sendable {
     public var display: Display
     public var os: OSInfo?
 
+    public var isLinux: Bool { kind == .linux }
+
     public init(
+        kind: Kind? = nil,
         hardwareModel: Data,
         machineIdentifier: Data,
         macAddress: String,
@@ -52,6 +64,7 @@ public struct VMConfig: Codable, Equatable, Sendable {
         os: OSInfo? = nil
     ) {
         self.formatVersion = 1
+        self.kind = kind
         self.hardwareModel = hardwareModel
         self.machineIdentifier = machineIdentifier
         self.macAddress = macAddress

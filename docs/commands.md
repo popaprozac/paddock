@@ -121,9 +121,17 @@ Restored clones share one identity, so only one can run at a time.
 ```
 ~/.paddock/vms/<name>/
   disk.img     sparse raw disk image
-  aux.img      Mac auxiliary storage
+  aux.img      Mac auxiliary storage (macOS)
+  efi-vars     EFI variable store (Linux), in place of aux.img
   config.json  hardware model and machine identifier (base64), MAC address,
-               CPU count, memory, disk size, display and the installed macOS build
+               CPU count, memory, disk size, display and the installed macOS build;
+               "kind": "linux" for a Linux VM
   state.vzvmsave  optional saved memory and device state of a paused VM
   net.sock     paddock-net's control socket, while the VM runs on the userspace network
+  console.log  a Linux guest's console, written afresh each time it starts
 ```
+
+A Linux VM runs on Virtualization.framework's generic platform with EFI boot, a virtio disk,
+network, entropy, vsock and console, and no display, keyboard or pointer, so screenshots, input,
+`show` and `view` refuse it. Its `config.json` has an empty hardware model and a generic machine
+identifier.
