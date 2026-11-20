@@ -110,6 +110,21 @@ public enum LinuxSeed {
         echo "paddock: the image is set up"
         """#
 
+    /// The last thing a Linux image's build does, as root, after its steps: emptied, the
+    /// machine-id is made afresh by each slot's first boot, so slots don't share one; and what
+    /// only the build needed goes. The ssh host keys go too: ssh is masked, and every clone would
+    /// otherwise carry the same private keys.
+    public static let sealScript = """
+        set -e
+        truncate -s 0 /etc/machine-id
+        cloud-init clean --logs
+        rm -f /etc/ssh/ssh_host_*
+        apt-get clean
+        """
+
+    /// Mounts the build's shared folder at `/mnt/share`, read-only.
+    public static let mountShare = "mkdir -p /mnt/share && mount -t virtiofs -o ro \(VMConfiguration.linuxShareTag) /mnt/share"
+
     /// Run once cloud-init has finished its first boot: it has done its one job, and in a clone it
     /// would set the image up again. Turning it off from setup itself would end its run early.
     public static let disableCloudInit = "touch /etc/cloud/cloud-init.disabled"

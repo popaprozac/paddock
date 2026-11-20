@@ -13,17 +13,30 @@ enum ImageSteps {
     /// Boots `name` headless with `share` mounted, runs `steps` in order, then the image check.
     /// Returns the check's problems, or nil if the check couldn't run. Throws at the first step
     /// that fails, after stopping the VM.
+    /// A Linux image is sealed after its steps (see `LinuxSeed.sealScript`), and its share is at
+    /// /mnt/share.
     static func run(name: String, steps: [ImageFile.Step], share: URL?) async throws -> [String]? {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
-        let vm = try HeadlessVM(bundle: bundle, config: try bundle.readConfig(), sharing: share)
-        print("Booting '\(name)' to run \(steps.count) step\(steps.count == 1 ? "" : "s") and check the image")
+        let config = try bundle.readConfig()
+        let vm = try HeadlessVM(bundle: bundle, config: config, sharing: share)
+        print("Booting '\(name)' to run \(steps.count) step\(steps.count == 1 ? "" : "s") and "
+            + (config.isLinux ? "seal the image" : "check the image"))
         try await vm.start()
         do {
             guard let version = try await vm.agentVersion(within: .seconds(180)) else {
                 throw PaddockError("the guest agent in '\(name)' didn't answer within 180 s")
             }
-            guard version.compare(agentVersion, options: .numeric) != .orderedAscending else {
+            // Linux's agent has run steps as root from its first version.
+            guard config.isLinux || version.compare(agentVersion, options: .numeric) != .orderedAscending else {
                 throw PaddockError("'\(name)' has paddock-guestd \(version); steps need \(agentVersion) or later")
+            }
+            if config.isLinux {
+                try await LinuxBuild.setClock(vm)
+                if share != nil {
+                    guard try await vm.runInGuest(LinuxSeed.mountShare, asRoot: true, output: { print("    \($0)") }) == 0 else {
+                        throw PaddockError("can't mount the shared folder at /mnt/share in '\(name)'")
+                    }
+                }
             }
             for (index, step) in steps.enumerated() {
                 print("  step \(index + 1) of \(steps.count): \(step.name)\(step.user == .root ? ", as root" : "")")
@@ -35,7 +48,14 @@ enum ImageSteps {
                     throw PaddockError("step '\(step.name)' failed with exit status \(status)")
                 }
             }
-            print("  checking the image")
+            if config.isLinux {
+                print("  sealing the image")
+                guard try await vm.runInGuest(LinuxSeed.sealScript, asRoot: true, output: { print("    \($0)") }) == 0 else {
+                    throw PaddockError("sealing '\(name)' failed")
+                }
+            } else {
+                print("  checking the image")
+            }
             let problems = await vm.imageProblems(sessionHelper: await vm.hasSessionHelper())
             print("  shutting down")
             _ = try await vm.runInGuest("sync; (sleep 2; shutdown -h now) </dev/null >/dev/null 2>&1 &", asRoot: true) { _ in }

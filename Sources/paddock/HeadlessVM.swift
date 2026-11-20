@@ -355,6 +355,8 @@ final class HeadlessVM: NSObject {
     /// settings and, with `sessionHelper`, whether paddock-session has Accessibility. Nil if the
     /// check couldn't run. serve warns with it; build reports it.
     func imageProblems(sessionHelper: Bool) async -> [String]? {
+        // The checks are macOS's settings: a Linux image's setup is paddock's own build.
+        guard !config.isLinux else { return [] }
         let output = OSAllocatedUnfairLock(initialState: [String]())
         guard (try? await runInGuest(SourceCheck.command) { line in output.withLock { $0.append(line) } }) == 0 else {
             return nil

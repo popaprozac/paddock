@@ -53,6 +53,21 @@ import Yams
         #expect(check.terminationStatus == 0)
     }
 
+    @Test func sealingEmptiesTheMachineIDAndStopsAtAFailure() throws {
+        let lines = LinuxSeed.sealScript.split(separator: "\n")
+        #expect(lines.first == "set -e")
+        #expect(lines.contains("truncate -s 0 /etc/machine-id"))
+        #expect(LinuxSeed.mountShare.contains("mount -t virtiofs -o ro paddock-share /mnt/share"))
+        for script in [LinuxSeed.sealScript, LinuxSeed.mountShare, LinuxSeed.disableCloudInit] {
+            let check = Process()
+            check.executableURL = URL(fileURLWithPath: "/bin/sh")
+            check.arguments = ["-n", "-c", script]
+            try check.run()
+            check.waitUntilExit()
+            #expect(check.terminationStatus == 0, "\(script)")
+        }
+    }
+
     @Test func makesAnISOLabeledForCloudInit() throws {
         let tmp = try TemporaryDirectory()
         let agent = tmp.url.appendingPathComponent("linux")

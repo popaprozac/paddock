@@ -1,8 +1,9 @@
 import Foundation
 import PaddockCore
 
-/// `paddock build <file>` for a Linux image: get the image, make the VM from its disk, and boot it
-/// once with the cloud-init seed, which creates the account and sets the image up.
+/// `paddock build <file>` for a Linux image: get the image, make the VM from its disk, boot it
+/// once with the cloud-init seed, which creates the account and sets the image up, then once more
+/// without it to run the steps and seal the image.
 @MainActor
 enum LinuxBuild {
     static let defaultMemoryGB: UInt64 = 4
@@ -28,11 +29,14 @@ enum LinuxBuild {
                                   fullName: image.account.fullName ?? image.account.name, name: plan.name)
             try await firstBoot(bundle, seed: seed)
             try FileManager.default.removeItem(at: seed)
+            // Without the seed: the image must come up on its own, as every clone does.
+            _ = try await ImageSteps.run(name: plan.name, steps: image.steps, share: plan.share)
         } catch {
             print("The build stopped; '\(plan.name)' is left at \(bundle.url.path) to look at. Delete it to build again.")
             throw error
         }
         print("Built '\(plan.name)' from \(plan.file.lastPathComponent) in \(DurationFormat.short(ContinuousClock.now - started)).")
+        print("  Ready to serve: paddock serve \(plan.name)")
     }
 
     /// The image file's Linux disk: the one it names, or Debian's or a URL's, checked and cached.
