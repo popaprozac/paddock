@@ -1,7 +1,8 @@
 # Golden images
 
 A golden image is the VM every clone starts from. Make one from an image file with
-`paddock build`, with no one at the keyboard, or set one up by hand.
+`paddock build`, with no one at the keyboard, or set one up by hand. Linux images are built from
+an image file too (see [Linux images](#linux-images)).
 
 ## Build one from an image file
 
@@ -240,3 +241,74 @@ clones, and reports from each VM like any other host. Install it with a build st
 identity it saves when it enrolls before the image is finished, so that each clone enrolls as a
 host of its own rather than all of them as one. Every hand-out is a new, short-lived host, so have
 the server expire hosts that stop reporting.
+
+## Linux images
+
+`paddock build` makes a Linux golden image from an image file as well, with no password to type
+and on any macOS paddock runs on. It builds Debian's genericcloud arm64 images, tested with
+Debian 13. A Linux VM has no screen: commands, files and `serve`'s warm slots work, and
+screenshots, input, `show` and `view` refuse it (see [VM bundle format](commands.md#vm-bundle-format)).
+`paddock init debian.yaml --template debian` writes a file to start from:
+
+```yaml
+# debian.yaml
+from: { debian: 13 }                 # or { disk: <path> } or { url: <https URL>, sha512: <hash> }
+vm: { cpus: 4, memory: 4, disk: 16 } # in GB; these are the defaults
+account: { name: paddock }           # full-name is optional
+share: installers                    # optional: a host folder, read-only in the guest at /mnt/share
+steps:
+  - name: Install git, which paddock task needs
+    as: root
+    run: apt-get update && apt-get install -y git
+```
+
+| `from` | The image | Pinned |
+| --- | --- | --- |
+| `{ debian: 13 }` | Debian 13's latest genericcloud arm64 build, from cloud.debian.org | No: Debian publishes new builds |
+| `{ disk: <path> }` | A file you keep: a `.tar.xz` holding `disk.raw`, as Debian publishes them, or a raw disk | Yes |
+| `{ url: <https URL>, sha256: <hash> }`, or `sha512:` | A file to download, a `.tar.xz` or `.raw` as its URL's name says | Yes, by its hash |
+
+- For `debian`, each build fetches Debian's `SHA512SUMS` over HTTPS and checks the image against
+  it, downloading again only when the cached one no longer matches. Debian also signs
+  `SHA512SUMS` with GPG, and paddock doesn't check that signature, so the trust is Debian's HTTPS
+  server, as it is Apple's for a macOS restore image.
+- For `url`, the hash is required: a download that doesn't match it is deleted, and the build
+  stops. Images are kept in `~/.paddock/cache/linux`, by name for Debian and by hash for a URL.
+- `license` and `grants` are for macOS images, and a Linux file with either fails the check. The
+  account needs a Linux account name that the image doesn't already have, such as `root` or
+  `sshd`. `vm.disk` is at least 4 GB.
+
+`build` then:
+
+1. Makes the VM from the image's disk, grown to `vm.disk`. Debian 13's disk takes about 2.8 GB of
+   the golden image's sparse disk.
+2. Boots it once with a cloud-init seed, a small disk attached read-only, which creates the
+   account, sets the image up as below and installs the guest agent from the `guest` folder's
+   `linux` folder. paddock sets the guest's clock from this Mac's, since the image boots at 1970
+   until its network time arrives, waits for cloud-init to finish, turns cloud-init off for good
+   and has the guest shut down.
+3. Boots it again without the seed, so the image must come up on its own, as every clone does.
+   It sets the clock, mounts the share and runs each step in a login bash with
+   `set -e -o pipefail`, as the account or, with `as: root`, as root.
+4. Seals the image: it empties `/etc/machine-id`, so each of `serve`'s slots makes its own at its
+   first boot, deletes cloud-init's state and logs and the ssh host keys, cleans apt's cache and
+   shuts down.
+
+A build that stops leaves the VM in place to look at; delete it to build again. If the guest
+agent never answers on the first boot, the build prints the end of the guest's console, which
+the VM keeps in `console.log` in its folder.
+
+Every clone then has:
+
+- The account, with uid 1000 and no password, and sudo that needs none. `exec` runs commands as
+  it, so whatever a workload runs can become root in its own VM, which is wiped when it is
+  released.
+- A network on any Ethernet interface, matched by name since every clone has a new MAC address,
+  with DHCP identifying the guest by its MAC so that paddock finds its lease. Its time comes from
+  time.apple.com, which paddock-net answers on the userspace network.
+- ssh masked: nothing reaches the guest over the network.
+- The kernel and systemd writing to the guest's console, and the console logging the account in
+  without a password. Only paddock on this Mac reaches the console.
+
+Setup assumes Debian's system: netplan with systemd-networkd, the `ssh` unit and apt. Images of
+other distributions, and other disk formats such as qcow2, aren't supported.

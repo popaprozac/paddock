@@ -61,8 +61,9 @@ System Settings > Privacy & Security > Accessibility.
 
 `paddock-guestd` for Linux guests, from `paddock-guestd-linux/`, speaks the same protocol on the
 same port, and closes connections that don't come from CID 2 in the same way. `scripts/build.sh`
-stages it in the `guest` folder's `linux` folder with `paddock-guestd.service`. Install the binary
-at `/usr/local/libexec/paddock-guestd` and the unit in `/etc/systemd/system`, then enable it:
+stages it in the `guest` folder's `linux` folder with `paddock-guestd.service`, and `paddock build`
+installs both from its cloud-init seed (see [Linux images](golden-images.md#linux-images)): the
+binary at `/usr/local/libexec/paddock-guestd` and the unit in `/etc/systemd/system`, enabled.
 systemd runs the agent as root and starts it again if it exits. It logs to the journal. Its
 `health` answers `{"version":"0.1.0"}`. Where it differs from the macOS agent:
 
