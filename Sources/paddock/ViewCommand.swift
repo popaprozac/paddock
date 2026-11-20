@@ -127,7 +127,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
     private let lock = NSLock()
     private var arrived: [CMSampleBuffer] = []  // decoded, waiting for the next screen refresh
     private var counts = (frames: 0, bytes: 0, freezes: 0, skipped: 0, displayFailures: 0)
-    private var lastArrival: Double?
+    private var freezes = FreezeCount()
 
     init(vm: String, link: ViewLink, stats: Bool) {
         self.vm = vm
@@ -170,8 +170,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
             send(ViewMessage.Up(ack: frame.number, at: Self.now))  // room for one more frame
             let now = Self.now
             lock.withLock {
-                if let lastArrival, now - lastArrival >= 0.15 { counts.freezes += 1 }
-                lastArrival = now
+                if freezes.arrived(at: now) { counts.freezes += 1 }
                 counts.frames += 1
                 counts.bytes += line.utf8.count
             }

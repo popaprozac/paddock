@@ -108,6 +108,23 @@ import Testing
         }
     }
 
+    @Test func aGapWhileFramesFlowIsAFreeze() {
+        var freezes = FreezeCount()
+        let flowing = (0..<30).map { freezes.arrived(at: Double($0) / 30) }
+        let short = freezes.arrived(at: 1.1)  // 133 ms after the last: under the gap
+        let long = freezes.arrived(at: 1.3)   // 200 ms
+        #expect(!flowing.contains(true) && !short && long)
+    }
+
+    /// A still screen sends no frames, so typing on one is a frame every few hundred ms.
+    @Test func gapsOnAStillScreenArentFreezes() {
+        var freezes = FreezeCount()
+        var gaps = (0..<20).map { freezes.arrived(at: Double($0) * 0.3) }
+        gaps += (0..<5).map { freezes.arrived(at: 10 + Double($0) * 0.12) }  // a quick burst of typing
+        gaps.append(freezes.arrived(at: 12))
+        #expect(!gaps.contains(true))
+    }
+
     @Test func aLargeFrameGoesInPartsAndLinesStayUnderTheLinkCap() {
         let data = Data(repeating: 7, count: ViewMessage.partSize * 2 + 10)
         let parts = ViewMessage.parts(of: data, number: 4, key: true)

@@ -107,3 +107,25 @@ public struct InputTimeline: Sendable {
         return at
     }
 }
+
+/// Which gaps between a view's frames are freezes: 150 ms or more while frames were flowing, 10
+/// or more in the second before the gap. A still screen sends no frames, so a gap after a quiet
+/// second is the screen holding still, not the link stalling.
+/// shortcut: a gap after motion stops, until the screen next changes, still counts once; look at
+/// the second after the gap too if that skews the numbers.
+public struct FreezeCount: Sendable {
+    private var recent: [Double] = []  // arrivals, the last within a second of the latest
+
+    public static let gap = 0.15
+    public static let flowing = 10
+
+    public init() {}
+
+    /// Notes a frame arriving `now`, in seconds; returns whether the gap before it was a freeze.
+    public mutating func arrived(at now: Double) -> Bool {
+        defer { recent.append(now) }
+        guard let last = recent.last else { return false }
+        recent.removeAll { $0 <= last - 1 }
+        return now - last >= Self.gap && recent.count >= Self.flowing
+    }
+}

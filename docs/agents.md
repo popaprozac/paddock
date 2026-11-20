@@ -100,8 +100,10 @@ the view.
   with those gaps, never with key presses closer than 3 ms (the guest drops faster ones). Command
   shortcuts go to the VM. Your Mac's own key repeat is dropped: the guest repeats a held key
   itself. The pointer you see is your Mac's own, since the guest's frames don't include it.
-- `--stats` prints frames a second, bitrate, freezes (gaps of 150 ms or more between frames, which
-  a still screen also has) and display failures every 5 s.
+- `--stats` prints frames a second, bitrate, freezes and display failures every 5 s. A freeze is a
+  gap of 150 ms or more between frames while they were flowing, 10 or more in the second before
+  it; a still screen sends no frames, so its gaps aren't freezes. A gap after motion stops, until
+  the screen next changes, still counts as one.
 
 In testing, through the control plane on home Wi-Fi, a full-screen animation ran at 27 frames a
 second on 2.2 to 2.6 Mbit/s with no freezes. Over a hotspot with round trips of 0.2 to 1 s, typing
