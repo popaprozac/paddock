@@ -60,6 +60,18 @@ public enum KeyInput {
         "opt": .option, "option": .option, "alt": .option, "shift": .shift,
     ]
 
+    /// The modifier a Mac's modifier key holds, left or right: what a view's key events say
+    /// when a modifier goes down or up. Nil for any other key.
+    public static func modifier(forKeyCode code: Int) -> KeyStroke.Modifier? {
+        switch code {
+        case kVK_Shift, kVK_RightShift: .shift
+        case kVK_Control, kVK_RightControl: .control
+        case kVK_Option, kVK_RightOption: .option
+        case kVK_Command, kVK_RightCommand: .command
+        default: nil
+        }
+    }
+
     /// Keys that type no character, by name.
     public static let namedKeys: [String: Int] = [
         "return": kVK_Return, "enter": kVK_Return, "tab": kVK_Tab, "space": kVK_Space,

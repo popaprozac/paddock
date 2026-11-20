@@ -1,0 +1,109 @@
+import Foundation
+
+/// How many of a view's frames may be in flight, and the bitrate and frame rate the link takes,
+/// from the round trips of the frames the viewer acknowledges. From the remote-viewing spike: a
+/// window shorter than a round trip freezes once a round trip, and judging the link by its
+/// fastest round trip pins a link that swings at the floor.
+public struct ViewFlow: Sendable {
+    public let maxKbps: Int
+    public let maxFPS: Int
+    public private(set) var kbps: Int
+    public private(set) var fps: Int
+    private var sentAt: [Int: Double] = [:]  // frames not yet acknowledged, and when they went (seconds)
+    private var thisSecond: [Double] = []    // round trips since the last adapt, in ms
+    private var seconds: [Double] = []       // each second's median, the last 30
+    private var slowSeconds = 0
+
+    public static let minKbps = 300
+    public static let minFPS = 10
+
+    public init(maxKbps: Int, maxFPS: Int) {
+        self.maxKbps = maxKbps
+        self.maxFPS = maxFPS
+        kbps = maxKbps
+        fps = maxFPS
+    }
+
+    public var inFlight: Int { sentAt.count }
+
+    /// The link's usual round trip in ms: a low percentile of recent seconds, not the lowest,
+    /// since a link that swings has the odd freak second far below what it usually does.
+    public var usualRoundTrip: Double? {
+        guard !seconds.isEmpty else { return nil }
+        return seconds.sorted()[seconds.count / 5]
+    }
+
+    /// Frames that may be in flight: enough for a round trip and a half at the frame rate, so
+    /// serve never sits waiting for acknowledgments that are on their way.
+    public var window: Int {
+        let roundTrip = (usualRoundTrip ?? 100) / 1000
+        return min(32, max(4, Int((Double(fps) * roundTrip * 1.5).rounded(.up)) + 2))
+    }
+
+    public var canSend: Bool { inFlight < window }
+
+    public mutating func sent(_ frame: Int, at time: Double) {
+        sentAt[frame] = time
+    }
+
+    public mutating func acknowledged(_ frame: Int, at time: Double) {
+        guard let sent = sentAt.removeValue(forKey: frame) else { return }
+        thisSecond.append((time - sent) * 1000)
+    }
+
+    /// Call once a second: cuts bitrate and frame rate after two slow seconds in a row (the
+    /// round trip well past the usual: the link is queueing), and creeps back up while it stays
+    /// near the usual. Returns whether either changed.
+    public mutating func adapt() -> Bool {
+        guard !thisSecond.isEmpty else { return false }
+        let median = thisSecond.sorted()[thisSecond.count / 2]
+        thisSecond = []
+        seconds = Array((seconds + [median]).suffix(30))
+        guard let usual = usualRoundTrip else { return false }
+        let before = (kbps, fps)
+        // Not before 5 seconds: until then the percentile is just the lowest second.
+        slowSeconds = seconds.count >= 5 && median > usual + max(100, usual / 2) ? slowSeconds + 1 : 0
+        if slowSeconds >= 2 {
+            kbps = max(Self.minKbps, kbps * 3 / 4)
+            fps = max(Self.minFPS, fps * 4 / 5)
+        } else if median < usual + max(40, usual / 5) {
+            kbps = min(maxKbps, kbps * 11 / 10 + 1)
+            fps = min(maxFPS, fps + 2)
+        }
+        return before != (kbps, fps)
+    }
+}
+
+/// When to apply each of a viewer's input events: with the gaps the viewer had between them, not
+/// the bunching a stalled link adds. Bunched, a key could stay down long enough for the guest to
+/// repeat it, or go down and up too fast for the guest, which drops a key whose press and release
+/// come within about 2 ms. Times are seconds; the viewer's clock and this Mac's never compare
+/// directly, only the gaps.
+public struct InputTimeline: Sendable {
+    private var lag: Double?  // how far this Mac's clock runs ahead of the viewer's stamps, latency included
+    private var lastAt = -Double.infinity
+    private var lastKeyEdge = -Double.infinity
+
+    /// The least time between key edges the guest takes.
+    public static let keyGap = 0.003
+    /// How fast added lag drains once the link catches up again, per event.
+    static let drain = 0.01
+
+    public init() {}
+
+    /// When to apply an event stamped `stamp` by the viewer that arrived `now`: never before
+    /// `now`, never before the event ahead of it, and for a key edge, `keyGap` after the last.
+    public mutating func time(for stamp: Double, arrivedAt now: Double, keyEdge: Bool) -> Double {
+        // A late arrival (a stall) raises the lag, so what came bunched behind it keeps its gaps;
+        // otherwise the lag drains back toward what the link has now.
+        let lag = max(now - stamp, (self.lag ?? (now - stamp)) - Self.drain)
+        self.lag = lag
+        var at = max(stamp + lag, now, lastAt)
+        if keyEdge {
+            at = max(at, lastKeyEdge + Self.keyGap)
+            lastKeyEdge = at
+        }
+        lastAt = at
+        return at
+    }
+}

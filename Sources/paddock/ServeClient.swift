@@ -296,7 +296,8 @@ struct Show: ParsableCommand {
             Run it on the Mac whose paddock serve runs the VM. The window takes your mouse and \
             keyboard, and the VM keeps its resolution. Agents can still take screenshots, read the \
             accessibility tree and run commands, but their clicks, typing and scrolling are refused \
-            until you hand the VM back: with 'paddock hide', by closing the window, or by quitting paddock from the Dock, which leaves serve running.
+            until you hand the VM back: with 'paddock hide', by closing the window, or by quitting paddock from the Dock, which leaves serve running. \
+            From another Mac, use paddock view.
             """)
 
     @Argument(help: "VM that 'paddock acquire' printed.")

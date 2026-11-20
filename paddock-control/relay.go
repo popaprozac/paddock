@@ -11,8 +11,8 @@ import (
 )
 
 // relayedOperations is what a client may ask of a VM it acquired, through the pool: serve's VM
-// operations, task's bundles carried as data both ways.
-var relayedOperations = map[string]bool{"release": true, "exec": true, "axtree": true, "input": true, "screenshot": true, "task": true}
+// operations, task's bundles carried as data both ways, and a view's input and frames.
+var relayedOperations = map[string]bool{"release": true, "exec": true, "axtree": true, "input": true, "screenshot": true, "task": true, "view": true}
 
 // maxTransfer is the most one request may send to a host, such as a task's bundle, so one can't
 // fill a Mac's disk.
@@ -441,6 +441,62 @@ func (s *server) relayTask(ctx context.Context, client string, l *clientLink, re
 		return
 	}
 	pass(ctx, l, request.ID, f.answers, func(message) {})
+}
+
+// relayStream runs a request whose client keeps sending while the host answers, such as a view of
+// a VM: the client's uploads go to the host as they come, the host's answers come back as they
+// come, and a client that leaves has the request cancelled on the Mac, which stops it.
+func (s *server) relayStream(ctx context.Context, client string, l *clientLink, request message, uploads <-chan message) {
+	defer l.dropUpload(request.ID)
+	fail := func(err error) {
+		_ = l.write(ctx, message{Type: "response", ID: request.ID, Error: err.Error(), Done: true})
+	}
+	asked, h, err := s.ownedRequest(client, request)
+	if err != nil {
+		fail(err)
+		return
+	}
+	s.audit.record(auditEvent{Event: "request", Client: client, Host: h.Host, VM: h.VM, Op: request.Op})
+	f, err := s.send(ctx, h.Host, asked.line())
+	if err != nil {
+		fail(fmt.Errorf("the Mac running '%s' isn't reachable: %v", h.VM, err))
+		return
+	}
+	defer f.cancel()
+	finished := make(chan struct{})
+	defer close(finished)
+	go func() {
+		for {
+			select {
+			case piece, open := <-uploads:
+				if !open { // closed after the client's last piece
+					return
+				}
+				if err := f.upload(ctx, piece.Data, piece.Done); err != nil {
+					return
+				}
+			case <-finished:
+				return
+			}
+		}
+	}()
+	// Not pass: a quiet view sends nothing for a while, so this also watches for the client leaving.
+	for {
+		select {
+		case answer, open := <-f.answers:
+			if !open {
+				return
+			}
+			reply := message{Type: "response", ID: request.ID, Line: answer.Line, Data: answer.Data, Error: answer.Error, Done: answer.Done}
+			if err := l.write(ctx, reply); err == nil {
+				continue
+			}
+		case <-ctx.Done():
+		}
+		// The client left with the request still running: tell the Mac to stop it.
+		_ = f.link.write(message{Type: "cancel", ID: f.id})
+		return
+	}
 }
 
 // releaseAll hands back every VM a client holds, as when it's removed or logs out, so a removed

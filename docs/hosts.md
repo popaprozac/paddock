@@ -13,7 +13,7 @@ kind of host comes back after a restart.
   person, through Screen Sharing, or by automatic login. Two things need one:
   - Keeping slots warm. Each slot restores its VM from saved state, and macOS encrypts saved state
     with a key it keeps in the user's keychain, which only a login session can reach.
-  - Screenshots, input and `paddock show`, which need the window server.
+  - Screenshots, input, `paddock show` and `paddock view`, which need the window server.
 - So `serve` doesn't run as a LaunchDaemon. A daemon starts before anyone logs in, but its slots
   can't save state: in testing on macOS 27, Apple's VM service crashed ("Failed to talk to secd")
   whenever the keychain didn't answer. That was every time before login, and sometimes with the user

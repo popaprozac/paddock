@@ -146,6 +146,13 @@ final class VMScreen: NSObject, NSWindowDelegate {
 
     /// The latest frame, copied, or nil until the first frame arrives.
     func capture() throws -> CGImage? {
+        guard let surface = try frameSurface() else { return nil }
+        return try FrameImage.image(from: surface)
+    }
+
+    /// The guest's framebuffer itself, not a copy, or nil until the first frame arrives: what a
+    /// view's video encoder reads.
+    func frameSurface() throws -> IOSurfaceRef? {
         guard let framebuffer = view.subviews.first(where: { String(describing: type(of: $0)) == "_VZFramebufferView" }) else {
             throw PaddockError("VZVirtualMachineView has no framebuffer view on this macOS, so paddock can't read VM screens")
         }
@@ -155,8 +162,56 @@ final class VMScreen: NSObject, NSWindowDelegate {
         guard CFGetTypeID(contents as CFTypeRef) == IOSurfaceGetTypeID() else {
             throw PaddockError("the VM's framebuffer isn't an IOSurface on this macOS, so paddock can't read VM screens")
         }
-        return try FrameImage.image(from: contents as! IOSurfaceRef)
+        return (contents as! IOSurfaceRef)
     }
+
+    /// The guest's screen in pixels.
+    var pixelSize: (width: Int, height: Int) { (Int(size.width), Int(size.height)) }
+
+    /// A view's pointer: where it is in the guest's pixels and which buttons are down. Moves,
+    /// presses, drags and releases follow from the change.
+    func pointer(x: Int, y: Int, left: Bool, right: Bool) {
+        let point = NSPoint(x: Double(min(max(x, 0), Int(size.width) - 1)) + 0.5,
+                            y: size.height - Double(min(max(y, 0), Int(size.height) - 1)) - 0.5)
+        if left != pointerLeft {
+            send(left ? .leftMouseDown : .leftMouseUp, at: point, clickCount: 1)
+        }
+        if right != pointerRight {
+            send(right ? .rightMouseDown : .rightMouseUp, at: point, clickCount: 1)
+        }
+        if left == pointerLeft, right == pointerRight {
+            send(left ? .leftMouseDragged : right ? .rightMouseDragged : .mouseMoved, at: point, clickCount: 0)
+        }
+        pointerLeft = left
+        pointerRight = right
+    }
+
+    /// A view's key going down or up, by Mac virtual key code; a modifier key changes the held
+    /// modifiers, which every later key carries.
+    func key(code: Int, down: Bool) {
+        if let modifier = KeyInput.modifier(forKeyCode: code) {
+            if down { heldFlags.insert(Self.flag(modifier)) } else { heldFlags.remove(Self.flag(modifier)) }
+            sendFlags(Self.keyCode(modifier), heldFlags)
+            return
+        }
+        guard let event = NSEvent.keyEvent(
+            with: down ? .keyDown : .keyUp, location: .zero, modifierFlags: heldFlags, timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+            isARepeat: false, keyCode: UInt16(code)) else { return }
+        down ? view.keyDown(with: event) : view.keyUp(with: event)
+    }
+
+    /// Lets go of everything a view held, as when it ends with a button or key down.
+    func releaseView() {
+        pointer(x: Int(size.width) / 2, y: Int(size.height) / 2, left: false, right: false)
+        for modifier in KeyStroke.Modifier.allCases where heldFlags.contains(Self.flag(modifier)) {
+            heldFlags.remove(Self.flag(modifier))
+            sendFlags(Self.keyCode(modifier), heldFlags)
+        }
+    }
+
+    private var pointerLeft = false, pointerRight = false
+    private var heldFlags: NSEvent.ModifierFlags = []
 
     enum MouseButton: String {
         case left, right
@@ -239,7 +294,9 @@ final class VMScreen: NSObject, NSWindowDelegate {
         case .mouseMoved: view.mouseMoved(with: event)
         case .leftMouseDown: view.mouseDown(with: event)
         case .leftMouseUp: view.mouseUp(with: event)
+        case .leftMouseDragged: view.mouseDragged(with: event)
         case .rightMouseDown: view.rightMouseDown(with: event)
+        case .rightMouseDragged: view.rightMouseDragged(with: event)
         default: view.rightMouseUp(with: event)
         }
     }
@@ -248,8 +305,8 @@ final class VMScreen: NSObject, NSWindowDelegate {
         guard let event = NSEvent.mouseEvent(
             with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clickCount,
-            pressure: type == .leftMouseDown || type == .rightMouseDown ? 1 : 0) else { return nil }
-        guard type == .rightMouseDown || type == .rightMouseUp, let cgEvent = event.cgEvent else { return event }
+            pressure: [.leftMouseDown, .rightMouseDown, .leftMouseDragged, .rightMouseDragged].contains(type) ? 1 : 0) else { return nil }
+        guard [.rightMouseDown, .rightMouseUp, .rightMouseDragged].contains(type), let cgEvent = event.cgEvent else { return event }
         // AppKit gives every mouse event it makes button 0, the left one, and VZ goes by the button.
         cgEvent.setIntegerValueField(.mouseEventButtonNumber, value: Int64(CGMouseButton.right.rawValue))
         return NSEvent(cgEvent: cgEvent)

@@ -44,10 +44,12 @@ a laptop can use the LAN name at home and the MagicDNS name away.
 Logged in, `acquire` picks the online Mac serving the image with the most free warm slots; with
 none free, it waits its turn, first come first served, and says so. `--image` names the golden
 image when the pool serves more than one. `exec`, `task`, `screenshot`, `axtree`, the input
-commands, `release` and `paddock mcp` then reach that VM through the control plane, whichever Mac
-it runs on. Screenshots and task bundles travel in pieces of 256 KB; a bundle can be up to 1 GB.
-If a client leaves before its bundle is all up, or sends more than 1 GB, the control plane tells
-the Mac to drop what it has so far.
+commands, `view`, `release` and `paddock mcp` then reach that VM through the control plane,
+whichever Mac it runs on. Screenshots and task bundles travel in pieces of 256 KB; a bundle can be
+up to 1 GB. If a client leaves before its bundle is all up, or sends more than 1 GB, the control
+plane tells the Mac to drop what it has so far. A view runs both ways for as long as its window is
+open: frames come down in lines of up to 192 KB of video, and the viewer's acknowledgments and input
+go up as they happen. If the viewer's link closes, the control plane tells the Mac to end the view.
 A Mac can serve the pool and be logged in to it at once: its host link and its login are kept
 apart.
 

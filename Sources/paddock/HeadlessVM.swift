@@ -157,6 +157,14 @@ final class HeadlessVM: NSObject {
         screen?.isShown ?? false
     }
 
+    /// Whether a person is viewing and driving the VM with `paddock view`, from this Mac or another.
+    var isViewed = false
+
+    /// The screen a view reads and drives, attaching the display first if nothing has.
+    func viewScreen() throws -> VMScreen {
+        try drivenScreen()
+    }
+
     private func drivenScreen() throws -> VMScreen {
         if let failure { throw failure }
         try attachScreen()
