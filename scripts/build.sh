@@ -58,6 +58,11 @@ rm -rf "$guest"
 mkdir -p "$guest"
 cp "$(dirname "$bin")/paddock-guestd" "$(dirname "$bin")/paddock-session" \
   "$root/guest/paddock.guestd.plist" "$root/guest/paddock.session.plist" "$root/guest/install.sh" "$guest/"
+# The Linux guests' agent is Go as well: static, for arm64 Linux, with its systemd unit.
+mkdir -p "$guest/linux"
+(cd "$root/paddock-guestd-linux" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+  go build -trimpath -ldflags='-s -w' -o "$guest/linux/paddock-guestd" .) >&2
+cp "$root/paddock-guestd-linux/paddock-guestd.service" "$guest/linux/"
 echo "guest agent files: $guest" >&2
 
 echo "$bin"

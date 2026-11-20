@@ -56,3 +56,22 @@ points from the top left of the display, and its children. Text is cut at 500 ch
 tree stops at 5,000 elements and 50 levels. Reading other apps needs the Accessibility
 permission, which macOS grants per binary: `axtree` fails until paddock-session is allowed in
 System Settings > Privacy & Security > Accessibility.
+
+## Linux guests
+
+`paddock-guestd` for Linux guests, from `paddock-guestd-linux/`, speaks the same protocol on the
+same port, and closes connections that don't come from CID 2 in the same way. `scripts/build.sh`
+stages it in the `guest` folder's `linux` folder with `paddock-guestd.service`. Install the binary
+at `/usr/local/libexec/paddock-guestd` and the unit in `/etc/systemd/system`, then enable it:
+systemd runs the agent as root and starts it again if it exits. It logs to the journal. Its
+`health` answers `{"version":"0.1.0"}`. Where it differs from the macOS agent:
+
+- `run` uses a login bash (`bash -l`) as the account with uid 1000, in its home folder, with
+  stdin closed, and with `"as":"root"` as root in `/root`. A command that a signal ends exits with
+  128 plus the signal's number, as a shell reports it.
+- `state` answers `{"output":"network"}` once an interface other than loopback has an IPv4
+  address and the guest an IPv4 DNS server, from systemd-resolved's list of servers when it runs,
+  else from `/etc/resolv.conf`. There is no session helper.
+- `{"op":"clock","time":N}`, with N in nanoseconds since 1970, sets the guest's clock and answers
+  `{"exit":0}`.
+- It doesn't copy per-host preferences, which are macOS's.
