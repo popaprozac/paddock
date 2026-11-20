@@ -28,10 +28,11 @@ struct Login: AsyncParsableCommand {
             throw PaddockError("that's a join token, for adding a Mac with 'paddock serve --join'; to log in, use a token "
                 + "from 'paddock-control login-token'")
         }
-        let home = PaddockHome.fromEnvironment()
+        let folder = ControlIdentity.folder(in: PaddockHome.fromEnvironment(), for: .client)
+        try ControlIdentity.checkCanSave(to: folder)
         let identity = try await ControlEnrollment.join(url, token: parsed, as: .client,
                                                         name: "\(NSUserName()) on \(ControlClient.computerName)")
-        try identity.save(to: ControlIdentity.folder(in: home, for: .client))
+        try identity.save(to: folder)
         let hosts = try await Pool.hosts(identity)
         let online = hosts.filter(\.online).count
         print("Logged in to the control plane at \(url.absoluteString) as \(identity.id); "

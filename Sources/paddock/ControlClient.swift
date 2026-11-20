@@ -107,6 +107,7 @@ enum ControlEnrollment {
                 throw PaddockError("that's a login token, for 'paddock login'; a Mac joins with a token from "
                     + "'paddock-control join-token'")
             }
+            try ControlIdentity.checkCanSave(to: folder)
             let joined = try await join(url, token: parsed, as: .host, name: ControlClient.computerName)
             try joined.save(to: folder)
             print("Joined the control plane at \(url.absoluteString) as \(joined.id)")
