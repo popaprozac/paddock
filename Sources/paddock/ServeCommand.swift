@@ -109,6 +109,7 @@ final class Slot {
 final class WarmPool {
     private static let timeout: Duration = .seconds(300)
     private static let sessionTimeout: Duration = .seconds(120)
+    private static let maxWatchers = 2  // per VM, with paddock view --watch: each has its own encoder session
 
     private let home = PaddockHome.fromEnvironment()
     private let slots: [Slot]
@@ -384,7 +385,7 @@ final class WarmPool {
         case "hide":
             hide(request?.vm, responder)
         case "view":
-            view(request?.vm, responder)
+            view(request?.vm, watch: request?.watch == true, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -595,16 +596,23 @@ final class WarmPool {
     /// Streams a VM this serve handed out to a person's viewer, here or on another Mac through the
     /// pool, and takes their pointer and keyboard back (see ViewSession). Screenshots, the
     /// accessibility tree and commands go on; input from agents and the CLI waits for the view to close.
-    private func view(_ name: String?, _ responder: Responder) {
+    /// A watch takes no input, so agents keep driving, and goes alongside a show or a view.
+    private func view(_ name: String?, watch: Bool, _ responder: Responder) {
         guard let (slot, vm, current) = handedOut(name) else {
             return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
         }
-        guard !vm.isShown else {
-            return responder.finish(ServeResponse(error: "a person has '\(current.name)' on this Mac's screen; hand it "
-                + "back with paddock hide first").line)
-        }
-        guard !vm.isViewed else {
-            return responder.finish(ServeResponse(error: "someone is already viewing '\(current.name)'").line)
+        if watch {
+            guard vm.watchers < Self.maxWatchers else {
+                return responder.finish(ServeResponse(error: "\(Self.maxWatchers) people are already watching '\(current.name)'").line)
+            }
+        } else {
+            guard !vm.isShown else {
+                return responder.finish(ServeResponse(error: "a person has '\(current.name)' on this Mac's screen; hand it "
+                    + "back with paddock hide first").line)
+            }
+            guard !vm.isViewed else {
+                return responder.finish(ServeResponse(error: "someone is already viewing '\(current.name)'").line)
+            }
         }
         let screen: VMScreen
         do {
@@ -612,14 +620,24 @@ final class WarmPool {
         } catch {
             return responder.finish(ServeResponse(error: error.localizedDescription).line)
         }
-        vm.isViewed = true
-        print("Slot \(slot.number): '\(current.name)' is being viewed; input from agents waits until the view closes")
-        let session = ViewSession(screen: screen, responder: responder, stillHandedOut: { [weak self, weak vm] in
+        if watch {
+            vm.watchers += 1
+            print("Slot \(slot.number): someone is watching '\(current.name)'; input from agents goes on")
+        } else {
+            vm.isViewed = true
+            print("Slot \(slot.number): '\(current.name)' is being viewed; input from agents waits until the view closes")
+        }
+        let session = ViewSession(screen: screen, responder: responder, watch: watch, stillHandedOut: { [weak self, weak vm] in
             guard let self, let vm else { return false }
             return self.handedOut(current.name)?.1 === vm
         }, onEnd: { [weak vm] reason in
-            vm?.isViewed = false
-            print("Slot \(slot.number): the view of '\(current.name)' closed (\(reason)); input from agents goes through")
+            if watch {
+                vm?.watchers -= 1
+                print("Slot \(slot.number): a watch of '\(current.name)' closed (\(reason))")
+            } else {
+                vm?.isViewed = false
+                print("Slot \(slot.number): the view of '\(current.name)' closed (\(reason)); input from agents goes through")
+            }
         })
         session.start()
     }

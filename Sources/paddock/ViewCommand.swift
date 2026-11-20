@@ -15,6 +15,11 @@ struct View: ParsableCommand {
             nothing connects to that Mac or the VM directly. While the window is open, input from \
             agents and the CLI waits, as with paddock show; screenshots, the accessibility tree \
             and commands go on. Command shortcuts go to the VM. Close the window to hand the VM back.
+
+            With --watch, the window only shows the screen, so you can follow an agent at work: your \
+            pointer and keyboard go nowhere and agents keep driving. It plays the frames --buffer ms \
+            late at the pace they were taken, so a slow link plays smoothly instead of freezing and \
+            catching up. Two people can watch a VM at once, while it's viewed or shown too.
             """
     )
 
@@ -23,18 +28,31 @@ struct View: ParsableCommand {
 
     @OptionGroup var target: Target
 
+    @Flag(help: "Only watch: take no input, so agents keep driving the VM.")
+    var watch = false
+
+    @Option(help: ArgumentHelp("With --watch, how far behind to play, so a slow link plays smoothly (default 400).", valueName: "ms"))
+    var buffer: Int?
+
     @Flag(help: "Print what arrives every 5 s: frames a second, bitrate and freezes.")
     var stats = false
 
+    func validate() throws {
+        if buffer != nil && !watch { throw ValidationError("--buffer goes with --watch") }
+        if let buffer, !(0...5000).contains(buffer) { throw ValidationError("--buffer is 0 to 5000 ms") }
+    }
+
     func run() throws {
-        let line = String(decoding: try JSONSerialization.data(withJSONObject: ["op": "view", "vm": vm]), as: UTF8.self)
+        var request: [String: Any] = ["op": "view", "vm": vm]
+        if watch { request["watch"] = true }
+        let line = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
         let link: ViewLink
         if let identity = try PoolRoute.identity(local: target.local) {
             link = PoolViewLink(request: line, identity: identity)
         } else {
             link = try LocalViewLink(request: line, path: PaddockHome.fromEnvironment().socketURL.path)
         }
-        let viewer = Viewer(vm: vm, link: link, stats: stats)
+        let viewer = Viewer(vm: vm, link: link, stats: stats, watchBuffer: watch ? Double(buffer ?? 400) / 1000 : nil)
         let app = NSApplication.shared
         app.delegate = viewer
         app.setActivationPolicy(.regular)
@@ -125,21 +143,26 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
     private let decoder = FrameDecoder()  // the reader thread's
     private var part = Data()             // the reader thread's: a frame's pieces so far
     private let lock = NSLock()
-    private var arrived: [CMSampleBuffer] = []  // decoded, waiting for the next screen refresh
+    private let watching: Bool
+    private var playout: Playout<CMSampleBuffer>  // decoded, waiting till they're due
     private var counts = (frames: 0, bytes: 0, freezes: 0, skipped: 0, displayFailures: 0)
     private var freezes = FreezeCount()
 
-    init(vm: String, link: ViewLink, stats: Bool) {
+    /// `watchBuffer` is how far behind a watch plays, in seconds; nil for a view, which shows each
+    /// frame as it lands: with no delay, a frame is due when it arrives.
+    init(vm: String, link: ViewLink, stats: Bool, watchBuffer: Double?) {
         self.vm = vm
         self.link = link
         self.stats = stats
+        watching = watchBuffer != nil
+        playout = Playout(delay: watchBuffer ?? 0)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         link.start(onLine: { [weak self] line in self?.take(line) }, onEnd: { [weak self] error in
             DispatchQueue.main.async { self?.finish(error.map { "paddock: \($0.localizedDescription)" }) }
         })
-        // At each screen refresh, the frames that arrived since: all decoded, only the newest shown.
+        // At each screen refresh, the frames due since: all decoded, only the newest shown.
         Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.display() }
         if stats {
             Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.report() }
@@ -175,7 +198,8 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
                 counts.bytes += line.utf8.count
             }
             if let sample = decoder.sample(from: data) {
-                lock.withLock { arrived.append(sample) }
+                // An older serve doesn't stamp frames: they play the delay after they land.
+                lock.withLock { playout.add(sample, stamp: frame.at ?? now, arrivedAt: now) }
             }
         }
         if let reason = down.ended ?? down.error {
@@ -193,11 +217,15 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
         let scale = min(1, visible.width * 0.9 / CGFloat(start.width), visible.height * 0.9 / CGFloat(start.height))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: CGFloat(start.width) * scale, height: CGFloat(start.height) * scale),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "\(vm): handed to you; close this window to hand it back"
+        window.title = watching ? "\(vm): watching only; agents keep control"
+            : "\(vm): handed to you; close this window to hand it back"
         window.contentAspectRatio = NSSize(width: start.width, height: start.height)
         window.isReleasedWhenClosed = false
         window.delegate = self
-        let view = ScreenView(guest: (start.width, start.height)) { [weak self] up in self?.send(up) }
+        let view = ScreenView(guest: (start.width, start.height)) { [weak self] up in
+            guard let self, !watching else { return }  // a watch sends no input
+            send(up)
+        }
         window.contentView = view
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -209,7 +237,8 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
 
     private func display() {
         guard let renderer = screenView?.display.sampleBufferRenderer else { return }
-        let batch = lock.withLock { () -> [CMSampleBuffer] in defer { arrived = [] }; return arrived }
+        let now = Self.now
+        let batch = lock.withLock { playout.due(at: now) }
         guard !batch.isEmpty else { return }
         if renderer.status == .failed {
             // A frame didn't decode: start again from a key frame.

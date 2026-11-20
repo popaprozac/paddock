@@ -22,12 +22,14 @@ public enum ViewMessage {
         public var key: Bool
         public var last: Bool
         public var data: Data
+        public var at: Double?  // when serve read it off the screen, by serve's clock, in seconds; nil from an older serve
 
-        public init(number: Int, key: Bool, last: Bool, data: Data) {
+        public init(number: Int, key: Bool, last: Bool, data: Data, at: Double? = nil) {
             self.number = number
             self.key = key
             self.last = last
             self.data = data
+            self.at = at
         }
     }
 
@@ -113,11 +115,11 @@ public enum ViewMessage {
     public static let partSize = 192 * 1024
 
     /// A frame as the lines that carry it.
-    public static func parts(of data: Data, number: Int, key: Bool) -> [Frame] {
-        guard data.count > partSize else { return [Frame(number: number, key: key, last: true, data: data)] }
+    public static func parts(of data: Data, number: Int, key: Bool, at: Double) -> [Frame] {
+        guard data.count > partSize else { return [Frame(number: number, key: key, last: true, data: data, at: at)] }
         return stride(from: 0, to: data.count, by: partSize).map { offset in
             let end = min(offset + partSize, data.count)
-            return Frame(number: number, key: key, last: end == data.count, data: data.subdata(in: offset..<end))
+            return Frame(number: number, key: key, last: end == data.count, data: data.subdata(in: offset..<end), at: at)
         }
     }
 
