@@ -4,7 +4,7 @@
 
 - An Apple silicon Mac running macOS 14 or later.
 - Swift 6 from Xcode or the Command Line Tools.
-- Go, for `paddock-net`. Its dependencies need Go 1.26; with an older Go installed, Go fetches
+- Go, for `paddock-net`, `paddock-control` and the Linux guest agent. `paddock-net`'s dependencies need Go 1.26; with an older Go installed, Go fetches
   1.26 itself on the first build.
 - Disk space for one restore image (about 26 GB for macOS 27) plus the golden VM's disk. The disk
   is sparse, so a fresh install takes about 25 GB of its nominal 80 GB. Delete the cached image
@@ -29,3 +29,9 @@ in `paddock-net/`. Run its checks with `go vet ./...` and `go test ./...` there.
 It builds `paddock-control` there as well: the control plane, which knows every Mac in a pool
 (see [A pool of Macs](control-plane.md)). It is Go too, with its module in
 `paddock-control/`, and builds for Linux with `GOOS=linux go build`. Run its checks the same way.
+
+Last, it builds the guest agent for Linux guests, `paddock-guestd` from `paddock-guestd-linux/`:
+Go with only the standard library, built static for arm64 Linux. It goes in the `guest` folder's
+`linux` folder with its systemd unit (see [Linux guests](guest-agent.md#linux-guests)). Its tests
+run on the Mac with `go test ./...` there, and `GOOS=linux go vet ./...` checks the Linux-only
+vsock code.

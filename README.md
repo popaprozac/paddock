@@ -101,7 +101,7 @@ every Mac in it. See
 | [Setting up Macs](docs/hosts.md) | What `serve` needs from a Mac, running it at login, and how each kind of host comes back after a restart, FileVault and EC2 Mac included |
 | [A pool of Macs](docs/control-plane.md) | The control plane: setup, commands, placement, where it can run, how it keeps the pool safe |
 | [The userspace network](docs/network.md) | A network per VM that reaches only the names its session allows |
-| [The guest agent](docs/guest-agent.md) | `paddock-guestd` and `paddock-session`: their protocols, and how they answer only the host |
+| [The guest agent](docs/guest-agent.md) | `paddock-guestd` and `paddock-session`: their protocols, how they answer only the host, and the agent for Linux guests |
 | [Building and testing](docs/development.md) | The build script, signing, the Go modules, running the tests |
 | [Limits](docs/limits.md) | macOS's limits on VMs, and paddock's own |
 
