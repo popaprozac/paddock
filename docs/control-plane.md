@@ -31,7 +31,7 @@ paddock acquire                             # a warm VM from any Mac in the pool
 | `paddock-control remove-client <ID or name>` | Removes a client: its links close at once, the VMs it holds are released, and it can't connect again unless it logs in with a new token. |
 | `paddock login <url> --token <token>` | On a person's Mac: logs in to the control plane, so this Mac's VM commands use the pool. Logging in again replaces the login. Before it uses the token, it checks it can save the login in `$PADDOCK_HOME/client`, as `serve --join` does for `host`; if it can't, it stops without contacting the control plane, so the token still works. |
 | `paddock logout` | The control plane forgets this client and releases its VMs, and this Mac forgets the login. |
-| `paddock hosts [--json]` | Lists the pool's Macs, as `paddock-control hosts` does, from any logged-in Mac. |
+| `paddock hosts [--json]` | Lists the pool's Macs, as `paddock-control hosts` does, stale marks included, from any logged-in Mac. |
 | `paddock top [--json]` | Shows every Mac in the pool and each slot's VM, who holds it and what it uses, redrawn every 2 s (see [paddock top](commands.md#watching-with-paddock-top)). |
 
 The admin commands reach the running control plane over a Unix socket in its state folder, so

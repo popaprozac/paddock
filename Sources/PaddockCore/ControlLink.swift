@@ -171,6 +171,7 @@ public enum ControlLink {
         public var name: String
         public var enrolled: Date
         public var online: Bool
+        public var stale: Bool?  // offline, and never linked or not for a long time; nil from older control planes
         public var remote: String?
         public var connected: Date?
         public var lastSeen: Date?
