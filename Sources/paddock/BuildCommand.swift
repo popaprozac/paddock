@@ -102,7 +102,7 @@ enum ImageBuild {
             name = image.name ?? self.file.deletingPathExtension().lastPathComponent
             try BundleName.validate(name)
             try Provisioning.validate(account: image.account.name)
-            if let disk = image.vm.disk, disk < 32 {
+            if !image.from.isLinux, let disk = image.vm.disk, disk < 32 {
                 throw PaddockError("\(self.file.lastPathComponent): vm.disk must be at least 32 GB for macOS, not \(disk)")
             }
 
@@ -122,6 +122,9 @@ enum ImageBuild {
                     throw PaddockError("\(self.file.lastPathComponent): from.ipsw: no file at \(url.path)")
                 }
                 ipsw = url.path
+            case .debian, .disk:
+                // shortcut: refused until build makes Linux images, so a Linux file never installs macOS.
+                throw PaddockError("\(self.file.lastPathComponent): paddock build can't make Linux images yet")
             }
             if let path = image.share {
                 let url = resolve(path).standardizedFileURL

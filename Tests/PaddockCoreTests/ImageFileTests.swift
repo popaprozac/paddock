@@ -71,7 +71,23 @@ import Yams
         #expect(failure("from: { macos: 27.2.1 }\naccount: { name: bench }")
             == "from.macos: expected latest, not 27.2.1; to pin a version, give its restore image with ipsw:")
         #expect(failure("from: { macos: latest, ipsw: x.ipsw }\naccount: { name: bench }")
-            == "from: give one of macos: latest or ipsw: <path>")
+            == "from: give one of macos: latest, ipsw: <path>, debian: 13 or disk: <path>")
+    }
+
+    @Test func takesALinuxImageFromDebianOrADiskYouKeep() throws {
+        #expect(try decode("from: { debian: 13 }\naccount: { name: bench }").from == .debian(13))
+        let pinned = try decode("from: { disk: images/debian-13-genericcloud-arm64.tar.xz }\naccount: { name: bench }")
+        #expect(pinned.from == .disk("images/debian-13-genericcloud-arm64.tar.xz") && pinned.from.isLinux)
+        #expect(!(try decode("from: { macos: latest }\naccount: { name: bench }")).from.isLinux)
+        #expect(failure("from: { debian: 12 }\naccount: { name: bench }") == "from.debian: expected 13, not 12")
+        #expect(failure("from: { debian: trixie }\naccount: { name: bench }") == "from.debian: expected a whole number")
+        #expect(failure("from: { debian: 13, macos: latest }\naccount: { name: bench }")
+            == "from: give one of macos: latest, ipsw: <path>, debian: 13 or disk: <path>")
+    }
+
+    @Test func refusesMacOSOnlyKeysInALinuxImage() {
+        #expect(failure("from: { debian: 13 }\naccount: { name: bench }\nlicense: accept") == "license: is for macOS images only")
+        #expect(failure("from: { debian: 13 }\naccount: { name: bench }\ngrants: recovery") == "grants: is for macOS images only")
     }
 
     @Test func saysWhatIsMissingOrMistyped() {
@@ -91,8 +107,10 @@ import Yams
             #expect(!file.acceptsLicense, "\(template)")
             #expect(file.steps.map(\.name) == (template == .ci
                 ? ["Install the Command Line Tools", "Check that git works for the account"] : []), "\(template)")
-            #expect(template.text.contains("# license: accept"), "\(template)")
+            // A Linux image has no license line at all.
+            #expect(template.text.contains("# license: accept") == !file.from.isLinux, "\(template)")
         }
+        #expect(try decode(ImageTemplate.debian.text).from == .debian(13))
         #expect(try decode(ImageTemplate.minimal.text).from == .latest)
         #expect(try decode(ImageTemplate.ci.text).grants == .recovery)
         #expect(try decode(ImageTemplate.managed.text).grants == .managed)
@@ -107,5 +125,10 @@ import Yams
         #expect(file.share == "installers")
         #expect(file.steps.map(\.user) == [.root, .user, .root, .user])
         #expect(file.steps.first?.run.contains("softwareupdate --install") == true)
+
+        let debian = try decode(ImageTemplate.debian.text.replacingOccurrences(of: "# share:", with: "share:")
+            .replacingOccurrences(of: "# steps:", with: "steps:").replacingOccurrences(of: "#   ", with: "  "))
+        #expect(debian.share == "installers")
+        #expect(debian.steps.map(\.user) == [.root, .user])
     }
 }
