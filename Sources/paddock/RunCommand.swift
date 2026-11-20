@@ -20,6 +20,11 @@ struct Run: ParsableCommand {
 
             --recovery starts the VM in macOS Recovery instead, where Terminal (in the Utilities \
             menu) can run csrutil.
+
+            A Linux VM has no screen, so run connects this terminal to its console instead, logged \
+            in as its account. Ctrl-] asks the guest to shut down, and a second Ctrl-] forces it \
+            off; so does shutting down in the guest. --share is then a folder to mount in the \
+            guest with: sudo mount -t virtiofs paddock-share /mnt/share
             """)
 
     @Argument(help: "VM to boot.")
@@ -60,6 +65,12 @@ struct Run: ParsableCommand {
     func run() throws {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
         let sharing = share.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+        if try bundle.readConfig().isLinux {
+            guard provision == nil, !recovery else {
+                throw PaddockError("--provision and --recovery are for macOS VMs, and '\(name)' is a Linux VM")
+            }
+            try MainActor.assumeIsolated { try VMConsole.run(bundle, sharing: sharing) }
+        }
         var provisioning: NSObject?
         if let provision {
             guard #available(macOS 27, *) else { throw PaddockError("--provision needs macOS 27 on this Mac") }
@@ -180,6 +191,134 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
 }
 
 extension VMWindow: @preconcurrency VZVirtualMachineDelegate {
+    func guestDidStop(_ virtualMachine: VZVirtualMachine) {
+        Self.exit(0, "'\(bundle.name)' shut down.")
+    }
+
+    func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: any Error) {
+        Self.exit(1, "'\(bundle.name)' stopped with an error: \(error.localizedDescription)")
+    }
+}
+
+/// A Linux VM on this terminal: its console in place of a window, since a Linux VM has no screen.
+/// The terminal is raw while the VM runs, so Ctrl-C and the like go to the guest; Ctrl-] is
+/// paddock's. The process exits when the guest stops.
+@MainActor
+final class VMConsole: NSObject {
+    private static let detach: UInt8 = 0x1D  // Ctrl-]
+    private static var terminal: termios?  // as it was, put back on exit
+
+    private let bundle: VMBundle
+    private let lock: BundleLock
+    private let machine: VZVirtualMachine
+    private let keys: FileHandle  // what the guest reads as typed on its console
+    private var interrupts: [any DispatchSourceSignal] = []
+    private var shutdownRequested = false
+
+    static func run(_ bundle: VMBundle, sharing: URL?) throws -> Never {
+        let lock = try BundleLock(bundle: bundle)
+        let input = Pipe()
+        let attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: input.fileHandleForReading,
+                                                          fileHandleForWriting: .standardOutput)
+        let configuration = try VMConfiguration.make(bundle: bundle, config: try bundle.readConfig(), sharing: sharing,
+                                                     console: attachment)
+        let console = VMConsole(bundle: bundle, lock: lock, machine: VZVirtualMachine(configuration: configuration),
+                                keys: input.fileHandleForWriting)
+        console.start(sharing: sharing != nil)
+        // The main thread's run loop serves the main queue, where Virtualization calls back and
+        // signals and Ctrl-] arrive. With no source of its own it returns at once, serving nothing,
+        // so it gets a port that never fires.
+        RunLoop.main.add(NSMachPort(), forMode: .default)
+        while true {
+            RunLoop.main.run()
+        }
+    }
+
+    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, keys: FileHandle) {
+        self.bundle = bundle
+        self.lock = lock
+        self.machine = machine
+        self.keys = keys
+        super.init()
+        machine.delegate = self
+    }
+
+    private func start(sharing: Bool) {
+        print("Booting '\(bundle.name)' on this terminal. Ctrl-] asks it to shut down; a second Ctrl-] forces it off.")
+        if sharing {
+            print("Mount the shared folder in the guest with: sudo mount -t virtiofs paddock-share /mnt/share")
+        }
+        var size = winsize()
+        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_row > 0 {
+            // A serial console can't tell the guest how big the window is.
+            print("For this window's size in the guest: stty rows \(size.ws_row) cols \(size.ws_col)")
+        }
+        Self.makeTerminalRaw()
+        interrupts = [SIGINT, SIGTERM, SIGHUP].map { number in onInterrupt(number) { [weak self] in self?.requestShutdown() } }
+        let keys = keys
+        Thread.detachNewThread { [weak self] in
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = read(STDIN_FILENO, &buffer, buffer.count)
+                if count < 0, errno == EAGAIN || errno == EINTR {
+                    // Virtualization makes stdout non-blocking, and on a terminal stdin shares its
+                    // open file, so wait until there's something to read.
+                    var ready = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+                    _ = poll(&ready, 1, -1)
+                    continue
+                }
+                guard count > 0 else { break }
+                var typed = buffer[..<count]
+                while let index = typed.firstIndex(of: Self.detach) {
+                    try? keys.write(contentsOf: Data(typed[..<index]))
+                    typed = typed[(index + 1)...]
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.requestShutdown() } }
+                }
+                try? keys.write(contentsOf: Data(typed))
+            }
+        }
+        machine.start { [bundle] result in
+            if case let .failure(error) = result {
+                Self.exit(1, "Couldn't start '\(bundle.name)': \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// First call asks the guest to shut down cleanly; a second call forces the VM off.
+    private func requestShutdown() {
+        if !shutdownRequested, machine.canRequestStop, (try? machine.requestStop()) != nil {
+            shutdownRequested = true
+            Self.say("asked the guest to shut down; Ctrl-] again forces it off")
+            return
+        }
+        // Forced off, the image skips the shutdown that empties its machine-id.
+        Self.say("forcing '\(bundle.name)' off; it keeps this boot's machine-id until it next shuts down cleanly")
+        machine.stop { _ in Self.exit(0) }
+    }
+
+    private static func makeTerminalRaw() {
+        var settings = termios()
+        guard isatty(STDIN_FILENO) != 0, tcgetattr(STDIN_FILENO, &settings) == 0 else { return }
+        terminal = settings
+        cfmakeraw(&settings)
+        tcsetattr(STDIN_FILENO, TCSANOW, &settings)
+    }
+
+    /// A line of paddock's own while the terminal is raw, which turns no newline into a return.
+    private static func say(_ message: String) {
+        FileHandle.standardError.write(Data("\r\npaddock: \(message)\r\n".utf8))
+    }
+
+    fileprivate static func exit(_ status: Int32, _ message: String? = nil) -> Never {
+        if var settings = terminal {
+            tcsetattr(STDIN_FILENO, TCSANOW, &settings)
+        }
+        if let message { print("\n" + message) }
+        Darwin.exit(status)
+    }
+}
+
+extension VMConsole: @preconcurrency VZVirtualMachineDelegate {
     func guestDidStop(_ virtualMachine: VZVirtualMachine) {
         Self.exit(0, "'\(bundle.name)' shut down.")
     }

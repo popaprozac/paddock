@@ -102,10 +102,28 @@ public enum LinuxSeed {
         printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin %s --noclear --keep-baud 115200,57600,38400,9600 - $TERM\n' \
           "$account" > /etc/systemd/system/serial-getty@hvc0.service.d/paddock.conf
 
+        # Every shutdown empties the machine-id, so booting the image itself, as paddock run does,
+        # doesn't leave one that every clone would then share.
+        cat > /etc/systemd/system/paddock-machine-id.service <<'EOF'
+        [Unit]
+        Description=Empty the machine-id at shutdown, so each clone of this image makes its own
+        Before=shutdown.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/bin/true
+        ExecStop=/usr/bin/truncate -s 0 /etc/machine-id
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+
         # The guest agent, answering only the host, over vsock.
         install -D -m 755 "$seed/paddock-guestd" /usr/local/libexec/paddock-guestd
         install -m 644 "$seed/paddock-guestd.service" /etc/systemd/system/paddock-guestd.service
         systemctl daemon-reload
+        systemctl enable --now paddock-machine-id.service
         systemctl enable --now paddock-guestd.service
         echo "paddock: the image is set up"
         """#
