@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import Yams
 @testable import PaddockCore
@@ -71,7 +72,7 @@ import Yams
         #expect(failure("from: { macos: 27.2.1 }\naccount: { name: bench }")
             == "from.macos: expected latest, not 27.2.1; to pin a version, give its restore image with ipsw:")
         #expect(failure("from: { macos: latest, ipsw: x.ipsw }\naccount: { name: bench }")
-            == "from: give one of macos: latest, ipsw: <path>, debian: 13 or disk: <path>")
+            == "from: give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>")
     }
 
     @Test func takesALinuxImageFromDebianOrADiskYouKeep() throws {
@@ -82,7 +83,27 @@ import Yams
         #expect(failure("from: { debian: 12 }\naccount: { name: bench }") == "from.debian: expected 13, not 12")
         #expect(failure("from: { debian: trixie }\naccount: { name: bench }") == "from.debian: expected a whole number")
         #expect(failure("from: { debian: 13, macos: latest }\naccount: { name: bench }")
-            == "from: give one of macos: latest, ipsw: <path>, debian: 13 or disk: <path>")
+            == "from: give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>")
+    }
+
+    @Test func takesALinuxImageByURLWithTheHashItMustMatch() throws {
+        let sha256 = String(repeating: "ab", count: 32), sha512 = String(repeating: "cd", count: 64)
+        let file = try decode("from: { url: 'https://images.example/debian/disk.tar.xz', sha256: \(sha256.uppercased()) }\naccount: { name: bench }")
+        #expect(file.from == .url(URL(string: "https://images.example/debian/disk.tar.xz")!, LinuxImage.Checksum(.sha256, sha256)!))
+        #expect(file.from.isLinux)
+        #expect(try decode("from: { url: 'https://images.example/disk.raw', sha512: \(sha512) }\naccount: { name: bench }").from
+            == .url(URL(string: "https://images.example/disk.raw")!, LinuxImage.Checksum(.sha512, sha512)!))
+
+        let url = "url: 'https://images.example/disk.raw'"
+        #expect(failure("from: { \(url) }\naccount: { name: bench }") == "from.url: needs sha256: or sha512:, the hash the file must match")
+        #expect(failure("from: { \(url), sha256: \(sha256), sha512: \(sha512) }\naccount: { name: bench }")
+            == "from.url: needs sha256: or sha512:, the hash the file must match")
+        #expect(failure("from: { \(url), sha256: abc }\naccount: { name: bench }") == "from.sha256: expected 64 hex digits")
+        #expect(failure("from: { url: 'http://images.example/disk.raw', sha256: \(sha256) }\naccount: { name: bench }")
+            == "from.url: expected an https URL, not http://images.example/disk.raw")
+        #expect(failure("from: { url: 'https://images.example/disk.qcow2', sha256: \(sha256) }\naccount: { name: bench }")
+            == "from.url: expected a .tar.xz holding disk.raw, or a .raw disk")
+        #expect(failure("from: { debian: 13, sha256: \(sha256) }\naccount: { name: bench }") == "from.sha256: goes with url:")
     }
 
     @Test func refusesMacOSOnlyKeysInALinuxImage() {

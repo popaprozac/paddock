@@ -26,6 +26,32 @@ public enum LinuxImage {
         }
     }
 
+    /// The hash a downloaded image must match.
+    public struct Checksum: Equatable, Sendable {
+        public enum Algorithm: String, Sendable {
+            case sha256, sha512
+
+            public var hexLength: Int { self == .sha256 ? 64 : 128 }
+        }
+
+        public let algorithm: Algorithm
+        public let hex: String  // lowercase
+
+        /// Nil unless `hex` is the algorithm's length of hex digits.
+        public init?(_ algorithm: Algorithm, _ hex: String) {
+            let hex = hex.lowercased()
+            guard hex.count == algorithm.hexLength, hex.allSatisfy(\.isHexDigit) else { return nil }
+            self.algorithm = algorithm
+            self.hex = hex
+        }
+    }
+
+    /// Whether a file's name says it's an image `makeBundle` takes: a `.tar.xz` holding
+    /// `disk.raw`, or a `.raw` disk.
+    public static func isDiskFileName(_ name: String) -> Bool {
+        name.hasSuffix(".tar.xz") || name.hasSuffix(".raw")
+    }
+
     /// The SHA-512 a SHA512SUMS file lists for `file`, in lowercase hex; nil if it lists none.
     public static func sha512(of file: String, inSums text: String) -> String? {
         for line in text.split(separator: "\n") {
@@ -39,15 +65,24 @@ public enum LinuxImage {
         return nil
     }
 
-    /// The SHA-512 of the file at `url`, in lowercase hex, read a megabyte at a time.
-    public static func sha512(ofFileAt url: URL) throws -> String {
+    /// The hash of the file at `url`, in lowercase hex, read a megabyte at a time.
+    public static func hash(ofFileAt url: URL, _ algorithm: Checksum.Algorithm) throws -> String {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
-        var hasher = SHA512()
-        while let chunk = try file.read(upToCount: 1 << 20), !chunk.isEmpty {
-            hasher.update(data: chunk)
+        func hex(_ hasher: inout some HashFunction) throws -> String {
+            while let chunk = try file.read(upToCount: 1 << 20), !chunk.isEmpty {
+                hasher.update(data: chunk)
+            }
+            return hasher.finalize().map { String(format: "%02x", $0) }.joined()
         }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        switch algorithm {
+        case .sha256:
+            var hasher = SHA256()
+            return try hex(&hasher)
+        case .sha512:
+            var hasher = SHA512()
+            return try hex(&hasher)
+        }
     }
 
     /// The latest build of `debian`, from the cache in `folder` if it is still Debian's latest,
@@ -60,18 +95,40 @@ public enum LinuxImage {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw PaddockError("can't fetch \(debian.sumsURL.absoluteString): HTTP \(http.statusCode)")
         }
-        guard let expected = sha512(of: debian.fileName, inSums: String(decoding: data, as: UTF8.self)) else {
+        guard let hex = sha512(of: debian.fileName, inSums: String(decoding: data, as: UTF8.self)),
+              let expected = Checksum(.sha512, hex) else {
             throw PaddockError("\(debian.sumsURL.absoluteString) doesn't list \(debian.fileName)")
         }
-        let cached = folder.appendingPathComponent(debian.fileName)
+        // Kept by name: the latest build replaces the one before it.
+        return try await fetch(debian.url, matching: expected, to: folder.appendingPathComponent(debian.fileName),
+                               progress: progress)
+    }
+
+    /// The image at `url`, which must match `checksum`, from the cache in `folder` or downloaded
+    /// there. Kept by its hash, so a file is downloaded once however many image files name it.
+    public static func fetch(
+        _ url: URL, matching checksum: Checksum, into folder: URL,
+        progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    ) async throws -> URL {
+        let cached = folder.appendingPathComponent("\(checksum.algorithm.rawValue)-\(checksum.hex)", isDirectory: true)
+            .appendingPathComponent(url.lastPathComponent)
+        return try await fetch(url, matching: checksum, to: cached, progress: progress)
+    }
+
+    /// `cached` if it matches `checksum`, else a fresh download there that must.
+    static func fetch(
+        _ url: URL, matching checksum: Checksum, to cached: URL,
+        progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    ) async throws -> URL {
         if FileManager.default.fileExists(atPath: cached.path) {
-            if try sha512(ofFileAt: cached) == expected { return cached }
+            if try hash(ofFileAt: cached, checksum.algorithm) == checksum.hex { return cached }
             try FileManager.default.removeItem(at: cached)  // an older build, or a damaged file
         }
-        try await RestoreImages.download(debian.url, to: cached, progress: progress)
-        guard try sha512(ofFileAt: cached) == expected else {
+        try await RestoreImages.download(url, to: cached, progress: progress)
+        guard try hash(ofFileAt: cached, checksum.algorithm) == checksum.hex else {
             try? FileManager.default.removeItem(at: cached)
-            throw PaddockError("the download of \(debian.fileName) doesn't match Debian's SHA512SUMS; it was deleted")
+            throw PaddockError("the download of \(url.lastPathComponent) doesn't match its \(checksum.algorithm.rawValue), "
+                + "so it was deleted")
         }
         return cached
     }

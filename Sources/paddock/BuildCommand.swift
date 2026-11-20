@@ -122,7 +122,7 @@ enum ImageBuild {
                     throw PaddockError("\(self.file.lastPathComponent): from.ipsw: no file at \(url.path)")
                 }
                 ipsw = url.path
-            case .debian, .disk:
+            case .debian, .disk, .url:
                 // shortcut: refused until build makes Linux images, so a Linux file never installs macOS.
                 throw PaddockError("\(self.file.lastPathComponent): paddock build can't make Linux images yet")
             }

@@ -29,8 +29,32 @@ import Virtualization
         let tmp = try TemporaryDirectory()
         let file = tmp.url.appendingPathComponent("abc")
         try Data("abc".utf8).write(to: file)
-        #expect(try LinuxImage.sha512(ofFileAt: file) == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+        #expect(try LinuxImage.hash(ofFileAt: file, .sha512) == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
             + "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")
+        #expect(try LinuxImage.hash(ofFileAt: file, .sha256) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
+    /// An image already in the cache under its hash comes from there, with nothing downloaded:
+    /// the URL can't be reached.
+    @Test func takesAnImageByURLFromTheCacheWhenItMatches() async throws {
+        let tmp = try TemporaryDirectory()
+        let checksum = try #require(LinuxImage.Checksum(.sha256, "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"))
+        let cached = tmp.url.appendingPathComponent("sha256-\(checksum.hex)/abc.raw")
+        try FileManager.default.createDirectory(at: cached.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("abc".utf8).write(to: cached)
+        let url = URL(string: "https://images.invalid/abc.raw")!
+        #expect(try await LinuxImage.fetch(url, matching: checksum, into: tmp.url) { _, _ in } == cached)
+
+        // A cached file that doesn't match is deleted, and the download it then needs fails here.
+        try Data("abd".utf8).write(to: cached)
+        await #expect(throws: (any Error).self) { try await LinuxImage.fetch(url, matching: checksum, into: tmp.url) { _, _ in } }
+        #expect(!FileManager.default.fileExists(atPath: cached.path))
+    }
+
+    @Test func checksumsNeedTheirAlgorithmsLength() {
+        #expect(LinuxImage.Checksum(.sha256, String(repeating: "a", count: 64)) != nil)
+        #expect(LinuxImage.Checksum(.sha256, String(repeating: "a", count: 128)) == nil)
+        #expect(LinuxImage.Checksum(.sha512, String(repeating: "g", count: 128)) == nil)
     }
 
     /// A small disk with recognizable bytes, as disk.raw in a folder of its own.

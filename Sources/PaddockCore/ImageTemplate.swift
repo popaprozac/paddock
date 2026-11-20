@@ -97,7 +97,8 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             # The VM is named after this file; set name: to choose another.
 
             # The latest genericcloud arm64 build from cloud.debian.org, checked against Debian's
-            # SHA512SUMS. To pin a build, give the .tar.xz you keep: from: { disk: <path> }
+            # SHA512SUMS. To pin a build, give the .tar.xz you keep, from: { disk: <path> }, or
+            # one to download with the hash it must match: from: { url: <https URL>, sha512: <hash> }
             from: { debian: 13 }
 
             vm: { cpus: 4, memory: 4, disk: 16 }   # in GB
