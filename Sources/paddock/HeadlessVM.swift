@@ -22,15 +22,16 @@ final class HeadlessVM: NSObject {
 
     /// With `userspaceNetwork`, the VM's network is its own paddock-net process, which stops with
     /// this object, instead of macOS's shared NAT. `sharing` mounts a host folder read-only in the
-    /// guest at /Volumes/My Shared Files.
-    init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false, sharing: URL? = nil) throws {
+    /// guest at /Volumes/My Shared Files. `seed` attaches a disk image read-only, as a Linux build's
+    /// cloud-init seed.
+    init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false, sharing: URL? = nil, seed: URL? = nil) throws {
         lock = try BundleLock(bundle: bundle)
         network = userspaceNetwork
             ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress,
                                    controlPath: bundle.url.appendingPathComponent("net.sock").path)
             : nil
         machine = VZVirtualMachine(configuration: try VMConfiguration.make(
-            bundle: bundle, config: config, sharing: sharing, network: network?.attachment))
+            bundle: bundle, config: config, sharing: sharing, network: network?.attachment, seed: seed))
         self.bundle = bundle
         self.config = config
         super.init()
@@ -122,6 +123,9 @@ final class HeadlessVM: NSObject {
     /// guest only sends a frame when its screen changes: a view attached to a guest that has gone
     /// still shows nothing, so attach before a restored VM resumes and redraws.
     func attachScreen() throws {
+        guard !config.isLinux else {
+            throw PaddockError("'\(bundle.name)' is a Linux VM, which has no screen or input in paddock; use exec")
+        }
         if screen == nil {
             screen = try VMScreen(machine: machine, display: config.display)
         }
@@ -351,6 +355,8 @@ final class HeadlessVM: NSObject {
     /// settings and, with `sessionHelper`, whether paddock-session has Accessibility. Nil if the
     /// check couldn't run. serve warns with it; build reports it.
     func imageProblems(sessionHelper: Bool) async -> [String]? {
+        // The checks are macOS's settings: a Linux image's setup is paddock's own build.
+        guard !config.isLinux else { return [] }
         let output = OSAllocatedUnfairLock(initialState: [String]())
         guard (try? await runInGuest(SourceCheck.command) { line in output.withLock { $0.append(line) } }) == 0 else {
             return nil

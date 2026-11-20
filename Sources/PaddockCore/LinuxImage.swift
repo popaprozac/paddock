@@ -1,0 +1,194 @@
+import CryptoKit
+import Darwin
+import Foundation
+import Virtualization
+
+/// Linux disk images for `paddock build`: Debian's genericcloud builds, fetched and checked, or a
+/// disk you keep; and the Linux VM bundle made from one.
+public enum LinuxImage {
+    /// The Debian releases paddock builds from, by number, with the codename Debian files them under.
+    public static let debianCodenames = [13: "trixie"]
+
+    /// The latest genericcloud arm64 build of a Debian release and the SHA512SUMS listing it.
+    public struct Debian: Equatable, Sendable {
+        public let release: Int
+        public let fileName: String
+        public let url: URL
+        public let sumsURL: URL
+
+        public init?(release: Int) {
+            guard let codename = LinuxImage.debianCodenames[release] else { return nil }
+            self.release = release
+            let folder = URL(string: "https://cloud.debian.org/images/cloud/\(codename)/latest/")!
+            fileName = "debian-\(release)-genericcloud-arm64.tar.xz"
+            url = folder.appendingPathComponent(fileName)
+            sumsURL = folder.appendingPathComponent("SHA512SUMS")
+        }
+    }
+
+    /// The hash a downloaded image must match.
+    public struct Checksum: Equatable, Sendable {
+        public enum Algorithm: String, Sendable {
+            case sha256, sha512
+
+            public var hexLength: Int { self == .sha256 ? 64 : 128 }
+        }
+
+        public let algorithm: Algorithm
+        public let hex: String  // lowercase
+
+        /// Nil unless `hex` is the algorithm's length of hex digits.
+        public init?(_ algorithm: Algorithm, _ hex: String) {
+            let hex = hex.lowercased()
+            guard hex.count == algorithm.hexLength, hex.allSatisfy(\.isHexDigit) else { return nil }
+            self.algorithm = algorithm
+            self.hex = hex
+        }
+    }
+
+    /// Whether a file's name says it's an image `makeBundle` takes: a `.tar.xz` holding
+    /// `disk.raw`, or a `.raw` disk.
+    public static func isDiskFileName(_ name: String) -> Bool {
+        name.hasSuffix(".tar.xz") || name.hasSuffix(".raw")
+    }
+
+    /// The SHA-512 a SHA512SUMS file lists for `file`, in lowercase hex; nil if it lists none.
+    public static func sha512(of file: String, inSums text: String) -> String? {
+        for line in text.split(separator: "\n") {
+            let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+            // sha512sum's binary mode marks the name with a leading '*'.
+            guard fields.count == 2, fields[1] == file || fields[1] == "*" + file else { continue }
+            let hash = fields[0].lowercased()
+            guard hash.count == 128, hash.allSatisfy(\.isHexDigit) else { return nil }
+            return hash
+        }
+        return nil
+    }
+
+    /// The hash of the file at `url`, in lowercase hex, read a megabyte at a time.
+    public static func hash(ofFileAt url: URL, _ algorithm: Checksum.Algorithm) throws -> String {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        func hex(_ hasher: inout some HashFunction) throws -> String {
+            while let chunk = try file.read(upToCount: 1 << 20), !chunk.isEmpty {
+                hasher.update(data: chunk)
+            }
+            return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        }
+        switch algorithm {
+        case .sha256:
+            var hasher = SHA256()
+            return try hex(&hasher)
+        case .sha512:
+            var hasher = SHA512()
+            return try hex(&hasher)
+        }
+    }
+
+    /// The latest build of `debian`, from the cache in `folder` if it is still Debian's latest,
+    /// else downloaded there. Either way it is checked against Debian's SHA512SUMS, fetched over
+    /// HTTPS each time, since the latest build changes. `progress` gets bytes written and expected.
+    public static func fetch(
+        _ debian: Debian, into folder: URL, progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    ) async throws -> URL {
+        let (data, response) = try await URLSession.shared.data(from: debian.sumsURL)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw PaddockError("can't fetch \(debian.sumsURL.absoluteString): HTTP \(http.statusCode)")
+        }
+        guard let hex = sha512(of: debian.fileName, inSums: String(decoding: data, as: UTF8.self)),
+              let expected = Checksum(.sha512, hex) else {
+            throw PaddockError("\(debian.sumsURL.absoluteString) doesn't list \(debian.fileName)")
+        }
+        // Kept by name: the latest build replaces the one before it.
+        return try await fetch(debian.url, matching: expected, to: folder.appendingPathComponent(debian.fileName),
+                               progress: progress)
+    }
+
+    /// The image at `url`, which must match `checksum`, from the cache in `folder` or downloaded
+    /// there. Kept by its hash, so a file is downloaded once however many image files name it.
+    public static func fetch(
+        _ url: URL, matching checksum: Checksum, into folder: URL,
+        progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    ) async throws -> URL {
+        let cached = folder.appendingPathComponent("\(checksum.algorithm.rawValue)-\(checksum.hex)", isDirectory: true)
+            .appendingPathComponent(url.lastPathComponent)
+        return try await fetch(url, matching: checksum, to: cached, progress: progress)
+    }
+
+    /// `cached` if it matches `checksum`, else a fresh download there that must.
+    static func fetch(
+        _ url: URL, matching checksum: Checksum, to cached: URL,
+        progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    ) async throws -> URL {
+        if FileManager.default.fileExists(atPath: cached.path) {
+            if try hash(ofFileAt: cached, checksum.algorithm) == checksum.hex { return cached }
+            try FileManager.default.removeItem(at: cached)  // an older build, or a damaged file
+        }
+        try await RestoreImages.download(url, to: cached, progress: progress)
+        guard try hash(ofFileAt: cached, checksum.algorithm) == checksum.hex else {
+            try? FileManager.default.removeItem(at: cached)
+            throw PaddockError("the download of \(url.lastPathComponent) doesn't match its \(checksum.algorithm.rawValue), "
+                + "so it was deleted")
+        }
+        return cached
+    }
+
+    /// Makes a new Linux VM bundle at `bundle` from `image`: a `.tar.xz` holding `disk.raw`, as
+    /// Debian publishes its cloud images, or a raw disk image. The disk is copied in, grown to
+    /// `diskSize` bytes, and given an EFI variable store and a fresh identity. The bundle appears
+    /// only once it is complete.
+    @discardableResult
+    public static func makeBundle(_ bundle: VMBundle, from image: URL, cpuCount: Int, memorySize: UInt64,
+                                  diskSize: UInt64) throws -> VMConfig {
+        let staging = try StagingArea(for: bundle)
+        let disk = staging.bundle.diskURL
+        if image.lastPathComponent.hasSuffix(".tar.xz") {
+            try extractDisk(from: image, to: disk)
+        } else {
+            // A clone on the same APFS volume, a copy elsewhere.
+            try FileManager.default.copyItem(at: image, to: disk)
+        }
+        let size = try FileManager.default.attributesOfItem(atPath: disk.path)[.size] as? UInt64 ?? 0
+        guard size <= diskSize else {
+            throw PaddockError("\(image.lastPathComponent)'s disk is \(ByteFormat.gigabytes(Int64(size))), more than "
+                + "the \(diskSize >> 30) GB vm.disk asks for")
+        }
+        // Growing only adds zeros at the end: cloud-init grows the guest's partition into them.
+        let handle = try FileHandle(forWritingTo: disk)
+        try handle.truncate(atOffset: diskSize)
+        try handle.close()
+        do {
+            _ = try VZEFIVariableStore(creatingVariableStoreAt: staging.bundle.efiVariablesURL)
+        } catch {
+            throw PaddockError("can't create the EFI variable store: \(error.localizedDescription)")
+        }
+        let config = VMConfig(
+            kind: .linux, hardwareModel: Data(), machineIdentifier: VZGenericMachineIdentifier().dataRepresentation,
+            macAddress: VZMACAddress.randomLocallyAdministered().string, cpuCount: cpuCount, memorySize: memorySize,
+            diskSize: diskSize)
+        try staging.bundle.writeConfig(config)
+        try staging.commit()
+        return config
+    }
+
+    /// Extracts `disk.raw`, and nothing else, from a cloud image's tarball to `destination`.
+    static func extractDisk(from archive: URL, to destination: URL) throws {
+        let folder = destination.deletingLastPathComponent()
+        let tar = Process()
+        tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        tar.arguments = ["-xJf", archive.path, "-C", folder.path, "disk.raw"]
+        let errors = Pipe()
+        tar.standardError = errors
+        tar.standardOutput = FileHandle.nullDevice
+        try tar.run()
+        let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        tar.waitUntilExit()
+        let extracted = folder.appendingPathComponent("disk.raw")
+        guard tar.terminationStatus == 0, FileManager.default.fileExists(atPath: extracted.path) else {
+            let reason = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw PaddockError("\(archive.lastPathComponent) holds no disk.raw to extract"
+                + (reason.isEmpty ? "" : ": \(reason.prefix(300))"))
+        }
+        try FileManager.default.moveItem(at: extracted, to: destination)
+    }
+}

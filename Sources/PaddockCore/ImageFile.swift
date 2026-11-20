@@ -6,7 +6,9 @@ import Foundation
 /// failure into one line.
 ///
 /// ```yaml
-/// from: { macos: latest }      # or { ipsw: path/to/restore.ipsw }, which pins the version
+/// from: { macos: latest }      # or { ipsw: path/to/restore.ipsw }, which pins the version;
+///                              # or for Linux { debian: 13 }, { disk: path/to/image.tar.xz },
+///                              # or { url: https://..., sha256: <hash> }
 /// vm: { cpus: 4, memory: 8, disk: 80 }
 /// account: { name: bench, full-name: Bench }
 /// license: accept              # leave out and a person accepts it
@@ -24,7 +26,25 @@ public struct ImageFile: Equatable, Sendable {
         case latest
         /// A restore image file, which pins the version.
         case ipsw(String)
+        /// The latest build of a Debian release's genericcloud arm64 image, from cloud.debian.org.
+        case debian(Int)
+        /// A Linux disk you keep, which pins the build: a genericcloud `.tar.xz` as Debian
+        /// publishes it, or a raw disk image.
+        case disk(String)
+        /// A Linux disk to download, as `disk` takes them, which must match its hash: the hash pins
+        /// the build, wherever the file is.
+        case url(URL, LinuxImage.Checksum)
+
+        public var isLinux: Bool {
+            switch self {
+            case .latest, .ipsw: false
+            case .debian, .disk, .url: true
+            }
+        }
     }
+
+    /// The Debian releases `from: { debian: N }` builds from.
+    public static let debianReleases = LinuxImage.debianCodenames.keys.sorted()
 
     /// How the helpers' privacy grants get into the image: `managed` leaves them to a person or
     /// clicking them once in the image, `recovery` has `paddock grant` write them.
@@ -122,6 +142,12 @@ extension ImageFile: Decodable {
             }
         }
         from = try keys.decode(Source.self, forKey: .from)
+        if from.isLinux {
+            // A Linux guest has no Apple license to accept and no privacy database to grant in.
+            for key in [Keys.license, .grants] where keys.contains(key) {
+                throw DecodingError.dataCorruptedError(forKey: key, in: keys, debugDescription: "is for macOS images only")
+            }
+        }
         vm = try keys.decodeIfPresent(VM.self, forKey: .vm) ?? VM()
         account = try keys.decode(Account.self, forKey: .account)
         acceptsLicense = try keys.choice(["accept"], forKey: .license) != nil
@@ -133,21 +159,59 @@ extension ImageFile: Decodable {
 
 extension ImageFile.Source: Decodable {
     private enum Keys: String, CodingKey, CaseIterable {
-        case macos, ipsw
+        case macos, ipsw, debian, disk, url, sha256, sha512
     }
 
     public init(from decoder: any Decoder) throws {
         let keys = try decoder.strictContainer(keyedBy: Keys.self)
-        switch (keys.contains(.macos), keys.contains(.ipsw)) {
-        case (true, false):
+        let hashes = keys.allKeys.filter { $0 == .sha256 || $0 == .sha512 }
+        let sources = keys.allKeys.filter { !hashes.contains($0) }
+        guard sources.count == 1, let key = sources.first else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>"))
+        }
+        if key != .url, let hash = hashes.first {
+            throw DecodingError.dataCorruptedError(forKey: hash, in: keys, debugDescription: "goes with url:")
+        }
+        switch key {
+        case .macos:
             // shortcut: only the latest; a version number needs a catalog to find its image.
             _ = try keys.choice(["latest"], forKey: .macos, hint: "to pin a version, give its restore image with ipsw:")
             self = .latest
-        case (false, true):
+        case .ipsw:
             self = .ipsw(try keys.decode(String.self, forKey: .ipsw))
-        default:
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: decoder.codingPath, debugDescription: "give one of macos: latest or ipsw: <path>"))
+        case .debian:
+            let release = try keys.decode(Int.self, forKey: .debian)
+            guard ImageFile.debianReleases.contains(release) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .debian, in: keys, debugDescription: "expected \(ImageFile.debianReleases.map(String.init).joined(separator: ", ")), not \(release)")
+            }
+            self = .debian(release)
+        case .disk:
+            self = .disk(try keys.decode(String.self, forKey: .disk))
+        case .url:
+            let text = try keys.decode(String.self, forKey: .url)
+            guard let url = URL(string: text), url.scheme == "https", url.host != nil else {
+                throw DecodingError.dataCorruptedError(forKey: .url, in: keys, debugDescription: "expected an https URL, not \(text)")
+            }
+            guard LinuxImage.isDiskFileName(url.lastPathComponent) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .url, in: keys, debugDescription: "expected a .tar.xz holding disk.raw, or a .raw disk")
+            }
+            guard hashes.count == 1, let hashKey = hashes.first else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .url, in: keys, debugDescription: "needs sha256: or sha512:, the hash the file must match")
+            }
+            let algorithm: LinuxImage.Checksum.Algorithm = hashKey == .sha256 ? .sha256 : .sha512
+            let hex = try keys.decode(String.self, forKey: hashKey).lowercased()
+            guard let checksum = LinuxImage.Checksum(algorithm, hex) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: hashKey, in: keys, debugDescription: "expected \(algorithm.hexLength) hex digits")
+            }
+            self = .url(url, checksum)
+        case .sha256, .sha512:
+            preconditionFailure("a hash is never the source; sources leaves them out")
         }
     }
 }

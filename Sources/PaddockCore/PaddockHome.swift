@@ -35,6 +35,11 @@ public struct PaddockHome: Sendable {
         root.appendingPathComponent("cache/ipsw", isDirectory: true)
     }
 
+    /// Where `paddock build` keeps the Linux images it downloads.
+    public var linuxCacheDirectory: URL {
+        root.appendingPathComponent("cache/linux", isDirectory: true)
+    }
+
     /// The bundle for a VM name. The bundle may not exist yet.
     public func bundle(named name: String) throws -> VMBundle {
         try BundleName.validate(name)

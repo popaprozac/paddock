@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Virtualization
 @testable import PaddockCore
 
 @Suite struct BundleNameTests {
@@ -49,6 +50,33 @@ import Testing
         display: .init(widthInPixels: 1920, heightInPixels: 1200, pixelsPerInch: 80),
         os: .init(version: "27.1", build: "27B100")
     )
+
+    static let linuxSample = VMConfig(
+        kind: .linux,
+        hardwareModel: Data(),
+        machineIdentifier: VZGenericMachineIdentifier().dataRepresentation,
+        macAddress: "12:34:56:78:9a:bd",
+        cpuCount: 4,
+        memorySize: 4 << 30,
+        diskSize: 16 << 30
+    )
+
+    /// Every config.json from before Linux VMs has no kind, and is macOS.
+    @Test func readsAConfigWithoutAKindAsMacOS() throws {
+        let tmp = try TemporaryDirectory()
+        let bundle = VMBundle(url: tmp.url)
+        try bundle.writeConfig(Self.sample)
+        #expect(!(try String(contentsOf: bundle.configURL, encoding: .utf8)).contains("kind"))
+        #expect(try bundle.readConfig().isLinux == false)
+    }
+
+    @Test func keepsALinuxVMsKind() throws {
+        let tmp = try TemporaryDirectory()
+        let bundle = VMBundle(url: tmp.url)
+        try bundle.writeConfig(Self.linuxSample)
+        #expect((try String(contentsOf: bundle.configURL, encoding: .utf8)).contains("\"kind\" : \"linux\""))
+        #expect(try bundle.readConfig() == Self.linuxSample)
+    }
 
     @Test func roundTripsThroughBundle() throws {
         let tmp = try TemporaryDirectory()

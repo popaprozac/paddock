@@ -4,8 +4,8 @@
 | --- | --- |
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
 | `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`, on a macOS 27 or later guest (older guests ignore it); `--recovery` starts it in macOS Recovery. |
-| `paddock init <file> [--template minimal\|ci\|managed]` | Writes a commented starter image file for `build`. |
-| `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](golden-images.md)). Needs macOS 27 on this Mac and macOS 15 or later in the VM. |
+| `paddock init <file> [--template minimal\|ci\|managed\|debian]` | Writes a commented starter image file for `build`; `debian` is a Linux image. |
+| `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](golden-images.md)). Needs macOS 27 on this Mac and macOS 15 or later in the VM. A Linux image file (`from: debian`, `disk` or `url`) needs neither, nor a password: `build` makes the VM from the image's disk, boots it once with a cloud-init seed that creates the account and installs the guest agent, then runs the steps and seals the image (see [Linux images](golden-images.md#linux-images)). |
 | `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](golden-images.md#what-a-golden-image-allows)). |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
 | `paddock bench <source> [--runs 1] [--timeout 300] [--restore] [--userspace] [--keep]` | Clones the source, boots the clone headless, prints timings, then stops and deletes the clone. With `--restore`, each run restores a saved state instead of cold booting. With `--userspace`, each VM gets its own userspace network instead of the shared NAT, and there is no running step. |
@@ -121,9 +121,17 @@ Restored clones share one identity, so only one can run at a time.
 ```
 ~/.paddock/vms/<name>/
   disk.img     sparse raw disk image
-  aux.img      Mac auxiliary storage
+  aux.img      Mac auxiliary storage (macOS)
+  efi-vars     EFI variable store (Linux), in place of aux.img
   config.json  hardware model and machine identifier (base64), MAC address,
-               CPU count, memory, disk size, display and the installed macOS build
+               CPU count, memory, disk size, display and the installed macOS build;
+               "kind": "linux" for a Linux VM
   state.vzvmsave  optional saved memory and device state of a paused VM
   net.sock     paddock-net's control socket, while the VM runs on the userspace network
+  console.log  a Linux guest's console, written afresh each time it starts
 ```
+
+A Linux VM runs on Virtualization.framework's generic platform with EFI boot, a virtio disk,
+network, entropy, vsock and console, and no display, keyboard or pointer, so screenshots, input,
+`show` and `view` refuse it. Its `config.json` has an empty hardware model and a generic machine
+identifier.

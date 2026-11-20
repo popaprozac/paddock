@@ -11,7 +11,8 @@ struct Init: ParsableCommand {
             minimal: the latest macOS with nothing left to click, for your own agents and for you. \
             ci: a pinned macOS plus the Command Line Tools, for git and the compilers. managed: a pinned macOS, with a person \
             making the privacy grants in the image, so paddock never writes the privacy database. \
-            Templates are starting points: any file can take any setting. Every template leaves \
+            debian: Debian 13 with no screen, for Linux CI and agents. \
+            Templates are starting points: any file can take any setting. Every macOS template leaves \
             accepting Apple's license to you: uncomment its license line to accept it for the image.
             """)
 
@@ -28,7 +29,7 @@ struct Init: ParsableCommand {
         }
         try template.text.write(to: url, atomically: true, encoding: .utf8)
         print("Wrote \(url.lastPathComponent) from the \(template.rawValue) template.")
-        if template != .minimal {
+        if template == .ci || template == .managed {
             print("  Set from.ipsw to the restore image that pins your macOS version.")
         }
         print("  Edit it, then: paddock build \(file)")

@@ -4,29 +4,28 @@ import Virtualization
 /// Turns a bundle and its `VMConfig` into a validated Virtualization.framework configuration.
 ///
 /// Install, run and bench all use this, so the golden image and its clones boot on identical
-/// virtual hardware. Headless runs keep the graphics device and simply attach no view.
+/// virtual hardware. Headless runs keep the graphics device and simply attach no view. A Linux
+/// VM gets its own hardware: see `linux`.
 public enum VMConfiguration {
-    /// `sharing` mounts a host folder read-only in the guest at `/Volumes/My Shared Files`.
+    /// `sharing` mounts a host folder read-only in the guest at `/Volumes/My Shared Files`; a Linux
+    /// guest mounts it by `linuxShareTag`.
     /// Only `run` uses it, to carry files such as the guest agent into the golden image.
     /// `network` replaces macOS's shared NAT with another attachment, such as a
     /// `UserspaceNetwork`'s; a saved state restores only into the same kind it was saved with.
+    /// `seed` attaches a disk image read-only as a second disk, as `build` does with a Linux
+    /// image's cloud-init seed.
     public static func make(
-        bundle: VMBundle, config: VMConfig, sharing directory: URL? = nil, network attachment: VZNetworkDeviceAttachment? = nil
+        bundle: VMBundle, config: VMConfig, sharing directory: URL? = nil, network attachment: VZNetworkDeviceAttachment? = nil,
+        seed: URL? = nil
     ) throws -> VZVirtualMachineConfiguration {
         let configuration = VZVirtualMachineConfiguration()
-        configuration.platform = try platform(bundle: bundle, config: config)
-        configuration.bootLoader = VZMacOSBootLoader()
         configuration.cpuCount = config.cpuCount
         configuration.memorySize = config.memorySize
-
-        let graphics = VZMacGraphicsDeviceConfiguration()
-        graphics.displays = [
-            VZMacGraphicsDisplayConfiguration(
-                widthInPixels: config.display.widthInPixels,
-                heightInPixels: config.display.heightInPixels,
-                pixelsPerInch: config.display.pixelsPerInch),
-        ]
-        configuration.graphicsDevices = [graphics]
+        if config.isLinux {
+            try linux(configuration, bundle: bundle, config: config)
+        } else {
+            try mac(configuration, bundle: bundle, config: config)
+        }
 
         let disk: VZDiskImageStorageDeviceAttachment
         do {
@@ -35,23 +34,26 @@ public enum VMConfiguration {
             throw PaddockError("can't attach \(bundle.diskURL.path): \(error.localizedDescription)")
         }
         configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk)]
+        if let seed {
+            do {
+                let attachment = try VZDiskImageStorageDeviceAttachment(url: seed, readOnly: true)
+                configuration.storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: attachment))
+            } catch {
+                throw PaddockError("can't attach \(seed.path): \(error.localizedDescription)")
+            }
+        }
 
         let network = VZVirtioNetworkDeviceConfiguration()
         network.attachment = attachment ?? VZNATNetworkDeviceAttachment()
         network.macAddress = try macAddress(from: config.macAddress)
         configuration.networkDevices = [network]
 
-        configuration.pointingDevices = [
-            VZMacTrackpadConfiguration(),
-            VZUSBScreenCoordinatePointingDeviceConfiguration(),
-        ]
-        configuration.keyboards = [VZMacKeyboardConfiguration()]
-
         // The host reaches the future guest agent over vsock; the guest needs no network listener.
         configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
 
         if let directory {
-            let share = VZVirtioFileSystemDeviceConfiguration(tag: VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag)
+            let tag = config.isLinux ? linuxShareTag : VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag
+            let share = VZVirtioFileSystemDeviceConfiguration(tag: tag)
             share.share = VZSingleDirectoryShare(directory: VZSharedDirectory(url: directory, readOnly: true))
             configuration.directorySharingDevices = [share]
         }
@@ -62,6 +64,55 @@ public enum VMConfiguration {
             throw PaddockError("invalid VM configuration for '\(bundle.name)': \(error.localizedDescription)")
         }
         return configuration
+    }
+
+    /// The tag a Linux guest mounts the shared folder by: `mount -t virtiofs paddock-share <dir>`.
+    public static let linuxShareTag = "paddock-share"
+
+    /// A macOS guest's platform, boot loader, display, trackpad and keyboard.
+    static func mac(_ configuration: VZVirtualMachineConfiguration, bundle: VMBundle, config: VMConfig) throws {
+        configuration.platform = try platform(bundle: bundle, config: config)
+        configuration.bootLoader = VZMacOSBootLoader()
+        let graphics = VZMacGraphicsDeviceConfiguration()
+        graphics.displays = [
+            VZMacGraphicsDisplayConfiguration(
+                widthInPixels: config.display.widthInPixels,
+                heightInPixels: config.display.heightInPixels,
+                pixelsPerInch: config.display.pixelsPerInch),
+        ]
+        configuration.graphicsDevices = [graphics]
+        configuration.pointingDevices = [
+            VZMacTrackpadConfiguration(),
+            VZUSBScreenCoordinatePointingDeviceConfiguration(),
+        ]
+        configuration.keyboards = [VZMacKeyboardConfiguration()]
+    }
+
+    /// A Linux guest's generic platform, EFI boot, entropy and console. No display, keyboard or
+    /// pointer: a cloud image's kernel has no GPU driver, and any USB device stops a Linux VM's
+    /// saved state from restoring (it fails with "invalid argument").
+    static func linux(_ configuration: VZVirtualMachineConfiguration, bundle: VMBundle, config: VMConfig) throws {
+        guard let machineIdentifier = VZGenericMachineIdentifier(dataRepresentation: config.machineIdentifier) else {
+            throw PaddockError("config.json for '\(bundle.name)' has an unreadable machine identifier")
+        }
+        let platform = VZGenericPlatformConfiguration()
+        platform.machineIdentifier = machineIdentifier
+        configuration.platform = platform
+        guard FileManager.default.fileExists(atPath: bundle.efiVariablesURL.path) else {
+            throw PaddockError("'\(bundle.name)' has no EFI variable store at \(bundle.efiVariablesURL.path)")
+        }
+        let bootLoader = VZEFIBootLoader()
+        bootLoader.variableStore = VZEFIVariableStore(url: bundle.efiVariablesURL)
+        configuration.bootLoader = bootLoader
+        configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+        // The guest's console, for reading why a guest never came up; each start writes it afresh.
+        guard FileManager.default.createFile(atPath: bundle.consoleLogURL.path, contents: nil),
+              let log = try? FileHandle(forWritingTo: bundle.consoleLogURL) else {
+            throw PaddockError("can't write \(bundle.consoleLogURL.path)")
+        }
+        let console = VZVirtioConsoleDeviceSerialPortConfiguration()
+        console.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: nil, fileHandleForWriting: log)
+        configuration.serialPorts = [console]
     }
 
     static func platform(bundle: VMBundle, config: VMConfig) throws -> VZMacPlatformConfiguration {

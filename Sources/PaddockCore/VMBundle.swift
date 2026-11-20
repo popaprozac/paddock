@@ -4,9 +4,11 @@ import Foundation
 ///
 ///     <name>/
 ///       disk.img     sparse raw disk image
-///       aux.img      Mac auxiliary storage (NVRAM)
+///       aux.img      Mac auxiliary storage (NVRAM), for macOS
+///       efi-vars     EFI variable store, for Linux, in place of aux.img
 ///       config.json  hardware model, machine identifier, MAC address, CPU, memory, display
 ///       state.vzvmsave  optional saved memory and device state of a paused VM
+///       console.log  a Linux guest's console, written while it runs
 public struct VMBundle: Sendable {
     public let url: URL
 
@@ -17,6 +19,8 @@ public struct VMBundle: Sendable {
     public var name: String { url.lastPathComponent }
     public var diskURL: URL { url.appendingPathComponent("disk.img") }
     public var auxiliaryStorageURL: URL { url.appendingPathComponent("aux.img") }
+    public var efiVariablesURL: URL { url.appendingPathComponent("efi-vars") }
+    public var consoleLogURL: URL { url.appendingPathComponent("console.log") }
     public var configURL: URL { url.appendingPathComponent("config.json") }
     public var savedStateURL: URL { url.appendingPathComponent("state.vzvmsave") }
 

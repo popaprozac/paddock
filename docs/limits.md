@@ -1,6 +1,7 @@
 # Limits
 
-- macOS allows at most two macOS VMs running at once on one host.
+- macOS allows at most two macOS VMs running at once on one host. Linux VMs don't count toward
+  that, but `serve` keeps at most two slots of any image.
 - A VM costs its Mac more memory than it's configured with: an 8 GB VM's process took 10.7
   to 13.6 GB once warm in testing, as `paddock top` shows. `serve` counts each VM at 1.7 times its
   memory, measured only for 8 GB VMs, when it warns at startup, and warns again while it runs if
@@ -38,3 +39,9 @@
   FileVault, which turns off automatic login, needs a person after every restart (see
   [Setting up Macs](hosts.md)).
 - Apple's macOS license permits macOS VMs for development and testing.
+- A Linux VM has no display, keyboard or pointer. Debian's cloud kernel has no graphics driver, and
+  any USB device stops a Linux VM's saved state from restoring, so screenshots, input, `axtree`,
+  `show` and `view` don't work with Linux VMs.
+- Linux images come only from Debian's genericcloud arm64 builds, or disks in the same format
+  (see [Linux images](golden-images.md#linux-images)). A Debian 13 golden image takes about 2.8 GB
+  of disk, since Debian's tarball holds its disk's zeros and extracting writes them out.

@@ -8,7 +8,8 @@ and a fresh one is ready about 6 s later. Agents get all of that over MCP. paddo
 Virtualization.framework directly, with no Tart or Lume underneath, and it's open source under
 Apache 2.0.
 
-- **Golden images from a YAML file**, built with no one at the keyboard, for macOS 15, 26 and 27.
+- **Golden images from a YAML file**, built with no one at the keyboard, for macOS 15, 26 and 27,
+  and for Linux from Debian 13's cloud images, with no screen.
 - **Warm clones.** APFS copy-on-write clones, restored from a saved state, one per slot.
 - **Commands and git tasks** in the guest, through an agent that listens only on vsock.
 - **A network per VM** that reaches only the host names you allow.
@@ -22,8 +23,8 @@ Apache 2.0.
 
 ## Requirements
 
-- An Apple silicon Mac with macOS 14 or later. Building golden images with `paddock build` needs
-  macOS 27 on the Mac.
+- An Apple silicon Mac with macOS 14 or later. Building macOS golden images with `paddock build`
+  needs macOS 27 on the Mac.
 - Swift 6, from Xcode or the Command Line Tools, and Go.
 - About 50 GB free: the macOS restore image (about 26 GB, which you can delete afterward) and the
   golden image (about 25 GB).

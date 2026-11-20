@@ -9,6 +9,8 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
     /// A pinned macOS, with a person accepting the license and making the privacy grants in the
     /// image, so paddock never writes the privacy database: for teams whose policy asks for that.
     case managed
+    /// Debian with no screen, for commands, files and tasks: Linux CI and agents.
+    case debian
 
     public var text: String {
         switch self {
@@ -86,6 +88,34 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             \(Self.steps())
             # A monitoring agent that reports to its own server, such as osquery or fleetd, goes
             # in as a step; see docs/golden-images.md on agents in cloned images.
+
+            """
+        case .debian:
+            """
+            # A golden image of Debian 13 for Linux CI and agents: commands, files and tasks, with no
+            # screen. Build it with: paddock build <this file>
+            # The VM is named after this file; set name: to choose another.
+
+            # The latest genericcloud arm64 build from cloud.debian.org, checked against Debian's
+            # SHA512SUMS. To pin a build, give the .tar.xz you keep, from: { disk: <path> }, or
+            # one to download with the hash it must match: from: { url: <https URL>, sha512: <hash> }
+            from: { debian: 13 }
+
+            vm: { cpus: 4, memory: 4, disk: 16 }   # in GB
+
+            account:
+              # Commands run as this account, uid 1000. It has no password, and sudo needs none.
+              name: paddock
+
+            # A host folder, read-only in the guest at /mnt/share, and steps that run in order after
+            # setup, each in bash with set -e, as the account or as root.
+            # share: installers
+            # steps:
+            #   - name: Install build tools
+            #     as: root
+            #     run: apt-get update && apt-get install -y build-essential git
+            #   - name: Check that git works for the account
+            #     run: git --version
 
             """
         }

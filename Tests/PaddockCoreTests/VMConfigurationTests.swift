@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Virtualization
 @testable import PaddockCore
 
 @Suite struct VMConfigurationTests {
@@ -9,6 +10,32 @@ import Testing
         #expect(throws: PaddockError.self) {
             try VMConfiguration.make(bundle: bundle, config: VMConfigTests.sample)
         }
+    }
+
+    @Test func needsALinuxVMsEFIStore() throws {
+        let tmp = try TemporaryDirectory()
+        let bundle = VMBundle(url: tmp.url)
+        try Data(count: 1 << 20).write(to: bundle.diskURL)
+        let error = #expect(throws: PaddockError.self) {
+            try VMConfiguration.make(bundle: bundle, config: VMConfigTests.linuxSample)
+        }
+        #expect(error?.message.contains("no EFI variable store") == true)
+    }
+
+    /// A Linux VM's own hardware: generic platform, EFI, entropy and console, with no display,
+    /// keyboard or pointer. (Validating the whole configuration needs the virtualization
+    /// entitlement, which the tests don't have.)
+    @Test func givesALinuxVMNoDisplayOrUSB() throws {
+        let tmp = try TemporaryDirectory()
+        let bundle = VMBundle(url: tmp.url)
+        _ = try VZEFIVariableStore(creatingVariableStoreAt: bundle.efiVariablesURL)
+        let configuration = VZVirtualMachineConfiguration()
+        try VMConfiguration.linux(configuration, bundle: bundle, config: VMConfigTests.linuxSample)
+        #expect(configuration.platform is VZGenericPlatformConfiguration)
+        #expect(configuration.bootLoader is VZEFIBootLoader)
+        #expect(configuration.graphicsDevices.isEmpty && configuration.keyboards.isEmpty && configuration.pointingDevices.isEmpty)
+        #expect(configuration.serialPorts.count == 1 && configuration.entropyDevices.count == 1)
+        #expect(FileManager.default.fileExists(atPath: bundle.consoleLogURL.path))
     }
 
     @Test(arguments: ["", "not-a-mac", "12:34:56:78:9a"])
