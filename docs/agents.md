@@ -55,6 +55,11 @@ about 50 ms, mostly encoding the PNG.
 
 ## Taking a VM over by hand
 
+A person can take a VM over from an agent in two ways: `paddock show` on the Mac whose `serve`
+runs it, and `paddock view` from any Mac, that one included (see
+[From another Mac: paddock view](#from-another-mac-paddock-view)). One person at a time: `show`
+is refused while a VM is viewed, and `view` while it's shown or already viewed.
+
 `paddock show <vm>`, on the Mac whose `serve` runs the VM, moves its window on screen for a
 person: titled, resizable and taking the mouse and keyboard, with the guest's resolution kept
 and the window scaled down only to fit the display, so an agent's coordinates stay right.
@@ -72,7 +77,36 @@ While it's on screen:
 - The VM's process uses more CPU while its window is drawn on screen: about 19% of a core,
   against about 5% off screen, in testing.
 
-Only the Mac running a VM can show it; seeing one from another Mac isn't built yet.
+### From another Mac: paddock view
+
+`paddock view <vm>` opens a window onto a VM you acquired and drives it with your mouse and
+keyboard. On a Mac logged in to a control plane it goes through the control plane, to whichever
+Mac runs the VM; with `--local`, to this Mac's `serve`. The VM's screen comes as video and your
+input goes back the same way, so nothing connects to that Mac or the VM directly. While the
+window is open, input from agents and the CLI is refused, as with `show`; screenshots, the
+accessibility tree and commands go on. Closing the window hands the VM back. Releasing the VM ends
+the view.
+
+- `serve` encodes the guest's screen as HEVC (H.264 on a Mac with no HEVC encoder) straight from
+  its framebuffer, in the hardware encoder, whenever the screen changes: up to 2 Mbit/s and 30
+  frames a second.
+- The viewer acknowledges each frame. `serve` keeps at most about a round trip and a half of frames
+  in flight (4 to 32), so a slow link doesn't fill up with frames. Bitrate and frame rate fall when
+  round trips grow well past the link's usual one for two seconds in a row, and climb back as it
+  recovers. After a big change on screen, quality softens briefly and then sharpens.
+- At each screen refresh the window shows only the newest frame that arrived, so a burst after a
+  stall is one jump, not a fast-forward. If its display fails, it asks for a key frame.
+- Your pointer, keys and scrolling go back stamped with your Mac's clock, and `serve` replays them
+  with those gaps, never with key presses closer than 3 ms (the guest drops faster ones). Command
+  shortcuts go to the VM. Your Mac's own key repeat is dropped: the guest repeats a held key
+  itself. The pointer you see is your Mac's own, since the guest's frames don't include it.
+- `--stats` prints frames a second, bitrate, freezes (gaps of 150 ms or more between frames, which
+  a still screen also has) and display failures every 5 s.
+
+In testing, through the control plane on home Wi-Fi, a full-screen animation ran at 27 frames a
+second on 2.2 to 2.6 Mbit/s with no freezes. Over a hotspot with round trips of 0.2 to 1 s, typing
+stayed usable, but motion froze and caught up about twice a second: that's the link, which a
+different transport didn't fix in testing.
 
 ## Input
 
@@ -80,8 +114,8 @@ Only the Mac running a VM can show it; seeing one from another Mac isn't built y
 keyboard events to the `VZVirtualMachineView` it attaches for screenshots, and the guest gets them
 from its virtual pointer and keyboard, so the guest grants nothing and runs nothing for them. A
 command returns once its events are sent, not once the guest has acted on them; read the screen
-or the accessibility tree to see the result. While a person has the VM on screen with
-`paddock show`, they're refused, with the reason, until the VM is handed back.
+or the accessibility tree to see the result. While a person has the VM, with `paddock show` or
+`paddock view`, they're refused, with the reason, until the VM is handed back.
 
 - `type` and `key` press keys of a US keyboard, so the guest must use a US keyboard layout for
   text to come out as typed, and `type` refuses characters a US keyboard can't type, such as

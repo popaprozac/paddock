@@ -22,12 +22,14 @@
 | `paddock release <vm>` | Hands a VM back to `serve`, which force-stops it, deletes the clone and restores a fresh one. |
 | `paddock show <vm>` | On the Mac whose `serve` runs it, puts a VM that `acquire` handed out on screen for a person, in a window that takes the mouse and keyboard, with the guest's resolution kept (see [Taking a VM over by hand](agents.md#taking-a-vm-over-by-hand)). |
 | `paddock hide <vm>` | Hands a VM that `show` put on screen back to agents: its window goes off screen again. |
+| `paddock view <vm> [--local] [--stats]` | Opens a window onto a VM you acquired, from this Mac or any Mac logged in to the same control plane, and drives it with your mouse and keyboard; the screen comes as video through the control plane, and nothing connects to the VM's Mac. Input from agents and the CLI waits until the window closes, which hands the VM back. `--stats` prints frames a second, bitrate and freezes every 5 s (see [From another Mac: paddock view](agents.md#from-another-mac-paddock-view)). |
 | `paddock top [--local] [--json]` | Shows this Mac's `serve`, or on a Mac logged in to a control plane the whole pool: each Mac's CPU, memory, memory pressure, free disk and thermal state, and each slot's VM, who holds it, how long it has been in its state and what it uses. Redraws every 2 s until Ctrl-C; with `--json`, or when the output isn't a terminal, prints one snapshot (see [Watching with paddock top](#watching-with-paddock-top)). |
 | `paddock mcp` | Serves `serve`'s VMs, or the pool's on a logged-in Mac, to an agent as an MCP server on stdin and stdout (see [Agents over MCP](agents.md#agents-over-mcp)). |
 
 These commands reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its owner can
 open. Each connection carries one request line of JSON and gets one or more answer lines back;
-`exec` streams one per line of output, then the exit status. Only one `serve` can listen at a
+`exec` streams one per line of output, then the exit status; a view also sends its own lines,
+its acknowledgments and input, for as long as it lasts. Only one `serve` can listen at a
 time. On a Mac logged in to a control plane, `acquire`, the commands that take a VM and
 `paddock mcp` use its pool instead; `--local`, or `PADDOCK_LOCAL=1`, keeps them on this Mac. The
 control plane's own commands, with `paddock login`, `logout` and `hosts`, are in
