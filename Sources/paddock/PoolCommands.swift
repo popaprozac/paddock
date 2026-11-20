@@ -28,10 +28,11 @@ struct Login: AsyncParsableCommand {
             throw PaddockError("that's a join token, for adding a Mac with 'paddock serve --join'; to log in, use a token "
                 + "from 'paddock-control login-token'")
         }
-        let home = PaddockHome.fromEnvironment()
+        let folder = ControlIdentity.folder(in: PaddockHome.fromEnvironment(), for: .client)
+        try ControlIdentity.checkCanSave(to: folder)
         let identity = try await ControlEnrollment.join(url, token: parsed, as: .client,
                                                         name: "\(NSUserName()) on \(ControlClient.computerName)")
-        try identity.save(to: ControlIdentity.folder(in: home, for: .client))
+        try identity.save(to: folder)
         let hosts = try await Pool.hosts(identity)
         let online = hosts.filter(\.online).count
         print("Logged in to the control plane at \(url.absoluteString) as \(identity.id); "
@@ -84,13 +85,21 @@ struct Hosts: AsyncParsableCommand {
         let when = DateFormatter()
         when.dateFormat = "MMM d HH:mm"
         let rows = [["NAME", "ID", "STATUS", "IMAGE", "SLOTS", "MACOS", "PADDOCK"]] + hosts.map { host in
-            [host.name, host.id, host.online ? "online since \(host.connected.map(when.string(from:)) ?? "?")" : "offline",
-             host.image ?? "-", Pool.slotSummary(host.slots ?? []), host.macos ?? "-", host.version ?? "-"]
+            var status = host.online ? "online since \(host.connected.map(when.string(from:)) ?? "?")"
+                : host.lastSeen.map { "offline since \(when.string(from: $0))" } ?? (host.stale == true ? "never linked" : "offline")
+            if host.stale == true { status += " (stale)" }
+            return [host.name, host.id, status, host.image ?? "-", Pool.slotSummary(host.slots ?? []), host.macos ?? "-",
+                    host.version ?? "-"]
         }
         let widths = (0..<rows[0].count).map { column in rows.map { $0[column].count }.max() ?? 0 }
         for row in rows {
             print(zip(row, widths).map { $0.padding(toLength: $1, withPad: " ", startingAt: 0) }
                 .joined(separator: "  ").trimmingCharacters(in: .whitespaces))
+        }
+        let stale = hosts.filter { $0.stale == true }.count
+        if stale > 0 {
+            print("\n\(stale) Mac\(stale == 1 ? "" : "s") marked stale: never linked, or not for a long time. If a Mac is gone "
+                + "for good, remove it where the control plane runs: paddock-control remove-host <ID>")
         }
     }
 }

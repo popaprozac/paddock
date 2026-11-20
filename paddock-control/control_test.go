@@ -280,6 +280,50 @@ func TestLinkAuthenticatesTheEnrolledKeyAndKeepsWhatTheHostReports(t *testing.T)
 	c.waitFor(t, "the host to go offline", func(list []hostStatus) bool { return len(list) == 1 && !list[0].Online })
 }
 
+func TestStateKeepsWhenEachMemberWasLastSeen(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := openState(dir)
+	_, publicKey := newHostKey(t)
+	t0 := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	member, err := st.enroll(hostKind, "studio", publicKey, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.seen(hostKind, member.ID, t0)
+	st.seen(hostKind, member.ID, t0.Add(30*time.Second)) // within the minute: not saved again
+	if got := st.member(hostKind, member.ID).LastSeen; !got.Equal(t0) {
+		t.Fatalf("last seen %v", got)
+	}
+	st.seen(hostKind, member.ID, t0.Add(2*time.Minute))
+	reopened, _ := openState(dir)
+	if got := reopened.member(hostKind, member.ID).LastSeen; !got.Equal(t0.Add(2 * time.Minute)) {
+		t.Fatalf("last seen after a restart %v", got)
+	}
+}
+
+func TestHostsMarksOneThatNeverLinkedOrWentQuiet(t *testing.T) {
+	c := newTestControl(t)
+	key, publicKey := newHostKey(t)
+	_, enrolled := c.enroll(t, c.token(t), "studio", publicKey)
+	if host := c.srv.status()[0]; !host.Stale || !host.LastSeen.IsZero() {
+		t.Fatalf("a host that never linked: %+v", host)
+	}
+	conn, _, err := c.link(t, enrolled.Host, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.waitFor(t, "the host online", func(list []hostStatus) bool { return list[0].Online && !list[0].Stale })
+	conn.Close(websocket.StatusNormalClosure, "")
+	c.waitFor(t, "the host to go offline", func(list []hostStatus) bool { return !list[0].Online })
+	if host := c.srv.status()[0]; host.Stale || host.LastSeen.IsZero() {
+		t.Fatalf("a host offline a moment: %+v", host)
+	}
+	c.srv.now = func() time.Time { return time.Now().Add(staleDays*24*time.Hour + time.Hour) }
+	if host := c.srv.status()[0]; !host.Stale {
+		t.Fatalf("a host offline over %d days: %+v", staleDays, host)
+	}
+}
+
 func TestLinkRefusesAnotherKeyOrAnUnknownHost(t *testing.T) {
 	c := newTestControl(t)
 	_, publicKey := newHostKey(t)

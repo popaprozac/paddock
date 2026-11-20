@@ -85,6 +85,24 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: clientFolder.appendingPathComponent("client.key").path))
     }
 
+    /// Checked before joining uses up a token: the folder is made 0700 and left empty, and one that
+    /// can't be written fails, naming it.
+    @Test func checksAnIdentityCanBeSavedBeforeJoining() throws {
+        let tmp = try TemporaryDirectory()
+        let manager = FileManager.default
+        let folder = tmp.url.appendingPathComponent("client")
+        try ControlIdentity.checkCanSave(to: folder)
+        #expect((try manager.attributesOfItem(atPath: folder.path)[.posixPermissions] as? Int) == 0o700)
+        #expect(try manager.contentsOfDirectory(atPath: folder.path).isEmpty)
+        let readOnly = tmp.url.appendingPathComponent("read-only")
+        try manager.createDirectory(at: readOnly, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o500])
+        defer { try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: readOnly.path) }
+        let refused = readOnly.appendingPathComponent("client")
+        let error = #expect(throws: PaddockError.self) { try ControlIdentity.checkCanSave(to: refused) }
+        #expect(error?.message.contains("can't save to \(refused.path)") == true)
+        #expect(error?.message.contains("token still works") == true)
+    }
+
     /// What `serve --join` saved before clients existed, as on a Mac that joined already.
     @Test func readsAHostIdentitySavedBeforeClients() throws {
         let tmp = try TemporaryDirectory()

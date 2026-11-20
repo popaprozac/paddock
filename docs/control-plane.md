@@ -24,14 +24,14 @@ paddock acquire                             # a warm VM from any Mac in the pool
 | --- | --- |
 | `paddock-control run [-listen addr] [-name name] [-state folder]` | Runs the control plane on HTTPS, port 7443 on every address by default, and prints the URLs hosts can use. `-listen` picks one address and port; `-name` adds a name or address the machine is reached by that it can't find itself, such as a MagicDNS name or a load balancer's, and repeats. |
 | `paddock-control join-token [-ttl 1h]` | Makes a token one Mac can join with, for an hour by default and 24 hours at most, and prints the `serve` command to run on that Mac. |
-| `paddock-control hosts [-json]` | Lists every Mac that joined: online or not, its image, its slots (warm, assigned, preparing or empty), macOS and paddock versions; with `-json`, also its address, cores, memory and free disk, what it and each VM use now, and the client holding each VM. |
+| `paddock-control hosts [-json]` | Lists every Mac that joined: online or not, its image, its slots (warm, assigned, preparing or empty), macOS and paddock versions; with `-json`, also its address, cores, memory and free disk, what it and each VM use now, and the client holding each VM. It marks a Mac stale when it's offline and never linked, or hasn't linked for over 7 days, as a re-provisioned or retired Mac leaves behind, and prints the `remove-host` command; it removes nothing itself. |
 | `paddock-control remove-host <ID or name>` | Removes a Mac: its link closes at once, and it can't link again unless it joins with a new token. |
 | `paddock-control login-token [-ttl 1h]` | Makes a token one person's CLI or one agent can log in with, for an hour by default and 24 hours at most, and prints the `paddock login` command to run. |
-| `paddock-control clients [-json]` | Lists every CLI or agent that logged in: its open links, when it was last seen and when it logged in. |
+| `paddock-control clients [-json]` | Lists every CLI or agent that logged in: its open links, when it was last seen and when it logged in. It marks a client stale when it has no links and never linked, as after a login that failed, or hasn't linked for over 7 days, and prints the `remove-client` command; it removes nothing itself. |
 | `paddock-control remove-client <ID or name>` | Removes a client: its links close at once, the VMs it holds are released, and it can't connect again unless it logs in with a new token. |
-| `paddock login <url> --token <token>` | On a person's Mac: logs in to the control plane, so this Mac's VM commands use the pool. Logging in again replaces the login. |
+| `paddock login <url> --token <token>` | On a person's Mac: logs in to the control plane, so this Mac's VM commands use the pool. Logging in again replaces the login. Before it uses the token, it checks it can save the login in `$PADDOCK_HOME/client`, as `serve --join` does for `host`; if it can't, it stops without contacting the control plane, so the token still works. |
 | `paddock logout` | The control plane forgets this client and releases its VMs, and this Mac forgets the login. |
-| `paddock hosts [--json]` | Lists the pool's Macs, as `paddock-control hosts` does, from any logged-in Mac. |
+| `paddock hosts [--json]` | Lists the pool's Macs, as `paddock-control hosts` does, stale marks included, from any logged-in Mac. |
 | `paddock top [--json]` | Shows every Mac in the pool and each slot's VM, who holds it and what it uses, redrawn every 2 s (see [paddock top](commands.md#watching-with-paddock-top)). |
 
 The admin commands reach the running control plane over a Unix socket in its state folder, so
@@ -97,11 +97,12 @@ apart.
 - **Removal is immediate.** `remove-host` deletes the Mac's key and closes its link; its next link
   is refused. `remove-client` and `paddock logout` do the same for a client, and release its VMs.
 - **State.** Everything is in `~/.paddock/control`, or `-state`, which only the control plane's user
-  can read: `ca.key` and `ca.crt`; `state.json`, with each Mac's and client's public key, the
-  hashes of unused tokens and which client holds each VM, until the VM's Mac stops reporting it;
-  `audit.log`, a JSON line for each token made, Mac or client enrolled, refused or removed, link
-  opened, refused or closed, VM handed out or released, and request, with its client, VM and
-  operation, with no secrets in it; and `admin.sock`.
+  can read: `ca.key` and `ca.crt`; `state.json`, with each Mac's and client's public key and when it
+  last linked (one enrolled before the control plane kept that counts as never linked until it
+  links again), the hashes of unused tokens and which client holds each VM, until the VM's Mac
+  stops reporting it; `audit.log`, a JSON line for each token made, Mac or client enrolled, refused
+  or removed, link opened, refused or closed, VM handed out or released, and request, with its
+  client, VM and operation, with no secrets in it; and `admin.sock`.
 - **Everyone logged in sees the pool.** Every client sees every Mac, its slots, what each Mac and
   VM uses, and which client holds each VM, in `paddock hosts` and `paddock top`. The numbers are
   measured on each Mac, never asked of a guest.

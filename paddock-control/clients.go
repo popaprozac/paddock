@@ -50,6 +50,7 @@ func (s *server) clientLink(w http.ResponseWriter, r *http.Request) {
 	}
 	l := &clientLink{conn: conn, remote: r.RemoteAddr, connected: s.now(), lastSeen: s.now()}
 	s.registerClient(client, l)
+	s.markSeen(clientKind, client)
 	defer s.unregisterClient(client, l)
 	s.audit.record(auditEvent{Event: "client-link-opened", Client: client, Name: member.Name, Remote: r.RemoteAddr})
 	ctx, cancel := context.WithCancel(r.Context())
@@ -175,6 +176,7 @@ func (s *server) registerClient(client string, l *clientLink) {
 }
 
 func (s *server) unregisterClient(client string, l *clientLink) {
+	s.markSeen(clientKind, client)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.clientLinks[client], l)
@@ -203,12 +205,13 @@ type clientStatus struct {
 	Enrolled time.Time `json:"enrolled"`
 	Links    int       `json:"links"`
 	LastSeen time.Time `json:"lastSeen,omitzero"`
+	Stale    bool      `json:"stale,omitempty"` // no links, and never linked or not for staleDays
 }
 
 func (s *server) clientStatus() []clientStatus {
 	var list []clientStatus
 	for _, member := range s.state.list(clientKind) {
-		status := clientStatus{ID: member.ID, Name: member.Name, Enrolled: member.Enrolled}
+		status := clientStatus{ID: member.ID, Name: member.Name, Enrolled: member.Enrolled, LastSeen: member.LastSeen}
 		s.mu.Lock()
 		for l := range s.clientLinks[member.ID] {
 			status.Links++
@@ -219,6 +222,7 @@ func (s *server) clientStatus() []clientStatus {
 			l.mu.Unlock()
 		}
 		s.mu.Unlock()
+		status.Stale = status.Links == 0 && stale(status.LastSeen, s.now())
 		list = append(list, status)
 	}
 	return list

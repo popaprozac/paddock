@@ -171,6 +171,7 @@ public enum ControlLink {
         public var name: String
         public var enrolled: Date
         public var online: Bool
+        public var stale: Bool?  // offline, and never linked or not for a long time; nil from older control planes
         public var remote: String?
         public var connected: Date?
         public var lastSeen: Date?
@@ -280,12 +281,33 @@ public struct ControlIdentity: Equatable, Sendable {
 
     /// Saves the identity, replacing any other of its kind, with the folder 0700 and its files 0600.
     public func save(to folder: URL) throws {
-        let manager = FileManager.default
-        try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        try Self.makeFolder(folder)
         let record = Record(url: url, host: kind == .host ? id : nil, client: kind == .client ? id : nil, authority: authority)
         try Self.writePrivate(key.rawRepresentation, to: folder.appendingPathComponent("\(kind.rawValue).key"))
         try Self.writePrivate(try JSONEncoder().encode(record), to: folder.appendingPathComponent("\(kind.rawValue).json"))
+    }
+
+    /// Fails unless `save(to:)` can work in `folder`, saving nothing: for before joining, which uses
+    /// up a one-use token that a failed save would waste. Makes the folder and writes and removes a
+    /// file there, as saving does.
+    public static func checkCanSave(to folder: URL) throws {
+        do {
+            try makeFolder(folder)
+            let probe = folder.appendingPathComponent(".write-check")
+            try writePrivate(Data(), to: probe)
+            try FileManager.default.removeItem(at: probe)
+        } catch {
+            throw PaddockError("can't save to \(folder.path): \(error.localizedDescription) Nothing was sent to the "
+                + "control plane, so the token still works. Check that PADDOCK_HOME is where you mean, and, if it's on "
+                + "an external volume, that the app running paddock may use Removable Volumes in System Settings > "
+                + "Privacy & Security > Files & Folders.")
+        }
+    }
+
+    private static func makeFolder(_ folder: URL) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
     }
 
     /// Writes through a temporary file created 0600, so the data is never readable by others,
