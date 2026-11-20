@@ -58,7 +58,8 @@ about 50 ms, mostly encoding the PNG.
 A person can take a VM over from an agent in two ways: `paddock show` on the Mac whose `serve`
 runs it, and `paddock view` from any Mac, that one included (see
 [From another Mac: paddock view](#from-another-mac-paddock-view)). One person at a time: `show`
-is refused while a VM is viewed, and `view` while it's shown or already viewed.
+is refused while a VM is viewed, and `view` while it's shown or already viewed. `paddock view
+--watch` takes no input, so it goes alongside either.
 
 `paddock show <vm>`, on the Mac whose `serve` runs the VM, moves its window on screen for a
 person: titled, resizable and taking the mouse and keyboard, with the guest's resolution kept
@@ -100,8 +101,23 @@ the view.
   with those gaps, never with key presses closer than 3 ms (the guest drops faster ones). Command
   shortcuts go to the VM. Your Mac's own key repeat is dropped: the guest repeats a held key
   itself. The pointer you see is your Mac's own, since the guest's frames don't include it.
-- `--stats` prints frames a second, bitrate, freezes (gaps of 150 ms or more between frames, which
-  a still screen also has) and display failures every 5 s.
+- `--stats` prints frames a second, bitrate, freezes and display failures every 5 s. A freeze is a
+  gap of 150 ms or more between frames while they were flowing, 10 or more in the second before
+  it; a still screen sends no frames, so its gaps aren't freezes. A gap after motion stops, until
+  the screen next changes, still counts as one.
+
+`paddock view <vm> --watch` only shows the screen, so a person can follow an agent at work: the
+window takes no input, agents and the CLI keep driving, and closing it changes nothing in the VM.
+Up to two people can watch a VM at once, each with their own encoder on its Mac, while it's viewed
+or shown too. As with a view, only the client that acquired the VM can watch it through the
+control plane.
+
+- Nothing is interactive, so the window plays behind, at an even pace: each frame `--buffer` ms
+  (400 by default) after the link brought frames at its quickest in the last 5 s, with the gaps
+  `serve` read them off the screen with. A link that delivers in clumps, or stalls for less than
+  the buffer, plays smoothly instead of freezing and catching up; a longer stall still jumps.
+- If the link gets slower for good, frames show as they land for 5 s, then the window plays the
+  buffer behind the slower link.
 
 In testing, through the control plane on home Wi-Fi, a full-screen animation ran at 27 frames a
 second on 2.2 to 2.6 Mbit/s with no freezes. Over a hotspot with round trips of 0.2 to 1 s, typing
@@ -115,7 +131,8 @@ keyboard events to the `VZVirtualMachineView` it attaches for screenshots, and t
 from its virtual pointer and keyboard, so the guest grants nothing and runs nothing for them. A
 command returns once its events are sent, not once the guest has acted on them; read the screen
 or the accessibility tree to see the result. While a person has the VM, with `paddock show` or
-`paddock view`, they're refused, with the reason, until the VM is handed back.
+`paddock view`, they're refused, with the reason, until the VM is handed back; `paddock view
+--watch` doesn't stop them.
 
 - `type` and `key` press keys of a US keyboard, so the guest must use a US keyboard layout for
   text to come out as typed, and `type` refuses characters a US keyboard can't type, such as

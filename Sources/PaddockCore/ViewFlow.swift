@@ -107,3 +107,58 @@ public struct InputTimeline: Sendable {
         return at
     }
 }
+
+/// A watcher's playout buffer: each frame held `delay` past when the link brought frames at its
+/// quickest in the last few seconds, then shown with the gaps serve read them off the screen with.
+/// A link that delivers in clumps then plays evenly, a stall shorter than `delay` included. Stamps
+/// are serve's clock and arrivals the viewer's, in seconds; they never compare directly, only the gaps.
+public struct Playout<Frame> {
+    public let delay: Double
+    private var held: [(frame: Frame, due: Double)] = []  // oldest first, due times never falling
+    private var transits: [(arrived: Double, transit: Double)] = []  // the last `window` seconds' frames
+    private var lastDue = -Double.infinity
+
+    /// How long the quickest frame sets the pace: a link that gets slower for good is followed after it.
+    public static var window: Double { 5 }
+
+    public init(delay: Double) {
+        self.delay = delay
+    }
+
+    public mutating func add(_ frame: Frame, stamp: Double, arrivedAt now: Double) {
+        transits.removeAll { $0.arrived < now - Self.window }
+        transits.append((now, now - stamp))
+        let lead = transits.map(\.transit).min()!  // how far arrivals run ahead of stamps, at the quickest
+        lastDue = max(stamp + lead + delay, lastDue)
+        held.append((frame, lastDue))
+    }
+
+    /// The frames due by `now`, oldest first: decode them all and show the newest.
+    public mutating func due(at now: Double) -> [Frame] {
+        let count = held.prefix { $0.due <= now }.count
+        defer { held.removeFirst(count) }
+        return held.prefix(count).map(\.frame)
+    }
+}
+
+/// Which gaps between a view's frames are freezes: 150 ms or more while frames were flowing, 10
+/// or more in the second before the gap. A still screen sends no frames, so a gap after a quiet
+/// second is the screen holding still, not the link stalling.
+/// shortcut: a gap after motion stops, until the screen next changes, still counts once; look at
+/// the second after the gap too if that skews the numbers.
+public struct FreezeCount: Sendable {
+    private var recent: [Double] = []  // arrivals, the last within a second of the latest
+
+    public static let gap = 0.15
+    public static let flowing = 10
+
+    public init() {}
+
+    /// Notes a frame arriving `now`, in seconds; returns whether the gap before it was a freeze.
+    public mutating func arrived(at now: Double) -> Bool {
+        defer { recent.append(now) }
+        guard let last = recent.last else { return false }
+        recent.removeAll { $0 <= last - 1 }
+        return now - last >= Self.gap && recent.count >= Self.flowing
+    }
+}

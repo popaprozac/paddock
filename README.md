@@ -14,7 +14,7 @@ Apache 2.0.
 - **A network per VM** that reaches only the host names you allow.
 - **Screen and input from the host:** screenshots, the accessibility tree, mouse and keyboard;
   `paddock show` to take a VM over by hand while agents wait, and `paddock view` to do the same
-  from any Mac, through the control plane.
+  from any Mac, through the control plane, or with `--watch` to follow an agent at work.
 - **A live view**, `paddock top`, of each Mac's CPU, memory and disk, and what each VM uses.
 - **An MCP server**, `paddock mcp`, so an agent can drive a VM.
 - **A pool of Macs.** A control plane hands out VMs from every Mac in it; the Macs only connect

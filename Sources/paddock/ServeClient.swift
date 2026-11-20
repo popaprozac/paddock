@@ -12,6 +12,7 @@ struct ServeRequest: Codable {
     var allow: [String]?  // acquire: the names the VM may reach on the userspace network
     var input: InputAction?  // input: what to send to the VM's pointer or keyboard
     var wait: Bool?  // acquire: false answers busy at once when no warm VM is free, instead of waiting
+    var watch: Bool?  // view: frames only, with no input taken, so agents keep driving the VM
 }
 
 /// One piece of input for a VM, sent with the "input" request. Coordinates are the guest's screen

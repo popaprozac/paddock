@@ -7,13 +7,15 @@ import VideoToolbox
 /// A person's view of a VM, from this Mac or another through the pool: the guest's screen as
 /// HEVC (H.264 where there's no HEVC encoder) down to the viewer, and their pointer and keyboard
 /// back up, as `ViewMessage` lines. serve runs one per view, with agents' input refused, until
-/// the viewer stops sending or the VM goes away. Frames are sent only when the screen changed, at
-/// most a `ViewFlow` window of them unacknowledged.
+/// the viewer stops sending or the VM goes away. A watch is the same with no input taken, so agents
+/// keep the VM. Frames are sent only when the screen changed, at most a `ViewFlow` window of them
+/// unacknowledged.
 final class ViewSession: @unchecked Sendable {
     private let responder: Responder
     private let screen: VMScreen  // main actor only
     private let width: Int
     private let height: Int
+    private let watch: Bool  // frames only: the viewer's input is dropped and the guest's left alone
     private let stillHandedOut: @MainActor () -> Bool
     private let onEnd: @MainActor (String) -> Void
     private let lock = NSLock()
@@ -24,11 +26,12 @@ final class ViewSession: @unchecked Sendable {
     private let inputQueue = DispatchQueue(label: "paddock.view.input")
 
     @MainActor
-    init(screen: VMScreen, responder: Responder, stillHandedOut: @escaping @MainActor () -> Bool,
+    init(screen: VMScreen, responder: Responder, watch: Bool, stillHandedOut: @escaping @MainActor () -> Bool,
          onEnd: @escaping @MainActor (String) -> Void) {
         self.screen = screen
         self.responder = responder
         (width, height) = screen.pixelSize
+        self.watch = watch
         self.stillHandedOut = stillHandedOut
         self.onEnd = onEnd
         flow = ViewFlow(maxKbps: 2000, maxFPS: 30)
@@ -43,8 +46,8 @@ final class ViewSession: @unchecked Sendable {
 
     private var isRunning: Bool { lock.withLock { !ended } }
 
-    /// Ends the view once, from whichever side sees it first: lets go of the guest's pointer and
-    /// keys, tells the viewer why, and hands the VM back to agents.
+    /// Ends the view once, from whichever side sees it first: tells the viewer why and, unless it
+    /// was a watch, lets go of the guest's pointer and keys and hands the VM back to agents.
     private func end(_ reason: String) {
         let first = lock.withLock { () -> Bool in
             defer { ended = true }
@@ -52,9 +55,9 @@ final class ViewSession: @unchecked Sendable {
         }
         guard first else { return }
         responder.finish(ViewMessage.line(ViewMessage.Down(ended: reason)))
-        DispatchQueue.main.async { [screen, onEnd] in
+        DispatchQueue.main.async { [screen, onEnd, watch] in
             MainActor.assumeIsolated {
-                screen.releaseView()
+                if !watch { screen.releaseView() }  // a watcher held nothing, and someone else may be driving
                 onEnd(reason)
             }
         }
@@ -97,7 +100,7 @@ final class ViewSession: @unchecked Sendable {
             }
             guard let data = encoder.encode(surface, keyFrame: keyFrame) else { continue }  // dropped by rate control
             number += 1
-            for part in ViewMessage.parts(of: data.bytes, number: number, key: data.key) {
+            for part in ViewMessage.parts(of: data.bytes, number: number, key: data.key, at: started) {
                 responder.send(ViewMessage.line(ViewMessage.Down(frame: part)))
             }
             lock.withLock {
@@ -145,6 +148,7 @@ final class ViewSession: @unchecked Sendable {
         if up.keyFrame == true {
             lock.withLock { wantKeyFrame = true }
         }
+        guard !watch else { return }
         let stamp = up.at ?? now
         if let pointer = up.pointer {
             apply(at: timeline.time(for: stamp, arrivedAt: now, keyEdge: false)) { screen in
