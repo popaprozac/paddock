@@ -36,4 +36,11 @@ import Testing
             #expect(throws: PaddockError.self) { try KeyInput.stroke(combination) }
         }
     }
+
+    @Test func modifierKeysOnEitherSideHoldTheirModifier() {
+        #expect(KeyInput.modifier(forKeyCode: kVK_Command) == .command && KeyInput.modifier(forKeyCode: kVK_RightCommand) == .command)
+        #expect(KeyInput.modifier(forKeyCode: kVK_RightShift) == .shift && KeyInput.modifier(forKeyCode: kVK_Option) == .option)
+        #expect(KeyInput.modifier(forKeyCode: kVK_RightControl) == .control)
+        #expect(KeyInput.modifier(forKeyCode: kVK_ANSI_A) == nil)
+    }
 }

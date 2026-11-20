@@ -383,6 +383,8 @@ final class WarmPool {
             show(request?.vm, responder)
         case "hide":
             hide(request?.vm, responder)
+        case "view":
+            view(request?.vm, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -486,6 +488,10 @@ final class WarmPool {
             return responder.finish(ServeResponse(error: "a person has '\(current.name)' on this Mac's screen, so input "
                 + "waits until they hand it back, with paddock hide or by closing its window").line)
         }
+        guard !vm.isViewed else {
+            return responder.finish(ServeResponse(error: "a person is driving '\(current.name)' with paddock view, so input "
+                + "waits until they close the view").line)
+        }
         Task {
             do {
                 guard let action = request.input else { throw PaddockError("input needs an action") }
@@ -560,6 +566,10 @@ final class WarmPool {
         guard let (slot, vm, current) = handedOut(name) else {
             return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
         }
+        guard !vm.isViewed else {
+            return responder.finish(ServeResponse(error: "a person is driving '\(current.name)' with paddock view; it goes on "
+                + "screen here once they close the view").line)
+        }
         let wasShown = vm.isShown
         do {
             try vm.show(title: "\(current.name): handed to you; close this window to hand it back") { [weak self] in
@@ -580,6 +590,38 @@ final class WarmPool {
         }
         handBack(slot, vm, current)
         responder.finish(ServeResponse(vm: current.name).line)
+    }
+
+    /// Streams a VM this serve handed out to a person's viewer, here or on another Mac through the
+    /// pool, and takes their pointer and keyboard back (see ViewSession). Screenshots, the
+    /// accessibility tree and commands go on; input from agents and the CLI waits for the view to close.
+    private func view(_ name: String?, _ responder: Responder) {
+        guard let (slot, vm, current) = handedOut(name) else {
+            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
+        }
+        guard !vm.isShown else {
+            return responder.finish(ServeResponse(error: "a person has '\(current.name)' on this Mac's screen; hand it "
+                + "back with paddock hide first").line)
+        }
+        guard !vm.isViewed else {
+            return responder.finish(ServeResponse(error: "someone is already viewing '\(current.name)'").line)
+        }
+        let screen: VMScreen
+        do {
+            screen = try vm.viewScreen()
+        } catch {
+            return responder.finish(ServeResponse(error: error.localizedDescription).line)
+        }
+        vm.isViewed = true
+        print("Slot \(slot.number): '\(current.name)' is being viewed; input from agents waits until the view closes")
+        let session = ViewSession(screen: screen, responder: responder, stillHandedOut: { [weak self, weak vm] in
+            guard let self, let vm else { return false }
+            return self.handedOut(current.name)?.1 === vm
+        }, onEnd: { [weak vm] reason in
+            vm?.isViewed = false
+            print("Slot \(slot.number): the view of '\(current.name)' closed (\(reason)); input from agents goes through")
+        })
+        session.start()
     }
 
     private func handBack(_ slot: Slot, _ vm: HeadlessVM, _ current: VMBundle) {
