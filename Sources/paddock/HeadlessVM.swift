@@ -22,15 +22,16 @@ final class HeadlessVM: NSObject {
 
     /// With `userspaceNetwork`, the VM's network is its own paddock-net process, which stops with
     /// this object, instead of macOS's shared NAT. `sharing` mounts a host folder read-only in the
-    /// guest at /Volumes/My Shared Files.
-    init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false, sharing: URL? = nil) throws {
+    /// guest at /Volumes/My Shared Files. `seed` attaches a disk image read-only, as a Linux build's
+    /// cloud-init seed.
+    init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false, sharing: URL? = nil, seed: URL? = nil) throws {
         lock = try BundleLock(bundle: bundle)
         network = userspaceNetwork
             ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress,
                                    controlPath: bundle.url.appendingPathComponent("net.sock").path)
             : nil
         machine = VZVirtualMachine(configuration: try VMConfiguration.make(
-            bundle: bundle, config: config, sharing: sharing, network: network?.attachment))
+            bundle: bundle, config: config, sharing: sharing, network: network?.attachment, seed: seed))
         self.bundle = bundle
         self.config = config
         super.init()

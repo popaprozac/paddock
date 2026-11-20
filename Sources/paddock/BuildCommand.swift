@@ -34,6 +34,11 @@ struct Build: AsyncParsableCommand {
 
             paddock needs macOS 27 on this Mac and macOS 15 or later in the VM, and for macOS 27 \
             in the VM, Local Network access for the app it runs in, to reach the guest.
+
+            A Linux image file (from: debian, disk or url) needs no password: paddock checks or \
+            downloads the image, makes the VM from its disk, and boots it once with a cloud-init \
+            seed that creates the account, with no password and sudo needing none, installs the \
+            Linux guest agent and sets the image up for VMs nobody watches.
             """)
 
     @Argument(help: "Image file (YAML).")
@@ -43,8 +48,11 @@ struct Build: AsyncParsableCommand {
     var guest: String?
 
     func run() async throws {
-        guard #available(macOS 27, *) else { throw PaddockError("paddock build needs macOS 27 on this Mac") }
         let plan = try ImageBuild.Plan(file: URL(fileURLWithPath: (file as NSString).expandingTildeInPath), guest: guest)
+        if plan.image.from.isLinux {
+            return try await LinuxBuild.run(plan)
+        }
+        guard #available(macOS 27, *) else { throw PaddockError("paddock build needs macOS 27 on this Mac to make macOS images") }
         let version = try await plan.macOSVersion()
         let firstBoot: GuestSupport.FirstBoot
         do {
@@ -87,6 +95,7 @@ enum ImageBuild {
         let name: String
         let image: ImageFile
         let ipsw: String?
+        let disk: URL?  // a Linux disk the file names with from.disk
         let share: URL?
         let guest: URL
 
@@ -101,9 +110,16 @@ enum ImageBuild {
             }
             name = image.name ?? self.file.deletingPathExtension().lastPathComponent
             try BundleName.validate(name)
-            try Provisioning.validate(account: image.account.name)
-            if !image.from.isLinux, let disk = image.vm.disk, disk < 32 {
-                throw PaddockError("\(self.file.lastPathComponent): vm.disk must be at least 32 GB for macOS, not \(disk)")
+            if image.from.isLinux {
+                try LinuxSeed.validate(account: image.account.name)
+                if let disk = image.vm.disk, disk < 4 {
+                    throw PaddockError("\(self.file.lastPathComponent): vm.disk must be at least 4 GB for Linux, not \(disk)")
+                }
+            } else {
+                try Provisioning.validate(account: image.account.name)
+                if let disk = image.vm.disk, disk < 32 {
+                    throw PaddockError("\(self.file.lastPathComponent): vm.disk must be at least 32 GB for macOS, not \(disk)")
+                }
             }
 
             // Paths in the file are relative to its folder.
@@ -114,17 +130,20 @@ enum ImageBuild {
             }
             var isFolder: ObjCBool = false
             switch image.from {
-            case .latest:
-                ipsw = nil
+            case .latest, .debian, .url:
+                (ipsw, disk) = (nil, nil)
             case let .ipsw(path):
                 let url = resolve(path).standardizedFileURL
                 guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), !isFolder.boolValue else {
                     throw PaddockError("\(self.file.lastPathComponent): from.ipsw: no file at \(url.path)")
                 }
-                ipsw = url.path
-            case .debian, .disk, .url:
-                // shortcut: refused until build makes Linux images, so a Linux file never installs macOS.
-                throw PaddockError("\(self.file.lastPathComponent): paddock build can't make Linux images yet")
+                (ipsw, disk) = (url.path, nil)
+            case let .disk(path):
+                let url = resolve(path).standardizedFileURL
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), !isFolder.boolValue else {
+                    throw PaddockError("\(self.file.lastPathComponent): from.disk: no file at \(url.path)")
+                }
+                (ipsw, disk) = (nil, url)
             }
             if let path = image.share {
                 let url = resolve(path).standardizedFileURL
@@ -138,8 +157,9 @@ enum ImageBuild {
             let next = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
                 .deletingLastPathComponent().appendingPathComponent("guest").path
             self.guest = URL(fileURLWithPath: guest ?? next, isDirectory: true).standardizedFileURL
-            guard FileManager.default.fileExists(atPath: self.guest.appendingPathComponent("install.sh").path) else {
-                throw PaddockError("no install.sh in \(self.guest.path); run scripts/build.sh, or name the folder with --guest")
+            let installer = image.from.isLinux ? "linux/paddock-guestd" : "install.sh"
+            guard FileManager.default.fileExists(atPath: self.guest.appendingPathComponent(installer).path) else {
+                throw PaddockError("no \(installer) in \(self.guest.path); run scripts/build.sh, or name the folder with --guest")
             }
             let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
             guard !FileManager.default.fileExists(atPath: bundle.url.path) else {

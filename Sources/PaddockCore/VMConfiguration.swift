@@ -12,8 +12,11 @@ public enum VMConfiguration {
     /// Only `run` uses it, to carry files such as the guest agent into the golden image.
     /// `network` replaces macOS's shared NAT with another attachment, such as a
     /// `UserspaceNetwork`'s; a saved state restores only into the same kind it was saved with.
+    /// `seed` attaches a disk image read-only as a second disk, as `build` does with a Linux
+    /// image's cloud-init seed.
     public static func make(
-        bundle: VMBundle, config: VMConfig, sharing directory: URL? = nil, network attachment: VZNetworkDeviceAttachment? = nil
+        bundle: VMBundle, config: VMConfig, sharing directory: URL? = nil, network attachment: VZNetworkDeviceAttachment? = nil,
+        seed: URL? = nil
     ) throws -> VZVirtualMachineConfiguration {
         let configuration = VZVirtualMachineConfiguration()
         configuration.cpuCount = config.cpuCount
@@ -31,6 +34,14 @@ public enum VMConfiguration {
             throw PaddockError("can't attach \(bundle.diskURL.path): \(error.localizedDescription)")
         }
         configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk)]
+        if let seed {
+            do {
+                let attachment = try VZDiskImageStorageDeviceAttachment(url: seed, readOnly: true)
+                configuration.storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: attachment))
+            } catch {
+                throw PaddockError("can't attach \(seed.path): \(error.localizedDescription)")
+            }
+        }
 
         let network = VZVirtioNetworkDeviceConfiguration()
         network.attachment = attachment ?? VZNATNetworkDeviceAttachment()

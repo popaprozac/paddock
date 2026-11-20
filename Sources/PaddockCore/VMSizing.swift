@@ -28,6 +28,15 @@ public enum VMSizing {
             self.maximumMemorySize = maximumMemorySize
         }
 
+        /// What Virtualization.framework allows on this host, for images with no minimums of their own.
+        public static var host: Limits {
+            Limits(
+                minimumCPUCount: VZVirtualMachineConfiguration.minimumAllowedCPUCount,
+                maximumCPUCount: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+                minimumMemorySize: VZVirtualMachineConfiguration.minimumAllowedMemorySize,
+                maximumMemorySize: VZVirtualMachineConfiguration.maximumAllowedMemorySize)
+        }
+
         /// The image's minimums combined with this host's maximums.
         public static func forImage(_ image: LocalRestoreImage) -> Limits {
             Limits(
