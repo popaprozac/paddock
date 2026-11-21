@@ -124,7 +124,7 @@ final class HeadlessVM: NSObject {
     /// still shows nothing, so attach before a restored VM resumes and redraws.
     func attachScreen() throws {
         guard !config.isLinux else {
-            throw PaddockError("'\(bundle.name)' is a Linux VM, which has no screen or input in paddock; use exec")
+            throw PaddockError("'\(bundle.name)' is a Linux VM, which has no screen or input in paddock; run commands in it instead")
         }
         if screen == nil {
             screen = try VMScreen(machine: machine, display: config.display)

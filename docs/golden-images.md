@@ -275,6 +275,8 @@ steps:
   server, as it is Apple's for a macOS restore image.
 - For `url`, the hash is required: a download that doesn't match it is deleted, and the build
   stops. Images are kept in `~/.paddock/cache/linux`, by name for Debian and by hash for a URL.
+- Debian's cloud image has no `git`, which `paddock task` needs: install it with a step, as the
+  file above does. Without it, `task` stops, saying the guest has no git.
 - `license` and `grants` are for macOS images, and a Linux file with either fails the check. The
   account needs a Linux account name that the image doesn't already have, such as `root` or
   `sshd`. `vm.disk` is at least 4 GB.
