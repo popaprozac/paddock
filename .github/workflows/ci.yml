@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  swift:
+    # paddock calls macOS 27 APIs (guest provisioning), so it builds only with Xcode 27's SDK.
+    # GitHub's runners are VMs themselves and can't start VMs: this runs the unit tests only.
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v7
+      - run: swift --version
+      - run: swift build
+      - run: swift test
+
+  go:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: paddock-control
+            linux: go build ./...  # it also runs on Linux
+          - module: paddock-net
+          - module: paddock-guestd-linux
+            linux: go vet ./...  # the vsock code builds only for Linux
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - run: go vet ./...
+      - run: go test ./...
+      - if: matrix.linux
+        run: GOOS=linux ${{ matrix.linux }}
