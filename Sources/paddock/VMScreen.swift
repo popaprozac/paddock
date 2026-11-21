@@ -16,7 +16,7 @@ import Virtualization
 final class VMScreen: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let view: VZVirtualMachineView
-    private let size: NSSize           // the guest's pixels, one view point each while off screen
+    private var size: NSSize           // the guest's pixels, one view point each while off screen: see `followGuest`
     private let usbWheel: Bool         // the guest's only pointer is VZ's USB one (Linux, Windows): see `scroll`
     private var handBack: (() -> Void)?  // set while a person has the window on screen
     private static var shown: [VMScreen] = []  // on screen now: paddock shows in the Dock while any is
@@ -167,12 +167,35 @@ final class VMScreen: NSObject, NSWindowDelegate {
         return (contents as! IOSurfaceRef)
     }
 
-    /// The guest's screen in pixels.
+    /// The guest's screen in pixels, as of the last `followGuest`.
     var pixelSize: (width: Int, height: Int) { (Int(size.width), Int(size.height)) }
+
+    /// Brings the view to the guest's framebuffer size, so a guest pixel stays one view point: a
+    /// Linux or Windows guest can change its resolution, and VZ letterboxes a smaller framebuffer
+    /// inside the old view instead. A shown window keeps its scale and takes the new shape. The view
+    /// doesn't reconfigure the guest's display (automaticallyReconfiguresDisplay is off), so this
+    /// only follows. Without a frame yet, nothing changes.
+    func followGuest() {
+        guard let surface = (try? frameSurface()) ?? nil else { return }
+        let current = NSSize(width: IOSurfaceGetWidth(surface), height: IOSurfaceGetHeight(surface))
+        guard current.width > 0, current.height > 0, current != size else { return }
+        let scale = isShown ? window.contentRect(forFrameRect: window.frame).width / size.width : 1
+        size = current
+        if isShown {
+            window.contentAspectRatio = size
+            window.setContentSize(NSSize(width: size.width * scale, height: size.height * scale))
+        } else {
+            window.setFrame(NSRect(origin: Self.offScreen, size: size), display: false)
+        }
+        // VZ places the pointer by its framebuffer subview's frame, which otherwise moves only at
+        // the next layout pass: an event sent before then lands by the old, letterboxed layout.
+        view.layoutSubtreeIfNeeded()
+    }
 
     /// A view's pointer: where it is in the guest's pixels and which buttons are down. Moves,
     /// presses, drags and releases follow from the change.
     func pointer(x: Int, y: Int, left: Bool, right: Bool) {
+        followGuest()
         let point = NSPoint(x: Double(min(max(x, 0), Int(size.width) - 1)) + 0.5,
                             y: size.height - Double(min(max(y, 0), Int(size.height) - 1)) - 0.5)
         if left != pointerLeft {
@@ -291,6 +314,7 @@ final class VMScreen: NSObject, NSWindowDelegate {
 
     /// A point in the view for guest screen pixels, which run from the top left.
     private func viewPoint(x: Int, y: Int) throws -> NSPoint {
+        followGuest()
         let size = view.bounds.size
         guard (0..<Int(size.width)).contains(x), (0..<Int(size.height)).contains(y) else {
             throw PaddockError("\(x), \(y) is off the guest's \(Int(size.width))x\(Int(size.height)) screen")

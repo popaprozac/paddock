@@ -13,8 +13,7 @@ import VideoToolbox
 final class ViewSession: @unchecked Sendable {
     private let responder: Responder
     private let screen: VMScreen  // main actor only
-    private let width: Int
-    private let height: Int
+    private var size: (width: Int, height: Int)  // under lock: the guest's, which can change (see sendFrames)
     private let watch: Bool  // frames only: the viewer's input is dropped and the guest's left alone
     private let stillHandedOut: @MainActor () -> Bool
     private let onEnd: @MainActor (String) -> Void
@@ -30,7 +29,8 @@ final class ViewSession: @unchecked Sendable {
          onEnd: @escaping @MainActor (String) -> Void) {
         self.screen = screen
         self.responder = responder
-        (width, height) = screen.pixelSize
+        screen.followGuest()
+        size = screen.pixelSize
         self.watch = watch
         self.stillHandedOut = stillHandedOut
         self.onEnd = onEnd
@@ -65,16 +65,25 @@ final class ViewSession: @unchecked Sendable {
 
     // MARK: Frames
 
-    private func sendFrames() {
+    /// An encoder and change tracker at the guest's size, announced to the viewer with a start
+    /// line, or nil after ending the view when this Mac can't encode.
+    private func begin(width: Int, height: Int) -> (VideoEncoder, FrameCopy)? {
         let (kbps, fps) = lock.withLock { (flow.kbps, flow.fps) }
         guard let encoder = VideoEncoder(hevc: true, width: width, height: height, kbps: kbps, fps: fps)
             ?? VideoEncoder(hevc: false, width: width, height: height, kbps: kbps, fps: fps)
         else {
             responder.send(ViewMessage.line(ViewMessage.Down(error: "this Mac has no hardware video encoder")))
-            return end("this Mac has no hardware video encoder")
+            end("this Mac has no hardware video encoder")
+            return nil
         }
         responder.send(ViewMessage.line(ViewMessage.Down(start: .init(width: width, height: height, codec: encoder.hevc ? "hevc" : "h264"))))
-        let copy = FrameCopy(width: width, height: height)
+        return (encoder, FrameCopy(width: width, height: height))
+    }
+
+    private func sendFrames() {
+        let initial = lock.withLock { size }
+        guard let started = begin(width: initial.width, height: initial.height) else { return }
+        var (encoder, copy) = started
         var number = 0
         var lastFrame = -Double.infinity
         var lastCheck = Self.now
@@ -93,8 +102,20 @@ final class ViewSession: @unchecked Sendable {
                 let here = DispatchQueue.main.sync { MainActor.assumeIsolated { stillHandedOut() } }
                 guard here else { return end("the VM was released") }
             }
-            let surface = DispatchQueue.main.sync { MainActor.assumeIsolated { (try? screen.frameSurface()).flatMap { $0 }.map(Surface.init) } }?.ref
-            guard let surface, copy.changed(surface) || keyFrame else {
+            let (surface, guest) = DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    screen.followGuest()
+                    return ((try? screen.frameSurface()).flatMap { $0 }.map(Surface.init), screen.pixelSize)
+                }
+            }
+            if guest != lock.withLock({ size }) {
+                // The guest changed resolution: start the stream again at its new size, from a key frame.
+                guard let restarted = begin(width: guest.width, height: guest.height) else { return }
+                (encoder, copy) = restarted
+                lock.withLock { size = guest; wantKeyFrame = true }
+                continue
+            }
+            guard let surface = surface?.ref, copy.changed(surface) || keyFrame else {
                 Thread.sleep(forTimeInterval: 1.0 / 240)  // nothing new on screen yet
                 continue
             }
@@ -161,6 +182,7 @@ final class ViewSession: @unchecked Sendable {
             }
         }
         if let scroll = up.scroll, abs(scroll.down) <= 100, abs(scroll.right) <= 100 {
+            let (width, height) = lock.withLock { size }
             let x = min(max(scroll.x, 0), width - 1), y = min(max(scroll.y, 0), height - 1)
             apply(at: timeline.time(for: stamp, arrivedAt: now, keyEdge: false)) { screen in
                 try? screen.scroll(x: x, y: y, down: scroll.down, right: scroll.right)

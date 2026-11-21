@@ -212,7 +212,14 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
     }
 
     private func open(_ start: ViewMessage.Start) {
-        guard window == nil else { return }
+        if let window, let screenView {
+            // The guest changed resolution: keep the window's width, take the new shape.
+            let width = window.contentRect(forFrameRect: window.frame).width
+            window.contentAspectRatio = NSSize(width: start.width, height: start.height)
+            window.setContentSize(NSSize(width: width, height: width * CGFloat(start.height) / CGFloat(start.width)))
+            screenView.guest = (start.width, start.height)
+            return
+        }
         let visible = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1440, height: 900)
         let scale = min(1, visible.width * 0.9 / CGFloat(start.width), visible.height * 0.9 / CGFloat(start.height))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: CGFloat(start.width) * scale, height: CGFloat(start.height) * scale),
@@ -273,7 +280,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
 /// Mac key codes, each stamped with this Mac's clock.
 final class ScreenView: NSView {
     let display = AVSampleBufferDisplayLayer()
-    private let guest: (width: Int, height: Int)
+    var guest: (width: Int, height: Int)  // main thread: the guest's pixels, for mapping the pointer
     private let send: (ViewMessage.Up) -> Void
     private var left = false, right = false
     private var scrolled = (down: 0.0, right: 0.0)
