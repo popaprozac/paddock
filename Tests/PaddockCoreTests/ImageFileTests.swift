@@ -166,6 +166,7 @@ import Yams
             let steps: [String] = switch template {
             case .ci: ["Install the Command Line Tools", "Check that git works for the account"]
             case .debianDesktop: ["Install Xfce"]
+            case .ubuntuDesktop: ["Install GNOME"]
             default: []
             }
             #expect(file.steps.map(\.name) == steps, "\(template)")
@@ -174,6 +175,9 @@ import Yams
         }
         #expect(try decode(ImageTemplate.debian.text).from == .debian(13, .genericcloud))
         #expect(try decode(ImageTemplate.ubuntu.text).from == .ubuntu("26.04"))
+        let gnome = try decode(ImageTemplate.ubuntuDesktop.text)
+        #expect(gnome.from == .ubuntu("26.04") && gnome.desktop && gnome.steps.first?.user == .root)
+        #expect(gnome.steps.first?.run.contains("ubuntu-desktop-minimal ptyxis gnome-text-editor at-spi2-core") == true)
         let desktop = try decode(ImageTemplate.debianDesktop.text)
         #expect(desktop.from == .debian(13, .generic) && desktop.desktop && desktop.steps.first?.user == .root)
         #expect(desktop.steps.first?.run.contains("apt-get install -y --no-install-recommends \\\n") == true)

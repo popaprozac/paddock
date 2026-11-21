@@ -15,6 +15,9 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
     case debianDesktop = "debian-desktop"
     /// Ubuntu LTS with no screen, for commands, files and tasks: Linux CI and agents.
     case ubuntu
+    /// Ubuntu LTS with GNOME, its own desktop, installed by a step: for agents and people that use
+    /// a screen.
+    case ubuntuDesktop = "ubuntu-desktop"
 
     public var text: String {
         switch self {
@@ -188,6 +191,43 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             #     run: apt-get update && apt-get install -y build-essential
             #   - name: Check that the compiler works for the account
             #     run: cc --version
+
+            """
+        case .ubuntuDesktop:
+            """
+            # A golden image of Ubuntu 26.04 LTS with GNOME, for agents and people that use a screen:
+            # screenshots, clicks and keys, paddock show and view, and commands. Build it with:
+            # paddock build <this file>
+            # The VM is named after this file; set name: to choose another.
+
+            # The latest arm64 server cloud image, checked against Ubuntu's SHA256SUMS; its kernel
+            # drives a screen and USB input. An image that already has a desktop works too:
+            # from: { disk: <path> } or from: { url: <https URL>, sha256: <hash> }
+            from: { ubuntu: 26.04 }
+
+            vm: { cpus: 4, memory: 4, disk: 16 }   # in GB
+
+            account:
+              # The desktop is logged in as this account, uid 1000. It has no password, and sudo
+              # needs none.
+              name: paddock
+
+            # The build fails if the image has no working desktop once its steps have run.
+            desktop: true
+
+            # GNOME on GDM, about 300 MB from Ubuntu without its recommended extras, with
+            # at-spi2-core, which paddock axtree reads apps' accessibility trees through. paddock
+            # turns GNOME's idle lock and suspend off. GNOME runs on Wayland, where apps don't know
+            # where their windows are, so frames in the accessibility tree have sizes but no
+            # positions; for full frames, install Xfce and LightDM instead, as debian-desktop does.
+            steps:
+              - name: Install GNOME
+                as: root
+                run: |
+                  apt-get update
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+                    ubuntu-desktop-minimal ptyxis gnome-text-editor at-spi2-core
+                  systemctl set-default graphical.target
 
             """
         }

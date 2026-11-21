@@ -13,6 +13,7 @@ struct Init: ParsableCommand {
             making the privacy grants in the image, so paddock never writes the privacy database. \
             debian: Debian 13 with no screen, for Linux CI and agents. debian-desktop: Debian 13 with \
             Xfce, for agents and people that use its screen. ubuntu: Ubuntu 26.04 LTS with no screen. \
+            ubuntu-desktop: Ubuntu 26.04 LTS with GNOME. \
             Templates are starting points: any file can take any setting. Every macOS template leaves \
             accepting Apple's license to you: uncomment its license line to accept it for the image.
             """)

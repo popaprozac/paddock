@@ -88,9 +88,14 @@ import Yams
         }
         let lines = LinuxSeed.desktopSetupScript.split(separator: "\n")
         #expect(lines.prefix(2) == ["set -e", "[ -L /etc/systemd/system/display-manager.service ] || exit 0"])
-        for path in ["/etc/lightdm/lightdm.conf.d/50-paddock.conf", "/etc/gdm3/daemon.conf", "/etc/gdm/custom.conf",
-                     "/etc/sddm.conf.d/50-paddock.conf", "/etc/X11/xorg.conf.d/10-paddock.conf"] {
+        for path in ["/etc/lightdm/lightdm.conf.d/50-paddock.conf", "/etc/gdm3/daemon.conf", "/etc/gdm3/custom.conf",
+                     "/etc/gdm/custom.conf", "/etc/sddm.conf.d/50-paddock.conf", "/etc/X11/xorg.conf.d/10-paddock.conf",
+                     "/etc/dconf/db/local.d/00-paddock"] {
             #expect(LinuxSeed.desktopSetupScript.contains(path), "\(path)")
+        }
+        // GNOME's keys sit at the line's start in the script, where dconf reads them.
+        for key in ["idle-delay=uint32 0", "lock-enabled=false", "sleep-inactive-ac-type='nothing'", "EOF"] {
+            #expect(lines.contains { $0 == key }, "\(key)")
         }
     }
 
