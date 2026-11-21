@@ -78,7 +78,7 @@ import Yams
     /// The desktop scripts are valid shell; setup does nothing without a display manager, and
     /// sets automatic login in each display manager paddock knows.
     @Test func desktopScriptsAreValidShell() throws {
-        for script in [LinuxSeed.desktopSetupScript, LinuxSeed.desktopDiagnosisScript] {
+        for script in [LinuxSeed.desktopSetupScript, LinuxSeed.desktopDiagnosisScript, LinuxSeed.accessibilityBusCheck] {
             let check = Process()
             check.executableURL = URL(fileURLWithPath: "/bin/sh")
             check.arguments = ["-n", "-c", script]

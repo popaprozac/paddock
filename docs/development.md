@@ -31,7 +31,8 @@ It builds `paddock-control` there as well: the control plane, which knows every 
 `paddock-control/`, and builds for Linux with `GOOS=linux go build`. Run its checks the same way.
 
 Last, it builds the guest agent for Linux guests, `paddock-guestd` from `paddock-guestd-linux/`:
-Go with only the standard library, built static for arm64 Linux. It goes in the `guest` folder's
+Go, built static for arm64 Linux. Its dependencies are godbus (`github.com/godbus/dbus/v5`),
+for AT-SPI's D-Bus, and `golang.org/x/sys`, which godbus needs. It goes in the `guest` folder's
 `linux` folder with its systemd unit (see [Linux guests](guest-agent.md#linux-guests)). Its tests
 run on the Mac with `go test ./...` there, and `GOOS=linux go vet ./...` checks the Linux-only
 vsock code.

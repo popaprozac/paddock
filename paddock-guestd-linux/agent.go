@@ -157,6 +157,8 @@ func (a *agent) handle(line []byte, in io.Reader, out *answerer) response {
 			out.send(output([]byte(line)))
 		}
 		return exited(0)
+	case "axtree":
+		return a.axtree(out)
 	case "clock":
 		if r.Time == nil {
 			return failed("clock needs a time")
@@ -251,6 +253,29 @@ func (a *agent) run(command string, as *account, out *answerer) response {
 	streamLines(r, out)
 	r.Close()
 	return exited(exitStatus(cmd.Wait()))
+}
+
+// axtree sends the accessibility tree of the app in front on the desktop, as indented JSON a line
+// at a time, read by this binary run again as the workload account, whose session the desktop's
+// AT-SPI bus belongs to.
+func (a *agent) axtree(out *answerer) response {
+	self, err := os.Executable()
+	if err != nil {
+		return failed("can't find the agent's own binary: " + err.Error())
+	}
+	cmd := a.command([]string{self, "axtree"}, a.user)
+	var problem bytes.Buffer
+	cmd.Stderr = &problem
+	tree, err := cmd.Output()
+	if err != nil {
+		return failed(string(bytes.TrimSpace(problem.Bytes())))
+	}
+	var lines []response
+	for _, line := range bytes.Split(bytes.TrimRight(tree, "\n"), []byte("\n")) {
+		lines = append(lines, output(line))
+	}
+	out.send(lines...)
+	return exited(0)
 }
 
 // streamLines sends what `r` gives as lines, splitting any over outputChunk, and sends all the

@@ -27,12 +27,12 @@ public enum SessionHelper {
         return loginwindowShowing ? [] : ["desktop"]
     }
 
-    /// Asks the helper over `fd` for the focused app's accessibility tree, passing each line of
-    /// its JSON to `output`.
+    /// Asks the helper over `fd`, or a Linux guest's agent, which answers the same request, for
+    /// the focused app's accessibility tree, passing each line of its JSON to `output`.
     public static func askForTree(over fd: Int32, output: (String) -> Void) throws {
         let status = try GuestAgent.askStreaming(GuestAgent.Request(op: "axtree"), over: fd, output: output)
         guard status == 0 else {
-            throw PaddockError("paddock-session ended the tree with status \(status)")
+            throw PaddockError("the guest ended the tree with status \(status)")
         }
     }
 }

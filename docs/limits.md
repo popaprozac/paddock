@@ -51,7 +51,9 @@
   kernel has no graphics, USB controller or HID driver, and with USB devices attached its saved
   state doesn't restore, so a VM of such an image has none, and screenshots, input, `show` and
   `view` don't work with it.
-- `axtree` works only in macOS VMs; Linux's accessibility tree, AT-SPI, isn't read.
+- `axtree` reads a Linux desktop's tree through AT-SPI, tested with GTK apps under X11. Apps
+  that publish only when accessibility is turned on, as Qt, Firefox and Chromium do, and Wayland
+  desktops, where AT-SPI gives no screen positions, haven't been tested.
 - Linux images come only from Debian's genericcloud and generic arm64 builds, or disks in the same format
   (see [Linux images](golden-images.md#linux-images)). A Debian 13 golden image takes about 2.8 GB
   of disk, since Debian's tarball holds its disk's zeros and extracting writes them out.

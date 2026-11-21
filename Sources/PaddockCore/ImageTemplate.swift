@@ -145,7 +145,8 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             # The build fails if the image has no working desktop once its steps have run.
             desktop: true
 
-            # Any desktop works. This is a small Xfce, about 100 MB from Debian. A desktop that locks
+            # Any desktop works. This is a small Xfce, about 100 MB from Debian, with at-spi2-core,
+            # which paddock axtree reads apps' accessibility trees through. A desktop that locks
             # itself when idle needs its lock turned off in a step: the account has no password.
             steps:
               - name: Install Xfce
@@ -154,7 +155,7 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
                   apt-get update
                   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
                     xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \\
-                    xserver-xorg-input-libinput dbus-x11
+                    xserver-xorg-input-libinput dbus-x11 at-spi2-core
                   systemctl set-default graphical.target
 
             """
