@@ -13,6 +13,8 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
     case debian
     /// Debian with a desktop, Xfce, installed by a step: for agents and people that use a screen.
     case debianDesktop = "debian-desktop"
+    /// Ubuntu LTS with no screen, for commands, files and tasks: Linux CI and agents.
+    case ubuntu
 
     public var text: String {
         switch self {
@@ -157,6 +159,35 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
                     xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \\
                     xserver-xorg-input-libinput dbus-x11 at-spi2-core
                   systemctl set-default graphical.target
+
+            """
+        case .ubuntu:
+            """
+            # A golden image of Ubuntu 26.04 LTS for Linux CI and agents: commands, files and tasks,
+            # with no screen. Build it with: paddock build <this file>
+            # The VM is named after this file; set name: to choose another.
+
+            # The latest arm64 server cloud image from cloud-images.ubuntu.com, a qcow2 disk, checked
+            # against Ubuntu's SHA256SUMS. To pin a build, give the .img you keep, from: { disk: <path> },
+            # or one to download with the hash it must match: from: { url: <https URL>, sha256: <hash> }
+            from: { ubuntu: 26.04 }
+
+            vm: { cpus: 4, memory: 4, disk: 16 }   # in GB
+
+            account:
+              # Commands run as this account, uid 1000. It has no password, and sudo needs none.
+              name: paddock
+
+            # A host folder, read-only in the guest at /mnt/share, and steps that run in order after
+            # setup, each in bash with set -e, as the account or as root. Ubuntu's image has git,
+            # which paddock task needs, already.
+            # share: installers
+            # steps:
+            #   - name: Install build tools
+            #     as: root
+            #     run: apt-get update && apt-get install -y build-essential
+            #   - name: Check that the compiler works for the account
+            #     run: cc --version
 
             """
         }

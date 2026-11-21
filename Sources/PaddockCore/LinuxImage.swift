@@ -3,8 +3,8 @@ import Darwin
 import Foundation
 import Virtualization
 
-/// Linux disk images for `paddock build`: Debian's cloud builds, fetched and checked, or a disk
-/// you keep; and the Linux VM bundle made from one.
+/// Linux disk images for `paddock build`: Debian's and Ubuntu's cloud builds, fetched and checked,
+/// or a disk you keep; and the Linux VM bundle made from one.
 public enum LinuxImage {
     /// The Debian releases paddock builds from, by number, with the codename Debian files them under.
     public static let debianCodenames = [13: "trixie"]
@@ -35,6 +35,25 @@ public enum LinuxImage {
         }
     }
 
+    /// The Ubuntu releases paddock builds from, by number, with the codename Ubuntu files them under.
+    public static let ubuntuCodenames = ["26.04": "resolute"]
+
+    /// The latest arm64 server cloud image of an Ubuntu release, a qcow2 disk, and the SHA256SUMS
+    /// listing it.
+    public struct Ubuntu: Equatable, Sendable {
+        public let release: String
+        public let url: URL
+        public let sumsURL: URL
+
+        public init?(release: String) {
+            guard let codename = LinuxImage.ubuntuCodenames[release] else { return nil }
+            self.release = release
+            let folder = URL(string: "https://cloud-images.ubuntu.com/releases/\(codename)/release/")!
+            url = folder.appendingPathComponent("ubuntu-\(release)-server-cloudimg-arm64.img")
+            sumsURL = folder.appendingPathComponent("SHA256SUMS")
+        }
+    }
+
     /// The hash a downloaded image must match.
     public struct Checksum: Equatable, Sendable {
         public enum Algorithm: String, Sendable {
@@ -62,15 +81,13 @@ public enum LinuxImage {
         [".tar.xz", ".raw", ".qcow2", ".img"].contains { name.hasSuffix($0) }
     }
 
-    /// The SHA-512 a SHA512SUMS file lists for `file`, in lowercase hex; nil if it lists none.
-    public static func sha512(of file: String, inSums text: String) -> String? {
+    /// The hash a SHA512SUMS or SHA256SUMS file lists for `file`; nil if it lists none.
+    public static func checksum(of file: String, inSums text: String, _ algorithm: Checksum.Algorithm) -> Checksum? {
         for line in text.split(separator: "\n") {
             let fields = line.split(separator: " ", omittingEmptySubsequences: true)
             // sha512sum's binary mode marks the name with a leading '*'.
             guard fields.count == 2, fields[1] == file || fields[1] == "*" + file else { continue }
-            let hash = fields[0].lowercased()
-            guard hash.count == 128, hash.allSatisfy(\.isHexDigit) else { return nil }
-            return hash
+            return Checksum(algorithm, String(fields[0]))
         }
         return nil
     }
@@ -95,23 +112,24 @@ public enum LinuxImage {
         }
     }
 
-    /// The latest build of `debian`, from the cache in `folder` if it is still Debian's latest,
-    /// else downloaded there. Either way it is checked against Debian's SHA512SUMS, fetched over
-    /// HTTPS each time, since the latest build changes. `progress` gets bytes written and expected.
-    public static func fetch(
-        _ debian: Debian, into folder: URL, progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    /// The latest build at `url`, such as Debian's or Ubuntu's, from the cache in `folder` if it is
+    /// still the one `sums` lists, else downloaded there. Either way it is checked against `sums`,
+    /// fetched over HTTPS each time, since the latest build changes. `progress` gets bytes written
+    /// and expected.
+    public static func fetchLatest(
+        _ url: URL, listedIn sums: URL, _ algorithm: Checksum.Algorithm, into folder: URL,
+        progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
     ) async throws -> URL {
-        let (data, response) = try await URLSession.shared.data(from: debian.sumsURL)
+        let (data, response) = try await URLSession.shared.data(from: sums)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw PaddockError("can't fetch \(debian.sumsURL.absoluteString): HTTP \(http.statusCode)")
+            throw PaddockError("can't fetch \(sums.absoluteString): HTTP \(http.statusCode)")
         }
-        guard let hex = sha512(of: debian.fileName, inSums: String(decoding: data, as: UTF8.self)),
-              let expected = Checksum(.sha512, hex) else {
-            throw PaddockError("\(debian.sumsURL.absoluteString) doesn't list \(debian.fileName)")
+        let file = url.lastPathComponent
+        guard let expected = checksum(of: file, inSums: String(decoding: data, as: UTF8.self), algorithm) else {
+            throw PaddockError("\(sums.absoluteString) doesn't list \(file)")
         }
         // Kept by name: the latest build replaces the one before it.
-        return try await fetch(debian.url, matching: expected, to: folder.appendingPathComponent(debian.fileName),
-                               progress: progress)
+        return try await fetch(url, matching: expected, to: folder.appendingPathComponent(file), progress: progress)
     }
 
     /// The image at `url`, which must match `checksum`, from the cache in `folder` or downloaded
