@@ -53,9 +53,11 @@
   kernel has no graphics, USB controller or HID driver, and with USB devices attached its saved
   state doesn't restore, so a VM of such an image has none, and screenshots, input, `show` and
   `view` don't work with it.
-- `axtree` reads a Linux desktop's tree through AT-SPI, tested with GTK apps under X11. Apps
-  that publish only when accessibility is turned on, as Qt, Firefox and Chromium do, and Wayland
-  desktops, where AT-SPI gives no screen positions, haven't been tested.
-- Linux images come only from Debian's genericcloud and generic arm64 builds, or disks in the same format
-  (see [Linux images](golden-images.md#linux-images)). A Debian 13 golden image takes about 2.8 GB
-  of disk, since Debian's tarball holds its disk's zeros and extracting writes them out.
+- `axtree` reads a Linux desktop's tree through AT-SPI, tested with GTK apps under X11 and GTK 4
+  apps under GNOME's Wayland. Under Wayland its frames have sizes but no screen positions: every
+  one starts at 0, 0. Apps that publish only when accessibility is turned on, as Qt, Firefox and
+  Chromium do, haven't been tested.
+- Linux images come only from Debian's genericcloud and generic arm64 builds, Ubuntu's arm64
+  server cloud image, or disks in the same formats (see [Linux images](golden-images.md#linux-images)).
+  A Debian 13 golden image takes about 2.8 GB of disk, since Debian's tarball holds its disk's
+  zeros and extracting writes them out, and an Ubuntu 26.04 one about 2.6 GB.

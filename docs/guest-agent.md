@@ -86,10 +86,12 @@ systemd runs the agent as root and starts it again if it exits. It logs to the j
 - `{"op":"axtree"}` answers the accessibility tree of the app in front on the desktop, as
   paddock-session does on macOS: `{"output":"..."}` for each line of it as JSON, then
   `{"exit":0}`. The agent runs itself again as the account and reads its desktop's AT-SPI bus,
-  `/run/user/1000/at-spi/bus_0`, which needs `at-spi2-core` in the image. The app in front is the
-  one with an active window at least partly on screen. Each element has its role, in AT-SPI's
-  names such as `push button`, its name as title, its text or number as value, its description
-  and identifier when it has them, its frame as x, y, width and height in screen pixels from the
-  top left, which it leaves out for an element off screen, whether it is enabled and focused, and
-  its children, with macOS's limits. A call an app takes over 0.5 s to answer is left out.
+  `/run/user/1000/at-spi/bus_0` (`bus` on Ubuntu), which needs `at-spi2-core` in the image. The
+  app in front is the one with an active window at least partly on screen. Each element has its
+  role, in AT-SPI's names such as `push button`, its name as title, its text or number as value,
+  its description and identifier when it has them, its frame as x, y, width and height in screen
+  pixels from the top left, which it leaves out for an element off screen, whether it is enabled
+  and focused, and its children, with macOS's limits. A call an app takes over 0.5 s to answer is
+  left out. Under Wayland, apps put every frame at 0, 0 with the right size, since they don't know
+  where their windows are.
 - It doesn't copy per-host preferences, which are macOS's.

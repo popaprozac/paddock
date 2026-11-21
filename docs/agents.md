@@ -25,8 +25,9 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 A Linux VM without a desktop has no screen: `acquire` says so, `run_command` works in it, and the
 screen and input tools refuse it. A desktop Linux VM takes the screen and input tools and
 `accessibility_tree` as a macOS VM does, with AT-SPI's role names, such as `push button`, in its
-tree, and `cmd` reaches it as the Super key, so its shortcuts use `ctrl` (see
-[Desktop Linux](golden-images.md#desktop-linux)).
+tree, and `cmd` reaches it as the Super key, so its shortcuts use `ctrl`. On a Wayland desktop,
+such as Ubuntu's GNOME, the tree's frames have sizes but no positions, so take where to click from
+the screenshot (see [Desktop Linux](golden-images.md#desktop-linux)).
 
 - A session holds one VM at a time. When the client closes stdin, or stops the server with
   SIGINT, SIGTERM or SIGHUP, as a dropped ssh connection does, the server releases the VM it
