@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -187,5 +188,78 @@ func TestIPv4NameserversLeavesOutLoopbackAndIPv6(t *testing.T) {
 	got := ipv4Nameservers("# from DHCP\nnameserver 127.0.0.53\nnameserver 192.168.64.1\nnameserver fe80::1\nsearch .\nnameserver\n")
 	if len(got) != 1 || got[0] != "192.168.64.1" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestHasKeyboardAndPointerNeedsBoth(t *testing.T) {
+	keyboard := "I: Bus=0003\nN: Name=\"Apple Inc. Virtual USB Keyboard\"\nH: Handlers=sysrq kbd leds event1 \n\n"
+	pointer := "I: Bus=0003\nN: Name=\"Apple Inc. Virtual USB Digitizer\"\nH: Handlers=mouse0 event2 js0\n\n"
+	power := "N: Name=\"Power Button\"\nH: Handlers=kbd event0\n\n"
+	if !hasKeyboardAndPointer(power + keyboard + pointer) {
+		t.Fatal("missed the keyboard and pointer")
+	}
+	if hasKeyboardAndPointer(keyboard) || hasKeyboardAndPointer(pointer) || hasKeyboardAndPointer("") {
+		t.Fatal("took one device for both")
+	}
+}
+
+func writeFiles(t *testing.T, files map[string]string) string {
+	dir := t.TempDir()
+	for name, text := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// Only an active, unlocked X11 or Wayland session of the account counts, as logind writes them.
+func TestGraphicalSessionIsTheAccountsActiveUnlockedOne(t *testing.T) {
+	x11 := "UID=1000\nUSER=paddock\nACTIVE=1\nSTATE=active\nTYPE=x11\nCLASS=user\nSEAT=seat0\nMONOTONIC=2258203\n"
+	manager := "UID=1000\nSTATE=active\nTYPE=unspecified\nCLASS=manager\nMONOTONIC=2000000\n"
+	tty := "UID=1000\nSTATE=active\nTYPE=tty\nCLASS=user\nMONOTONIC=1500000\n"
+	dir := writeFiles(t, map[string]string{"2": manager, "3": tty, "1": x11, "1.ref": ""})
+	if started, ok := graphicalSession(dir, "1000"); !ok || started != 2.258203 {
+		t.Fatalf("got %v, %v", started, ok)
+	}
+	for name, text := range map[string]string{
+		"locked":  strings.Replace(x11, "CLASS=user", "CLASS=user\nLOCKED_HINT=1", 1),
+		"closing": strings.Replace(x11, "STATE=active", "STATE=closing", 1),
+		"another": strings.Replace(x11, "UID=1000", "UID=1001", 1),
+		"greeter": strings.Replace(x11, "CLASS=user", "CLASS=greeter", 1),
+	} {
+		if _, ok := graphicalSession(writeFiles(t, map[string]string{"1": text}), "1000"); ok {
+			t.Errorf("took a %s session", name)
+		}
+	}
+	if _, ok := graphicalSession(writeFiles(t, map[string]string{"1": strings.Replace(x11, "x11", "wayland", 1)}), "1000"); !ok {
+		t.Error("missed a Wayland session")
+	}
+}
+
+func TestShellRunsOnlyAsTheAccount(t *testing.T) {
+	proc := writeFiles(t, map[string]string{
+		"757/comm": "xfdesktop\n", "757/status": "Name:\txfdesktop\nUid:\t1000\t1000\t1000\t1000\n",
+		"1/comm": "systemd\n", "1/status": "Uid:\t0\t0\t0\t0\n",
+		"self/comm": "xfdesktop\n",
+	})
+	if !shellRuns(proc, "1000") {
+		t.Fatal("missed xfdesktop")
+	}
+	if shellRuns(proc, "1001") {
+		t.Fatal("took another user's shell")
+	}
+	if shellRuns(writeFiles(t, map[string]string{"9/comm": "xterm\n", "9/status": "Uid:\t1000\n"}), "1000") {
+		t.Fatal("took xterm for a desktop")
+	}
+}
+
+func TestSettledWaitsFromTheSessionsStart(t *testing.T) {
+	if settled("6.9 20.1\n", 2.0) || !settled("7.0 20.1\n", 2.0) || settled("", 0) {
+		t.Fatal("wrong settle time")
 	}
 }

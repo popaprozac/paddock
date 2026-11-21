@@ -7,12 +7,17 @@ import (
 )
 
 // state is what the host waits for before it hands the guest out: "network" once an interface
-// other than loopback has an IPv4 address and the guest an IPv4 DNS server.
+// other than loopback has an IPv4 address and the guest an IPv4 DNS server, and "desktop" once
+// the account's desktop is up (see desktop).
 func state() []string {
+	var lines []string
 	if hasIPv4Address() && len(ipv4Nameservers(resolvers())) > 0 {
-		return []string{"network"}
+		lines = append(lines, "network")
 	}
-	return nil
+	if desktop() {
+		lines = append(lines, "desktop")
+	}
+	return lines
 }
 
 func hasIPv4Address() bool {

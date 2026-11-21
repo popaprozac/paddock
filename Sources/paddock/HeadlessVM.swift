@@ -259,12 +259,15 @@ final class HeadlessVM: NSObject {
 
     /// Waits until paddock-session says loginwindow has finished the login, so the desktop takes
     /// clicks and keys, or returns false after `timeout`. Checks every 100 ms. A helper before
-    /// 0.2.0 can't say, so for one the wait ends at once, as it did before.
+    /// 0.2.0 can't say, so for one the wait ends at once, as it did before. In a Linux VM, the
+    /// guest agent says so instead, once the account's desktop is up and drawn.
     func desktopReady(within timeout: Duration) async throws -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if let failure { throw failure }
-            if let state = await state(at: SessionHelper.port, name: "paddock-session") {
+            if config.isLinux {
+                if await state()?.contains("desktop") == true { return true }
+            } else if let state = await state(at: SessionHelper.port, name: "paddock-session") {
                 if state.contains("desktop") { return true }
             } else if withoutState.contains(SessionHelper.port) {
                 return true
