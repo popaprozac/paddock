@@ -280,7 +280,8 @@ final class WarmPool {
         guard let config = try? source.readConfig() else { return }
         let memory = config.memorySize
         let total = ProcessInfo.processInfo.physicalMemory
-        let wanted = UInt64(slots.count) * VMSizing.hostMemory(for: memory, linux: config.isLinux)
+        let wanted = UInt64(slots.count)
+            * VMSizing.hostMemory(for: memory, linux: config.isLinux, desktop: config.desktop == true)
         // shortcut: 10 GB for macOS and its apps, from the Studio, whose pressure reached warn with two
         // 8 GB VMs on 36 GB; tune once hosts run other workloads.
         guard wanted + (10 << 30) > total else { return }

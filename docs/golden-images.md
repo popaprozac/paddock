@@ -245,17 +245,19 @@ the server expire hosts that stop reporting.
 ## Linux images
 
 `paddock build` makes a Linux golden image from an image file as well, with no password to type
-and on any macOS paddock runs on. It builds Debian's arm64 cloud images, tested with Debian 13.
+and on any macOS paddock runs on. It builds Debian's and Ubuntu's arm64 cloud images, tested with
+Debian 13 and Ubuntu 26.04 LTS.
 A Linux VM has no screen unless its image has a desktop (see [Desktop Linux](#desktop-linux)):
 commands, files and `serve`'s warm slots work, and screenshots, input, `show` and `view` refuse a
 VM with no screen (see [VM bundle format](commands.md#vm-bundle-format)).
-`paddock init debian.yaml --template debian` writes a file to start from, and
-`--template debian-desktop` one with a desktop:
+`paddock init debian.yaml --template debian` writes a file to start from and
+`--template debian-desktop` one with Xfce; `--template ubuntu` and `--template ubuntu-desktop`
+do the same for Ubuntu, with GNOME:
 
 ```yaml
 # debian.yaml
-from: { debian: 13 }                 # or { debian: 13, variant: generic }, { disk: <path> }
-                                     # or { url: <https URL>, sha512: <hash> }
+from: { debian: 13 }                 # or { debian: 13, variant: generic }, { ubuntu: 26.04 },
+                                     # { disk: <path> } or { url: <https URL>, sha512: <hash> }
 vm: { cpus: 4, memory: 4, disk: 16 } # in GB; these are the defaults
 account: { name: paddock }           # full-name is optional
 share: installers                    # optional: a host folder, read-only in the guest at /mnt/share
@@ -271,17 +273,26 @@ steps:
 | --- | --- | --- |
 | `{ debian: 13 }` | Debian 13's latest genericcloud arm64 build, from cloud.debian.org; its kernel drives only what a cloud VM needs | No: Debian publishes new builds |
 | `{ debian: 13, variant: generic }` | Debian 13's latest generic arm64 build, whose full kernel also drives a screen and USB input, for a desktop | No |
-| `{ disk: <path> }` | A file you keep: a `.tar.xz` holding `disk.raw`, as Debian publishes them, or a raw disk | Yes |
-| `{ url: <https URL>, sha256: <hash> }`, or `sha512:` | A file to download, a `.tar.xz` or `.raw` as its URL's name says | Yes, by its hash |
+| `{ ubuntu: 26.04 }` | Ubuntu 26.04 LTS's latest arm64 server cloud image, a qcow2 disk, from cloud-images.ubuntu.com; its kernel drives a screen and USB input too | No: Ubuntu publishes new builds |
+| `{ disk: <path> }` | A file you keep: a `.tar.xz` holding `disk.raw`, as Debian publishes them, a qcow2 disk, as Ubuntu does, or a raw disk | Yes |
+| `{ url: <https URL>, sha256: <hash> }`, or `sha512:` | A file to download, a `.tar.xz`, `.raw`, `.qcow2` or `.img` as its URL's name says | Yes, by its hash |
 
-- For `debian`, each build fetches Debian's `SHA512SUMS` over HTTPS and checks the image against
-  it, downloading again only when the cached one no longer matches. Debian also signs
-  `SHA512SUMS` with GPG, and paddock doesn't check that signature, so the trust is Debian's HTTPS
-  server, as it is Apple's for a macOS restore image.
+- For `debian` and `ubuntu`, each build fetches the distribution's list of hashes, Debian's
+  `SHA512SUMS` or Ubuntu's `SHA256SUMS`, over HTTPS and checks the image against it, downloading
+  again only when the cached one no longer matches. Both also sign the list with GPG, and paddock
+  doesn't check that signature, so the trust is their HTTPS servers, as it is Apple's for a macOS
+  restore image.
 - For `url`, the hash is required: a download that doesn't match it is deleted, and the build
-  stops. Images are kept in `~/.paddock/cache/linux`, by name for Debian and by hash for a URL.
+  stops. Images are kept in `~/.paddock/cache/linux`, by name for Debian and Ubuntu and by hash
+  for a URL.
+- paddock reads a qcow2 disk itself, as it makes the VM, into a sparse raw disk, which takes a few
+  seconds: Ubuntu 26.04's took 4.4 s. It reads qcow2 versions 2 and 3 with plain or
+  zlib-compressed data, as cloud images are. One that needs a backing file, is encrypted, or uses
+  an external data file, extended L2 entries or zstd fails with the reason: convert it to a raw
+  disk first. A `.img` can be either qcow2 or raw; paddock tells them apart by what the file
+  holds.
 - Debian's cloud image has no `git`, which `paddock task` needs: install it with a step, as the
-  file above does. Without it, `task` stops, saying the guest has no git.
+  file above does. Without it, `task` stops, saying the guest has no git. Ubuntu's has it.
 - `license` and `grants` are for macOS images, and a Linux file with either fails the check. The
   account needs a Linux account name that the image doesn't already have, such as `root` or
   `sshd`. `vm.disk` is at least 4 GB.
@@ -289,7 +300,7 @@ steps:
 `build` then:
 
 1. Makes the VM from the image's disk, grown to `vm.disk`. Debian 13's disk takes about 2.8 GB of
-   the golden image's sparse disk.
+   the golden image's sparse disk, and Ubuntu 26.04's about 2.6 GB.
 2. Boots it once with a cloud-init seed, a small disk attached read-only, which creates the
    account, sets the image up as below and installs the guest agent from the `guest` folder's
    `linux` folder. paddock sets the guest's clock from this Mac's, since the image boots at 1970
@@ -327,6 +338,9 @@ Every clone then has:
   time.apple.com, which paddock-net answers on the userspace network, and `serve` sets each warm
   VM's clock from this Mac's, since a restored guest resumes at the time its state was saved.
 - ssh masked: nothing reaches the guest over the network.
+- No automatic updates, as in macOS images: apt's `apt-daily` and `apt-daily-upgrade` timers are
+  masked at the first boot, so neither the build's steps nor a clone meet apt updating or
+  upgrading packages by itself and holding its lock. Update packages in the image's steps.
 - The kernel and systemd writing to the guest's console, and the console logging the account in
   without a password. Only paddock on this Mac reaches the console.
 
@@ -339,9 +353,9 @@ app's tree through AT-SPI, which needs `at-spi2-core` in the image (see
 [Linux guests](guest-agent.md#linux-guests)).
 
 The desktop comes from the image: one you point `from:` at that has one, or one your steps
-install. Its kernel must drive a virtio-gpu screen and USB input. Debian's genericcloud kernel
-drives neither, so build from its generic variant; the `debian-desktop` template does, and
-installs a small Xfce, about 100 MB from Debian, with AT-SPI:
+install. Its kernel must drive a virtio-gpu screen and USB input. Ubuntu's does. Debian's
+genericcloud kernel drives neither, so build from its generic variant; the `debian-desktop`
+template does, and installs a small Xfce, about 100 MB from Debian, with AT-SPI:
 
 ```yaml
 from: { debian: 13, variant: generic }
@@ -358,11 +372,17 @@ steps:
       systemctl set-default graphical.target
 ```
 
+The `ubuntu-desktop` template does the same with `from: { ubuntu: 26.04 }` and GNOME on GDM:
+`ubuntu-desktop-minimal`, `ptyxis`, `gnome-text-editor` and `at-spi2-core`, about 300 MB from
+Ubuntu without its recommended extras.
+
 paddock does what only it can, since it makes the account at the first boot:
 
 - After the steps, if a display manager is enabled, it sets it to log the account in
   automatically: LightDM, GDM or SDDM. For another, the build says to do that in a step. It also
-  turns off X's screen blanking, since a blank screen screenshots as black.
+  turns off X's screen blanking, since a blank screen screenshots as black, and GNOME's idle
+  blanking, lock and suspend, with system defaults in dconf, since the account has no password to
+  unlock it with. GNOME without `dconf-cli` gets a note to install it in a step.
 - After sealing, it boots the image once more with a screen and USB input, and waits for the
   guest agent to say the desktop is up: the screen's driver is loaded, the keyboard and pointer
   are there, the account has an active, unlocked graphical session, and the desktop has drawn (see
@@ -376,19 +396,24 @@ paddock does what only it can, since it makes the account at the first boot:
   `axtree` can't read the desktop's apps without it.
 
 `serve` waits for the desktop before it saves a slot's state, so a restored VM is handed out with
-its desktop drawn. Debian's generic kernel drives the USB devices, so slots restore with them; the
-cloud kernel's saved state doesn't restore with USB devices attached. Measured with the template:
-built in 2m 36s, a slot booted in 4.3 s and saved 0.2 GB of state, and each refill restored in
-0.8 to 1.1 s.
+its desktop drawn. Debian's generic kernel and Ubuntu's drive the USB devices, so slots restore
+with them; Debian's cloud kernel's saved state doesn't restore with USB devices attached. Measured
+with the templates: `debian-desktop` built in 2m 36s to 2m 42s, a slot booted in 4.3 s and saved
+0.2 GB of state, and each refill restored in 0.8 to 1.1 s; `ubuntu-desktop` built in 3m 3s, a slot
+booted to its desktop in 15 to 16 s and saved 0.3 GB of state, and refills restored in 1.0 to
+1.3 s. A GNOME VM left idle for 7 minutes stayed unlocked.
 
-- A desktop that locks itself when idle, as GNOME does by default, needs its lock turned off in a
-  step: the account has no password, so a locked VM can't be unlocked from inside.
+- A desktop other than GNOME that locks itself when idle needs its lock turned off in a step: the
+  account has no password, so a locked VM can't be unlocked from inside.
 - `cmd` in `key` and MCP's `press_keys` reaches Linux as the Super key, so shortcuts there use
   `ctrl`, as `ctrl+s`.
-- Tested with GTK apps under X11, as Xfce's are: they publish their trees to AT-SPI on their own,
-  and frames are screen pixels. Qt, Firefox and Chromium publish theirs only when accessibility is
-  turned on (AT-SPI's `IsEnabled`), which paddock doesn't do, and under Wayland AT-SPI gives no
-  screen positions; neither has been tested.
+- Tested with GTK apps under X11, as Xfce's are, and GTK 4 apps under GNOME, which runs on
+  Wayland: both publish their trees to AT-SPI on their own. Under X11, frames are screen pixels.
+  Under Wayland an app doesn't know where its window is on screen, so every frame's position is
+  0, 0 and only its size is right; titles, values and focus are right. For frames with positions
+  on Ubuntu, install Xfce and LightDM in place of GNOME, as `debian-desktop` does.
+- Qt, Firefox and Chromium publish their trees only when accessibility is turned on (AT-SPI's
+  `IsEnabled`), which paddock doesn't do; they haven't been tested.
 
 ### Rosetta
 
@@ -405,9 +430,9 @@ the setting, since a slot's saved state restores only onto the same devices.
 - Steps that run your x86-64 tools put them in the golden image's cache, so every clone starts
   with it. What a handed-out VM adds to the cache goes when the VM is released, and no cache is
   shared between VMs, where one workload could leave translations for another to run.
-- A dynamically linked x86-64 program needs its x86-64 libraries in the guest, from Debian's amd64
-  packages; statically linked programs and containers bring their own. Only statically linked
-  ones have been tested.
+- A dynamically linked x86-64 program needs its x86-64 libraries in the guest, from the
+  distribution's amd64 packages; statically linked programs and containers bring their own. Only
+  statically linked ones have been tested, on Debian.
 
-Setup assumes Debian's system: netplan with systemd-networkd, the `ssh` unit and apt. Images of
-other distributions, and other disk formats such as qcow2, aren't supported.
+Setup assumes the system Debian and Ubuntu share: netplan with systemd-networkd, the `ssh` unit
+and apt. Images of other distributions aren't supported.

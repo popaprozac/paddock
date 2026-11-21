@@ -8,7 +8,8 @@ import Foundation
 /// ```yaml
 /// from: { macos: latest }      # or { ipsw: path/to/restore.ipsw }, which pins the version;
 ///                              # or for Linux { debian: 13 }, { debian: 13, variant: generic },
-///                              # { disk: path/to/image.tar.xz } or { url: https://..., sha256: <hash> }
+///                              # { ubuntu: 26.04 }, { disk: path/to/image.tar.xz }
+///                              # or { url: https://..., sha256: <hash> }
 /// vm: { cpus: 4, memory: 8, disk: 80 }
 /// account: { name: bench, full-name: Bench }
 /// license: accept              # leave out and a person accepts it
@@ -29,8 +30,11 @@ public struct ImageFile: Equatable, Sendable {
         /// The latest build of a Debian release's arm64 image in a variant Debian publishes, from
         /// cloud.debian.org: genericcloud unless the file says generic.
         case debian(Int, LinuxImage.Debian.Variant)
-        /// A Linux disk you keep, which pins the build: a genericcloud `.tar.xz` as Debian
-        /// publishes it, or a raw disk image.
+        /// The latest build of an Ubuntu release's arm64 server cloud image, from
+        /// cloud-images.ubuntu.com, by its number as written, such as "26.04".
+        case ubuntu(String)
+        /// A Linux disk you keep, which pins the build: a `.tar.xz` as Debian publishes it, a
+        /// qcow2 image as Ubuntu does, or a raw disk image.
         case disk(String)
         /// A Linux disk to download, as `disk` takes them, which must match its hash: the hash pins
         /// the build, wherever the file is.
@@ -39,13 +43,15 @@ public struct ImageFile: Equatable, Sendable {
         public var isLinux: Bool {
             switch self {
             case .latest, .ipsw: false
-            case .debian, .disk, .url: true
+            case .debian, .ubuntu, .disk, .url: true
             }
         }
     }
 
     /// The Debian releases `from: { debian: N }` builds from.
     public static let debianReleases = LinuxImage.debianCodenames.keys.sorted()
+    /// The Ubuntu releases `from: { ubuntu: N }` builds from.
+    public static let ubuntuReleases = LinuxImage.ubuntuCodenames.keys.sorted()
 
     /// How the helpers' privacy grants get into the image: `managed` leaves them to a person or
     /// clicking them once in the image, `recovery` has `paddock grant` write them.
@@ -173,7 +179,7 @@ extension ImageFile: Decodable {
 
 extension ImageFile.Source: Decodable {
     private enum Keys: String, CodingKey, CaseIterable {
-        case macos, ipsw, debian, disk, url, sha256, sha512, variant
+        case macos, ipsw, debian, ubuntu, disk, url, sha256, sha512, variant
     }
 
     public init(from decoder: any Decoder) throws {
@@ -183,7 +189,8 @@ extension ImageFile.Source: Decodable {
         guard sources.count == 1, let key = sources.first else {
             throw DecodingError.dataCorrupted(.init(
                 codingPath: decoder.codingPath,
-                debugDescription: "give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>"))
+                debugDescription: "give one of macos: latest, ipsw: <path>, debian: 13, ubuntu: 26.04, disk: <path> "
+                    + "or url: <https URL>"))
         }
         if key != .url, let hash = hashes.first {
             throw DecodingError.dataCorruptedError(forKey: hash, in: keys, debugDescription: "goes with url:")
@@ -205,6 +212,14 @@ extension ImageFile.Source: Decodable {
                     forKey: .debian, in: keys, debugDescription: "expected \(ImageFile.debianReleases.map(String.init).joined(separator: ", ")), not \(release)")
             }
             self = .debian(release, try keys.choice(LinuxImage.Debian.Variant.allCases, forKey: .variant) ?? .genericcloud)
+        case .ubuntu:
+            // As written: read as a number, 26.10 would turn into 26.1.
+            let release = try keys.decode(String.self, forKey: .ubuntu)
+            guard ImageFile.ubuntuReleases.contains(release) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .ubuntu, in: keys, debugDescription: "expected \(ImageFile.ubuntuReleases.joined(separator: ", ")), not \(release)")
+            }
+            self = .ubuntu(release)
         case .disk:
             self = .disk(try keys.decode(String.self, forKey: .disk))
         case .url:
@@ -214,7 +229,8 @@ extension ImageFile.Source: Decodable {
             }
             guard LinuxImage.isDiskFileName(url.lastPathComponent) else {
                 throw DecodingError.dataCorruptedError(
-                    forKey: .url, in: keys, debugDescription: "expected a .tar.xz holding disk.raw, or a .raw disk")
+                    forKey: .url, in: keys,
+                    debugDescription: "expected a .tar.xz holding disk.raw, a .raw disk, or a .qcow2 or .img disk")
             }
             guard hashes.count == 1, let hashKey = hashes.first else {
                 throw DecodingError.dataCorruptedError(

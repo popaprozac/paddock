@@ -63,7 +63,13 @@ enum LinuxBuild {
                 throw PaddockError("no Debian \(release) to build from")
             }
             print("Checking Debian \(release)'s latest \(variant.rawValue) build against \(debian.sumsURL.absoluteString)")
-            return try await LinuxImage.fetch(debian, into: home.linuxCacheDirectory, progress: progress)
+            return try await LinuxImage.fetchLatest(debian.url, listedIn: debian.sumsURL, .sha512,
+                                                    into: home.linuxCacheDirectory, progress: progress)
+        case let .ubuntu(release):
+            guard let ubuntu = LinuxImage.Ubuntu(release: release) else { throw PaddockError("no Ubuntu \(release) to build from") }
+            print("Checking Ubuntu \(release)'s latest build against \(ubuntu.sumsURL.absoluteString)")
+            return try await LinuxImage.fetchLatest(ubuntu.url, listedIn: ubuntu.sumsURL, .sha256,
+                                                    into: home.linuxCacheDirectory, progress: progress)
         case let .url(url, checksum):
             print("Getting \(url.absoluteString), which must match its \(checksum.algorithm.rawValue)")
             return try await LinuxImage.fetch(url, matching: checksum, into: home.linuxCacheDirectory, progress: progress)

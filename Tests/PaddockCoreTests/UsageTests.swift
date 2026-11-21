@@ -70,7 +70,9 @@ import Testing
 @Suite struct HostMemoryTests {
     @Test func aVMCostsItsMacMoreThanItsMemory() {
         #expect(VMSizing.hostMemory(for: 8 << 30) == 14_602_888_806)  // 13.6 GB, as measured
-        #expect(VMSizing.hostMemory(for: 4 << 30, linux: true) == 4_509_715_660)  // 4.2 GB, as measured
+        #expect(VMSizing.hostMemory(for: 4 << 30, linux: true) == 4_939_212_390)  // 4.6 GB, Ubuntu's as measured
+        #expect(VMSizing.hostMemory(for: 4 << 30, linux: true, desktop: true) == 6_871_947_673)  // GNOME's 6.3 GB
+        #expect(VMSizing.hostMemory(for: 8 << 30, desktop: true) == 14_602_888_806)  // macOS's has a screen anyway
     }
 
     @Test func pressureLevelsCompare() {

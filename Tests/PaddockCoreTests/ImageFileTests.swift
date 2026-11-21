@@ -72,7 +72,7 @@ import Yams
         #expect(failure("from: { macos: 27.2.1 }\naccount: { name: bench }")
             == "from.macos: expected latest, not 27.2.1; to pin a version, give its restore image with ipsw:")
         #expect(failure("from: { macos: latest, ipsw: x.ipsw }\naccount: { name: bench }")
-            == "from: give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>")
+            == "from: give one of macos: latest, ipsw: <path>, debian: 13, ubuntu: 26.04, disk: <path> or url: <https URL>")
     }
 
     @Test func takesALinuxImageFromDebianOrADiskYouKeep() throws {
@@ -83,7 +83,16 @@ import Yams
         #expect(failure("from: { debian: 12 }\naccount: { name: bench }") == "from.debian: expected 13, not 12")
         #expect(failure("from: { debian: trixie }\naccount: { name: bench }") == "from.debian: expected a whole number")
         #expect(failure("from: { debian: 13, macos: latest }\naccount: { name: bench }")
-            == "from: give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>")
+            == "from: give one of macos: latest, ipsw: <path>, debian: 13, ubuntu: 26.04, disk: <path> or url: <https URL>")
+    }
+
+    /// Ubuntu's release is taken as written: as a number, 26.10 would read as 26.1.
+    @Test func takesALinuxImageFromUbuntu() throws {
+        let file = try decode("from: { ubuntu: 26.04 }\naccount: { name: bench }")
+        #expect(file.from == .ubuntu("26.04") && file.from.isLinux)
+        #expect(failure("from: { ubuntu: 24.04 }\naccount: { name: bench }") == "from.ubuntu: expected 26.04, not 24.04")
+        #expect(failure("from: { ubuntu: 26.4 }\naccount: { name: bench }") == "from.ubuntu: expected 26.04, not 26.4")
+        #expect(failure("from: { ubuntu: 26.04, variant: generic }\naccount: { name: bench }") == "from.variant: goes with debian:")
     }
 
     /// Debian's own variant names pick its image; genericcloud unless the file says otherwise.
@@ -94,7 +103,7 @@ import Yams
             == "from.variant: expected genericcloud or generic, not nocloud")
         #expect(failure("from: { disk: d.raw, variant: generic }\naccount: { name: bench }") == "from.variant: goes with debian:")
         #expect(failure("from: { variant: generic }\naccount: { name: bench }")
-            == "from: give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>")
+            == "from: give one of macos: latest, ipsw: <path>, debian: 13, ubuntu: 26.04, disk: <path> or url: <https URL>")
     }
 
     @Test func takesALinuxImageByURLWithTheHashItMustMatch() throws {
@@ -112,8 +121,10 @@ import Yams
         #expect(failure("from: { \(url), sha256: abc }\naccount: { name: bench }") == "from.sha256: expected 64 hex digits")
         #expect(failure("from: { url: 'http://images.example/disk.raw', sha256: \(sha256) }\naccount: { name: bench }")
             == "from.url: expected an https URL, not http://images.example/disk.raw")
-        #expect(failure("from: { url: 'https://images.example/disk.qcow2', sha256: \(sha256) }\naccount: { name: bench }")
-            == "from.url: expected a .tar.xz holding disk.raw, or a .raw disk")
+        #expect(try decode("from: { url: 'https://images.example/ubuntu.img', sha256: \(sha256) }\naccount: { name: bench }").from
+            == .url(URL(string: "https://images.example/ubuntu.img")!, LinuxImage.Checksum(.sha256, sha256)!))
+        #expect(failure("from: { url: 'https://images.example/disk.vmdk', sha256: \(sha256) }\naccount: { name: bench }")
+            == "from.url: expected a .tar.xz holding disk.raw, a .raw disk, or a .qcow2 or .img disk")
         #expect(failure("from: { debian: 13, sha256: \(sha256) }\naccount: { name: bench }") == "from.sha256: goes with url:")
     }
 
@@ -155,6 +166,7 @@ import Yams
             let steps: [String] = switch template {
             case .ci: ["Install the Command Line Tools", "Check that git works for the account"]
             case .debianDesktop: ["Install Xfce"]
+            case .ubuntuDesktop: ["Install GNOME"]
             default: []
             }
             #expect(file.steps.map(\.name) == steps, "\(template)")
@@ -162,6 +174,10 @@ import Yams
             #expect(template.text.contains("# license: accept") == !file.from.isLinux, "\(template)")
         }
         #expect(try decode(ImageTemplate.debian.text).from == .debian(13, .genericcloud))
+        #expect(try decode(ImageTemplate.ubuntu.text).from == .ubuntu("26.04"))
+        let gnome = try decode(ImageTemplate.ubuntuDesktop.text)
+        #expect(gnome.from == .ubuntu("26.04") && gnome.desktop && gnome.steps.first?.user == .root)
+        #expect(gnome.steps.first?.run.contains("ubuntu-desktop-minimal ptyxis gnome-text-editor at-spi2-core") == true)
         let desktop = try decode(ImageTemplate.debianDesktop.text)
         #expect(desktop.from == .debian(13, .generic) && desktop.desktop && desktop.steps.first?.user == .root)
         #expect(desktop.steps.first?.run.contains("apt-get install -y --no-install-recommends \\\n") == true)
@@ -180,9 +196,11 @@ import Yams
         #expect(file.steps.map(\.user) == [.root, .user, .root, .user])
         #expect(file.steps.first?.run.contains("softwareupdate --install") == true)
 
-        let debian = try decode(ImageTemplate.debian.text.replacingOccurrences(of: "# share:", with: "share:")
-            .replacingOccurrences(of: "# steps:", with: "steps:").replacingOccurrences(of: "#   ", with: "  "))
-        #expect(debian.share == "installers")
-        #expect(debian.steps.map(\.user) == [.root, .user])
+        for template in [ImageTemplate.debian, .ubuntu] {
+            let linux = try decode(template.text.replacingOccurrences(of: "# share:", with: "share:")
+                .replacingOccurrences(of: "# steps:", with: "steps:").replacingOccurrences(of: "#   ", with: "  "))
+            #expect(linux.share == "installers", "\(template)")
+            #expect(linux.steps.map(\.user) == [.root, .user], "\(template)")
+        }
     }
 }

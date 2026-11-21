@@ -130,7 +130,7 @@ enum ImageBuild {
             }
             var isFolder: ObjCBool = false
             switch image.from {
-            case .latest, .debian, .url:
+            case .latest, .debian, .ubuntu, .url:
                 (ipsw, disk) = (nil, nil)
             case let .ipsw(path):
                 let url = resolve(path).standardizedFileURL

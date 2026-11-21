@@ -89,6 +89,11 @@ public enum LinuxSeed {
         # turn a disabled ssh back on.
         systemctl mask --now ssh.service ssh.socket
 
+        # No automatic updates, as in macOS images: apt's timers would update and upgrade packages
+        # by themselves, during the build's steps and in every clone, holding apt's lock while they
+        # do. Updating is for the image's steps. Masked, for the same reason as ssh.
+        systemctl mask --now apt-daily.timer apt-daily-upgrade.timer
+
         # paddock-net answers time.apple.com at its gateway; on NAT it is Apple's.
         mkdir -p /etc/systemd/timesyncd.conf.d
         printf '[Time]\nNTP=time.apple.com\n' > /etc/systemd/timesyncd.conf.d/paddock.conf
@@ -174,7 +179,8 @@ public enum LinuxSeed {
     /// Run as root after a Linux image's steps, before sealing: if a display manager is enabled,
     /// prints `display-manager <name>`, sets it to log the account (uid 1000) in automatically,
     /// which only paddock can, since it makes the account at first boot, and turns off X's
-    /// blanking, since a blank screen screenshots as black. paddock knows LightDM, GDM and SDDM;
+    /// blanking, since a blank screen screenshots as black, and GNOME's idle lock and suspend,
+    /// since the account has no password to unlock it with. paddock knows LightDM, GDM and SDDM;
     /// for another it prints a note, and the build's desktop check finds whether it logs in.
     public static let desktopSetupScript = #"""
         set -e
@@ -193,8 +199,9 @@ public enum LinuxSeed {
           groupadd -rf autologin
           gpasswd -a "$account" autologin >/dev/null ;;
         gdm|gdm3)
-          conf=/etc/gdm3/daemon.conf
-          [ -e "$conf" ] || conf=/etc/gdm/custom.conf
+          # Debian's file, Ubuntu's, then Fedora's.
+          conf=/etc/gdm/custom.conf
+          for f in /etc/gdm3/daemon.conf /etc/gdm3/custom.conf; do [ -e "$f" ] && { conf=$f; break; }; done
           grep -qs '^\[daemon\]' "$conf" || printf '[daemon]\n' >> "$conf"
           sed -i -e '/^AutomaticLogin/d' -e '/^\[daemon\]/a AutomaticLoginEnable=true' \
             -e "/^\[daemon\]/a AutomaticLogin=$account" "$conf" ;;
@@ -208,6 +215,27 @@ public enum LinuxSeed {
         mkdir -p /etc/X11/xorg.conf.d
         printf 'Section "ServerFlags"\n  Option "BlankTime" "0"\n  Option "StandbyTime" "0"\n  Option "SuspendTime" "0"\n  Option "OffTime" "0"\nEndSection\n' \
           > /etc/X11/xorg.conf.d/10-paddock.conf
+        # GNOME, on Wayland, blanks and locks after 5 idle minutes and suspends after 15, by its
+        # dconf defaults: system ones set here apply to the account, unless it changes them.
+        if command -v dconf >/dev/null; then
+          mkdir -p /etc/dconf/profile /etc/dconf/db/local.d
+          [ -e /etc/dconf/profile/user ] || echo user-db:user > /etc/dconf/profile/user
+          grep -qx system-db:local /etc/dconf/profile/user || echo system-db:local >> /etc/dconf/profile/user
+          cat > /etc/dconf/db/local.d/00-paddock <<'EOF'
+        [org/gnome/desktop/session]
+        idle-delay=uint32 0
+
+        [org/gnome/desktop/screensaver]
+        lock-enabled=false
+
+        [org/gnome/settings-daemon/plugins/power]
+        sleep-inactive-ac-type='nothing'
+        sleep-inactive-battery-type='nothing'
+        EOF
+          dconf update
+        elif command -v gnome-shell >/dev/null; then
+          echo "note: without dconf-cli, paddock can't turn off GNOME's idle lock; install dconf-cli in a step"
+        fi
         """#
 
     /// Run as root in the build's desktop check when the desktop isn't up: says on one line the

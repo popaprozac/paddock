@@ -16,16 +16,30 @@ import Virtualization
         #expect(ImageFile.debianReleases == [13])
     }
 
-    @Test func readsAFilesHashFromSHA512SUMS() {
+    @Test func findsUbuntusLatestBuildOfAKnownRelease() throws {
+        let ubuntu = try #require(LinuxImage.Ubuntu(release: "26.04"))
+        #expect(ubuntu.url.absoluteString
+            == "https://cloud-images.ubuntu.com/releases/resolute/release/ubuntu-26.04-server-cloudimg-arm64.img")
+        #expect(ubuntu.sumsURL.absoluteString == "https://cloud-images.ubuntu.com/releases/resolute/release/SHA256SUMS")
+        #expect(LinuxImage.Ubuntu(release: "24.04") == nil)
+        #expect(ImageFile.ubuntuReleases == ["26.04"])
+    }
+
+    @Test func readsAFilesHashFromASumsFile() {
         let hash = String(repeating: "ab", count: 64)
         let sums = """
             \(String(repeating: "cd", count: 64))  debian-13-genericcloud-amd64.tar.xz
             \(hash.uppercased())  debian-13-genericcloud-arm64.tar.xz
             """
-        #expect(LinuxImage.sha512(of: "debian-13-genericcloud-arm64.tar.xz", inSums: sums) == hash)
-        #expect(LinuxImage.sha512(of: "disk.raw", inSums: "\(hash) *disk.raw") == hash)
-        #expect(LinuxImage.sha512(of: "other.tar.xz", inSums: sums) == nil)
-        #expect(LinuxImage.sha512(of: "short.tar.xz", inSums: "abc123  short.tar.xz") == nil)
+        #expect(LinuxImage.checksum(of: "debian-13-genericcloud-arm64.tar.xz", inSums: sums, .sha512)?.hex == hash)
+        #expect(LinuxImage.checksum(of: "disk.raw", inSums: "\(hash) *disk.raw", .sha512)?.hex == hash)
+        #expect(LinuxImage.checksum(of: "other.tar.xz", inSums: sums, .sha512) == nil)
+        #expect(LinuxImage.checksum(of: "short.tar.xz", inSums: "abc123  short.tar.xz", .sha512) == nil)
+        // Ubuntu's SHA256SUMS, in sha256sum's binary mode.
+        let sha256 = String(repeating: "ef", count: 32)
+        let ubuntu = "\(sha256) *ubuntu-26.04-server-cloudimg-arm64.img\n\(hash) *ubuntu-26.04-server-cloudimg-arm64.tar.gz"
+        #expect(LinuxImage.checksum(of: "ubuntu-26.04-server-cloudimg-arm64.img", inSums: ubuntu, .sha256)?.hex == sha256)
+        #expect(LinuxImage.checksum(of: "ubuntu-26.04-server-cloudimg-arm64.tar.gz", inSums: ubuntu, .sha256) == nil)
     }
 
     @Test func hashesAFile() throws {
