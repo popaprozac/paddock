@@ -17,6 +17,10 @@ const hostCID = 2
 
 func main() {
 	log.SetFlags(0)
+	// How the axtree request reads the desktop: this binary again, as the workload account.
+	if len(os.Args) == 2 && os.Args[1] == "axtree" {
+		os.Exit(printFocusedTree(os.Stdout, os.Stderr))
+	}
 	user, err := lookupAccount("1000")
 	if err != nil {
 		log.Fatalf("paddock-guestd: no account with uid 1000 to run commands as: %v", err)
