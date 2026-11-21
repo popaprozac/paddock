@@ -53,9 +53,11 @@ enum LinuxBuild {
         }
         defer { line.finish() }
         switch from {
-        case let .debian(release):
-            guard let debian = LinuxImage.Debian(release: release) else { throw PaddockError("no Debian \(release) to build from") }
-            print("Checking Debian \(release)'s latest build against \(debian.sumsURL.absoluteString)")
+        case let .debian(release, variant):
+            guard let debian = LinuxImage.Debian(release: release, variant: variant) else {
+                throw PaddockError("no Debian \(release) to build from")
+            }
+            print("Checking Debian \(release)'s latest \(variant.rawValue) build against \(debian.sumsURL.absoluteString)")
             return try await LinuxImage.fetch(debian, into: home.linuxCacheDirectory, progress: progress)
         case let .url(url, checksum):
             print("Getting \(url.absoluteString), which must match its \(checksum.algorithm.rawValue)")

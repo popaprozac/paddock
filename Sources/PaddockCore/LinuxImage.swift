@@ -3,24 +3,33 @@ import Darwin
 import Foundation
 import Virtualization
 
-/// Linux disk images for `paddock build`: Debian's genericcloud builds, fetched and checked, or a
-/// disk you keep; and the Linux VM bundle made from one.
+/// Linux disk images for `paddock build`: Debian's cloud builds, fetched and checked, or a disk
+/// you keep; and the Linux VM bundle made from one.
 public enum LinuxImage {
     /// The Debian releases paddock builds from, by number, with the codename Debian files them under.
     public static let debianCodenames = [13: "trixie"]
 
-    /// The latest genericcloud arm64 build of a Debian release and the SHA512SUMS listing it.
+    /// The latest arm64 build of a Debian release, in one of the variants Debian publishes, and
+    /// the SHA512SUMS listing it.
     public struct Debian: Equatable, Sendable {
+        /// genericcloud's kernel drives only what a cloud VM needs; generic's full kernel also
+        /// drives a screen and USB input, which a desktop needs.
+        public enum Variant: String, CaseIterable, Sendable {
+            case genericcloud, generic
+        }
+
         public let release: Int
+        public let variant: Variant
         public let fileName: String
         public let url: URL
         public let sumsURL: URL
 
-        public init?(release: Int) {
+        public init?(release: Int, variant: Variant = .genericcloud) {
             guard let codename = LinuxImage.debianCodenames[release] else { return nil }
             self.release = release
+            self.variant = variant
             let folder = URL(string: "https://cloud.debian.org/images/cloud/\(codename)/latest/")!
-            fileName = "debian-\(release)-genericcloud-arm64.tar.xz"
+            fileName = "debian-\(release)-\(variant.rawValue)-arm64.tar.xz"
             url = folder.appendingPathComponent(fileName)
             sumsURL = folder.appendingPathComponent("SHA512SUMS")
         }

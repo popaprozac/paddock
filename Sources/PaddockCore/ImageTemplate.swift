@@ -11,6 +11,8 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
     case managed
     /// Debian with no screen, for commands, files and tasks: Linux CI and agents.
     case debian
+    /// Debian with a desktop, Xfce, installed by a step: for agents and people that use a screen.
+    case debianDesktop = "debian-desktop"
 
     public var text: String {
         switch self {
@@ -119,6 +121,41 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
             #     run: apt-get update && apt-get install -y build-essential git
             #   - name: Check that git works for the account
             #     run: git --version
+
+            """
+        case .debianDesktop:
+            """
+            # A golden image of Debian 13 with a desktop, for agents and people that use a screen:
+            # screenshots, clicks and keys, paddock show and view, and commands. Build it with:
+            # paddock build <this file>
+            # The VM is named after this file; set name: to choose another.
+
+            # Debian's generic arm64 build, whose kernel drives a screen and USB input, which
+            # genericcloud's can't; checked against Debian's SHA512SUMS. An image that already has a
+            # desktop works too: from: { disk: <path> } or from: { url: <https URL>, sha512: <hash> }
+            from: { debian: 13, variant: generic }
+
+            vm: { cpus: 4, memory: 4, disk: 16 }   # in GB
+
+            account:
+              # The desktop is logged in as this account, uid 1000. It has no password, and sudo
+              # needs none.
+              name: paddock
+
+            # The build fails if the image has no working desktop once its steps have run.
+            desktop: true
+
+            # Any desktop works. This is a small Xfce, about 100 MB from Debian. A desktop that locks
+            # itself when idle needs its lock turned off in a step: the account has no password.
+            steps:
+              - name: Install Xfce
+                as: root
+                run: |
+                  apt-get update
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+                    xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \\
+                    xserver-xorg-input-libinput dbus-x11
+                  systemctl set-default graphical.target
 
             """
         }
