@@ -3,8 +3,8 @@
 | Command | What it does |
 | --- | --- |
 | `paddock install <name> [--ipsw path] [--cpus 4] [--memory 8] [--disk-size 80]` | Finds the latest macOS this Mac supports, downloads it into the cache and installs it into a new VM. Memory and disk are in GB. |
-| `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`, on a macOS 27 or later guest (older guests ignore it); `--recovery` starts it in macOS Recovery. A Linux VM has no screen, so `run` connects this terminal to its console instead, logged in as its account; Ctrl-] asks the guest to shut down and a second Ctrl-] forces it off, and `--share` is then mounted by hand in the guest (see [Linux images](golden-images.md#linux-images)). |
-| `paddock init <file> [--template minimal\|ci\|managed\|debian]` | Writes a commented starter image file for `build`; `debian` is a Linux image. |
+| `paddock run <name> [--share folder] [--provision account [--full-name name]] [--recovery]` | Boots a VM in a window. `--share` mounts a host folder read-only in the guest; `--provision` creates the account on the first boot after `install`, on a macOS 27 or later guest (older guests ignore it); `--recovery` starts it in macOS Recovery. A Linux VM with a desktop opens in the window too, at its image's screen size, which the window scales rather than changes. A Linux VM without one has no screen, so `run` connects this terminal to its console instead, logged in as its account; Ctrl-] asks the guest to shut down and a second Ctrl-] forces it off, and `--share` is then mounted by hand in the guest (see [Linux images](golden-images.md#linux-images)). |
+| `paddock init <file> [--template minimal\|ci\|managed\|debian\|debian-desktop]` | Writes a commented starter image file for `build`; `debian` is a Linux image, and `debian-desktop` one with Xfce (see [Desktop Linux](golden-images.md#desktop-linux)). |
 | `paddock build <file> [--guest folder]` | Makes a golden image from an image file, with no one at the keyboard: installs macOS, creates the account, installs the guest agent, turns off what would stop unattended VMs, optionally accepts the license and writes the grants, runs the file's steps and checks the image (see [Make a golden image](golden-images.md)). Needs macOS 27 on this Mac and macOS 15 or later in the VM. A Linux image file (`from: debian`, `disk` or `url`) needs neither, nor a password: `build` makes the VM from the image's disk, boots it once with a cloud-init seed that creates the account and installs the guest agent, then runs the steps and seals the image (see [Linux images](golden-images.md#linux-images)). |
 | `paddock grant <name>` | Grants `paddock-session` Accessibility and `paddock-guestd` Full Disk Access in a shut-down golden image from macOS Recovery, with SIP on (see [What a golden image allows](golden-images.md#what-a-golden-image-allows)). |
 | `paddock clone <source> <name>` | Makes an APFS copy-on-write clone with a fresh machine identifier and MAC address. |
@@ -14,7 +14,7 @@
 | `paddock exec <vm> -- <command>` | Runs a command in a VM that `acquire` handed out, through its guest agent over vsock, streams the output and exits with the command's status. The words after `--` are joined with spaces, as `ssh` does. |
 | `paddock task <vm> --bundle <in> --result <out> -- <command>` | Copies a git bundle of a branch (made with `git bundle create <in> HEAD`) into the VM over vsock, clones it, runs the command in the clone and commits whatever it changed, authored as paddock, even if the command fails. New commits come back as a bundle at `<out>`, ready for `git fetch <out> HEAD:<branch>`; with none, it prints `No changes`. Exits with the command's status. The guest needs `git`: the Command Line Tools in a macOS image, or a build step that installs it in a Linux one (see [Linux images](golden-images.md#linux-images)); without it, `task` stops, saying so. |
 | `paddock screenshot <vm> [-o file.png]` | Saves the screen of a VM that `acquire` handed out as a PNG, `<vm>.png` in the current folder by default. `serve` reads the VM's framebuffer on this Mac, so the guest grants nothing and runs nothing (see [Screenshots](agents.md#screenshots)). |
-| `paddock axtree <vm>` | Prints the accessibility tree of the focused app in a VM that `acquire` handed out, as JSON, from `paddock-session` in the guest. Its frames are in the same coordinates as `paddock screenshot`'s pixels. |
+| `paddock axtree <vm>` | Prints the accessibility tree of the focused app in a VM that `acquire` handed out, as JSON, from `paddock-session` in the guest. Its frames are in the same coordinates as `paddock screenshot`'s pixels. macOS VMs only. |
 | `paddock click <vm> <x> <y> [--right] [--double]` | Clicks at a point of the guest's screen, in pixels from the top left, as in `paddock screenshot` (see [Input](agents.md#input)). |
 | `paddock type <vm> <text>` | Types text into whatever has the keyboard focus in the guest, as key presses. |
 | `paddock key <vm> <combination>...` | Presses key combinations in turn, such as `cmd+s`, `cmd+shift+z` or `return`. |
@@ -125,13 +125,15 @@ Restored clones share one identity, so only one can run at a time.
   efi-vars     EFI variable store (Linux), in place of aux.img
   config.json  hardware model and machine identifier (base64), MAC address,
                CPU count, memory, disk size, display and the installed macOS build;
-               "kind": "linux" for a Linux VM, and "rosetta": true for one with Rosetta
+               "kind": "linux" for a Linux VM, "rosetta": true for one with Rosetta,
+               and "desktop": true for one with a desktop
   state.vzvmsave  optional saved memory and device state of a paused VM
   net.sock     paddock-net's control socket, while the VM runs on the userspace network
   console.log  a Linux guest's console, written afresh each time it starts
 ```
 
 A Linux VM runs on Virtualization.framework's generic platform with EFI boot, a virtio disk,
-network, entropy, vsock and console, and no display, keyboard or pointer, so screenshots, input,
-`show` and `view` refuse it. Its `config.json` has an empty hardware model and a generic machine
-identifier.
+network, entropy, vsock and console. Without a desktop it has no display, keyboard or pointer, so
+screenshots, input, `show` and `view` refuse it; with one it has a virtio-gpu screen at its
+display size and a USB keyboard and pointer (see [Desktop Linux](golden-images.md#desktop-linux)).
+Its `config.json` has an empty hardware model and a generic machine identifier.

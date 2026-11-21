@@ -9,7 +9,7 @@ Virtualization.framework directly, with no Tart or Lume underneath, and it's ope
 Apache 2.0.
 
 - **Golden images from a YAML file**, built with no one at the keyboard, for macOS 15, 26 and 27,
-  and for Linux from Debian 13's cloud images, with no screen, and x86-64 programs through Rosetta.
+  and for Linux from Debian 13's cloud images, headless or with a desktop, and x86-64 programs through Rosetta.
 - **Warm clones.** APFS copy-on-write clones, restored from a saved state, one per slot.
 - **Commands and git tasks** in the guest, through an agent that listens only on vsock.
 - **A network per VM** that reaches only the host names you allow.

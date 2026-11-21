@@ -46,9 +46,12 @@
   FileVault, which turns off automatic login, needs a person after every restart (see
   [Setting up Macs](hosts.md)).
 - Apple's macOS license permits macOS VMs for development and testing.
-- A Linux VM has no display, keyboard or pointer. Debian's cloud kernel has no graphics driver, and
-  any USB device stops a Linux VM's saved state from restoring, so screenshots, input, `axtree`,
-  `show` and `view` don't work with Linux VMs.
-- Linux images come only from Debian's genericcloud arm64 builds, or disks in the same format
+- A Linux VM has a display, keyboard and pointer only when its image has a desktop on a kernel
+  that drives them (see [Desktop Linux](golden-images.md#desktop-linux)). Debian's genericcloud
+  kernel has no graphics, USB controller or HID driver, and with USB devices attached its saved
+  state doesn't restore, so a VM of such an image has none, and screenshots, input, `show` and
+  `view` don't work with it.
+- `axtree` works only in macOS VMs; Linux's accessibility tree, AT-SPI, isn't read.
+- Linux images come only from Debian's genericcloud and generic arm64 builds, or disks in the same format
   (see [Linux images](golden-images.md#linux-images)). A Debian 13 golden image takes about 2.8 GB
   of disk, since Debian's tarball holds its disk's zeros and extracting writes them out.
