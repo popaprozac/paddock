@@ -1,4 +1,5 @@
 import Foundation
+import os
 import PaddockCore
 
 /// The last boot of `paddock build <file>`: runs the image file's steps through the guest agent,
@@ -10,12 +11,19 @@ enum ImageSteps {
     /// account instead.
     static let agentVersion = "0.6.0"
 
+    struct Outcome {
+        /// The image check's problems, or nil if the check couldn't run.
+        var problems: [String]?
+        /// A Linux image's enabled display manager, set to log the account in.
+        var displayManager: String?
+    }
+
     /// Boots `name` headless with `share` mounted, runs `steps` in order, then the image check.
-    /// Returns the check's problems, or nil if the check couldn't run. Throws at the first step
-    /// that fails, after stopping the VM.
-    /// A Linux image is sealed after its steps (see `LinuxSeed.sealScript`), and its share is at
-    /// /mnt/share.
-    static func run(name: String, steps: [ImageFile.Step], share: URL?) async throws -> [String]? {
+    /// Throws at the first step that fails, after stopping the VM.
+    /// A Linux image's share is at /mnt/share. After its steps, its display manager, if it has
+    /// one, is set to log the account in (see `LinuxSeed.desktopSetupScript`), and the image is
+    /// sealed (see `LinuxSeed.sealScript`).
+    static func run(name: String, steps: [ImageFile.Step], share: URL?) async throws -> Outcome {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
         let config = try bundle.readConfig()
         let vm = try HeadlessVM(bundle: bundle, config: config, sharing: share)
@@ -48,7 +56,21 @@ enum ImageSteps {
                     throw PaddockError("step '\(step.name)' failed with exit status \(status)")
                 }
             }
+            var displayManager: String?
             if config.isLinux {
+                let lines = OSAllocatedUnfairLock(initialState: [String]())
+                let status = try await vm.runInGuest(LinuxSeed.desktopSetupScript, asRoot: true) { line in
+                    lines.withLock { $0.append(line) }
+                }
+                for line in lines.withLock({ $0 }) {
+                    if let name = line.split(separator: " ").dropFirst().first, line.hasPrefix("display-manager ") {
+                        displayManager = String(name)
+                        print("  setting \(name), its display manager, to log the account in")
+                    } else {
+                        print("    \(line)")
+                    }
+                }
+                guard status == 0 else { throw PaddockError("setting up the desktop of '\(name)' failed") }
                 print("  sealing the image")
                 guard try await vm.runInGuest(LinuxSeed.sealScript, asRoot: true, output: { print("    \($0)") }) == 0 else {
                     throw PaddockError("sealing '\(name)' failed")
@@ -62,7 +84,7 @@ enum ImageSteps {
             guard try await vm.waitUntilStopped(within: .seconds(120)) else {
                 throw PaddockError("'\(name)' didn't shut down within 120 s of its steps")
             }
-            return problems
+            return Outcome(problems: problems, displayManager: displayManager)
         } catch {
             await vm.stop()
             throw error

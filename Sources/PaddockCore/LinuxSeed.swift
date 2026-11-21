@@ -171,6 +171,69 @@ public enum LinuxSeed {
         apt-get clean
         """
 
+    /// Run as root after a Linux image's steps, before sealing: if a display manager is enabled,
+    /// prints `display-manager <name>`, sets it to log the account (uid 1000) in automatically,
+    /// which only paddock can, since it makes the account at first boot, and turns off X's
+    /// blanking, since a blank screen screenshots as black. paddock knows LightDM, GDM and SDDM;
+    /// for another it prints a note, and the build's desktop check finds whether it logs in.
+    public static let desktopSetupScript = #"""
+        set -e
+        [ -L /etc/systemd/system/display-manager.service ] || exit 0
+        dm=$(basename "$(readlink -f /etc/systemd/system/display-manager.service)" .service)
+        account=$(getent passwd 1000 | cut -d: -f1)
+        echo "display-manager $dm"
+        # The first desktop session installed, for the display managers that need one named.
+        session=$(for f in /usr/share/xsessions/*.desktop /usr/share/wayland-sessions/*.desktop; do
+          [ -e "$f" ] && basename "$f" .desktop; done | grep -vx lightdm-xsession | head -n 1 || true)
+        case "$dm" in
+        lightdm)
+          mkdir -p /etc/lightdm/lightdm.conf.d
+          printf '[Seat:*]\nautologin-user=%s\n' "$account" > /etc/lightdm/lightdm.conf.d/50-paddock.conf
+          [ -z "$session" ] || printf 'autologin-session=%s\n' "$session" >> /etc/lightdm/lightdm.conf.d/50-paddock.conf
+          groupadd -rf autologin
+          gpasswd -a "$account" autologin >/dev/null ;;
+        gdm|gdm3)
+          conf=/etc/gdm3/daemon.conf
+          [ -e "$conf" ] || conf=/etc/gdm/custom.conf
+          grep -qs '^\[daemon\]' "$conf" || printf '[daemon]\n' >> "$conf"
+          sed -i -e '/^AutomaticLogin/d' -e '/^\[daemon\]/a AutomaticLoginEnable=true' \
+            -e "/^\[daemon\]/a AutomaticLogin=$account" "$conf" ;;
+        sddm)
+          mkdir -p /etc/sddm.conf.d
+          printf '[Autologin]\nUser=%s\n' "$account" > /etc/sddm.conf.d/50-paddock.conf
+          [ -z "$session" ] || printf 'Session=%s.desktop\n' "$session" >> /etc/sddm.conf.d/50-paddock.conf ;;
+        *)
+          echo "note: paddock doesn't know $dm; log $account in automatically with a step" ;;
+        esac
+        mkdir -p /etc/X11/xorg.conf.d
+        printf 'Section "ServerFlags"\n  Option "BlankTime" "0"\n  Option "StandbyTime" "0"\n  Option "SuspendTime" "0"\n  Option "OffTime" "0"\nEndSection\n' \
+          > /etc/X11/xorg.conf.d/10-paddock.conf
+        """#
+
+    /// Run as root in the build's desktop check when the desktop isn't up: says on one line the
+    /// first thing missing. Exits 2 when the desktop can't come up without a change to the image,
+    /// 0 when it may still be starting.
+    public static let desktopDiagnosisScript = #"""
+        kernel=$(uname -r)
+        [ -e /dev/dri/card0 ] || { echo "its kernel, $kernel, doesn't drive the screen: it has no virtio-gpu driver"; exit 2; }
+        { grep -q '^H: Handlers=.*kbd' /proc/bus/input/devices && grep -q '^H: Handlers=.*mouse' /proc/bus/input/devices; } ||
+          { echo "its kernel, $kernel, doesn't drive USB input: it has no XHCI or HID driver"; exit 2; }
+        [ -L /etc/systemd/system/display-manager.service ] || { echo "no display manager is enabled"; exit 2; }
+        target=$(systemctl get-default)
+        [ "$target" = graphical.target ] || { echo "it starts $target, not graphical.target"; exit 2; }
+        dm=$(basename "$(readlink -f /etc/systemd/system/display-manager.service)" .service)
+        if systemctl is-failed -q display-manager.service; then echo "its display manager, $dm, failed to start"; exit 2; fi
+        account=$(getent passwd 1000 | cut -d: -f1)
+        for s in $(loginctl list-sessions --no-legend | awk '{ print $1 }'); do
+          [ "$(loginctl show-session "$s" -p Name --value)" = "$account" ] || continue
+          case $(loginctl show-session "$s" -p Type --value) in x11|wayland) ;; *) continue ;; esac
+          [ "$(loginctl show-session "$s" -p LockedHint --value)" != yes ] || { echo "the account's desktop is locked"; exit 2; }
+          echo "the account's desktop never finished drawing"
+          exit 0
+        done
+        echo "$dm didn't log the account in to a desktop"
+        """#
+
     /// Mounts the build's shared folder at `/mnt/share`, read-only.
     public static let mountShare = "mkdir -p /mnt/share && mount -t virtiofs -o ro \(VMConfiguration.linuxShareTag) /mnt/share"
 

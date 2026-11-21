@@ -75,6 +75,25 @@ import Yams
         }
     }
 
+    /// The desktop scripts are valid shell; setup does nothing without a display manager, and
+    /// sets automatic login in each display manager paddock knows.
+    @Test func desktopScriptsAreValidShell() throws {
+        for script in [LinuxSeed.desktopSetupScript, LinuxSeed.desktopDiagnosisScript] {
+            let check = Process()
+            check.executableURL = URL(fileURLWithPath: "/bin/sh")
+            check.arguments = ["-n", "-c", script]
+            try check.run()
+            check.waitUntilExit()
+            #expect(check.terminationStatus == 0)
+        }
+        let lines = LinuxSeed.desktopSetupScript.split(separator: "\n")
+        #expect(lines.prefix(2) == ["set -e", "[ -L /etc/systemd/system/display-manager.service ] || exit 0"])
+        for path in ["/etc/lightdm/lightdm.conf.d/50-paddock.conf", "/etc/gdm3/daemon.conf", "/etc/gdm/custom.conf",
+                     "/etc/sddm.conf.d/50-paddock.conf", "/etc/X11/xorg.conf.d/10-paddock.conf"] {
+            #expect(LinuxSeed.desktopSetupScript.contains(path), "\(path)")
+        }
+    }
+
     @Test func makesAnISOLabeledForCloudInit() throws {
         let tmp = try TemporaryDirectory()
         let agent = tmp.url.appendingPathComponent("linux")
