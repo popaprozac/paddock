@@ -123,8 +123,9 @@ final class HeadlessVM: NSObject {
     /// guest only sends a frame when its screen changes: a view attached to a guest that has gone
     /// still shows nothing, so attach before a restored VM resumes and redraws.
     func attachScreen() throws {
-        guard !config.isLinux else {
-            throw PaddockError("'\(bundle.name)' is a Linux VM, which has no screen or input in paddock; run commands in it instead")
+        guard config.hasScreen else {
+            throw PaddockError("'\(bundle.name)' is a Linux VM without a desktop, so it has no screen or input in paddock; "
+                + "run commands in it instead")
         }
         if screen == nil {
             screen = try VMScreen(machine: machine, display: config.display)
@@ -352,6 +353,9 @@ final class HeadlessVM: NSObject {
     /// Asks paddock-session, in the guest's desktop session, for the focused app's accessibility
     /// tree, passing each line of its JSON to `output`.
     func accessibilityTree(output: @escaping @Sendable (String) -> Void) async throws {
+        guard !config.isLinux else {
+            throw PaddockError("'\(bundle.name)' is a Linux VM; paddock reads accessibility trees only in macOS VMs")
+        }
         try await withAgent(port: SessionHelper.port, name: "paddock-session") {
             try SessionHelper.askForTree(over: $0, output: output)
         }

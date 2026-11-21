@@ -39,6 +39,23 @@ import Virtualization
         #expect(configuration.directorySharingDevices.isEmpty)
     }
 
+    /// A Linux VM with a desktop gets a screen at its display's size, and USB input.
+    @Test func givesADesktopLinuxVMAScreenAndUSBInput() throws {
+        let tmp = try TemporaryDirectory()
+        let bundle = VMBundle(url: tmp.url)
+        _ = try VZEFIVariableStore(creatingVariableStoreAt: bundle.efiVariablesURL)
+        var config = VMConfigTests.linuxSample
+        config.desktop = true
+        let configuration = VZVirtualMachineConfiguration()
+        try VMConfiguration.linux(configuration, bundle: bundle, config: config)
+        let scanouts = (configuration.graphicsDevices.first as? VZVirtioGraphicsDeviceConfiguration)?.scanouts ?? []
+        #expect(configuration.graphicsDevices.count == 1 && scanouts.count == 1)
+        #expect(scanouts.first?.widthInPixels == 1920 && scanouts.first?.heightInPixels == 1200)
+        #expect(configuration.keyboards.count == 1 && configuration.keyboards.first is VZUSBKeyboardConfiguration)
+        #expect(configuration.pointingDevices.count == 1
+            && configuration.pointingDevices.first is VZUSBScreenCoordinatePointingDeviceConfiguration)
+    }
+
     /// With Rosetta, the VM gets its share by the tag the guest mounts. Only on a Mac with Rosetta.
     @Test(.enabled(if: VZLinuxRosettaDirectoryShare.availability == .installed))
     func givesARosettaLinuxVMItsShare() throws {

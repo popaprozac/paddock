@@ -8,7 +8,7 @@ import Foundation
 ///
 /// A Linux VM says so in `kind`; a config without it, as every one before Linux VMs, is macOS. A
 /// Linux VM's `machineIdentifier` is a VZGenericMachineIdentifier, its `hardwareModel` is empty,
-/// and it has no display.
+/// and it has a display only with `desktop`.
 public struct VMConfig: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case linux
@@ -52,8 +52,13 @@ public struct VMConfig: Codable, Equatable, Sendable {
     /// A Linux VM with Rosetta's share, to run x86-64 programs. Every VM of an image keeps it, since
     /// saved state restores only onto the same devices.
     public var rosetta: Bool?
+    /// A Linux VM with a desktop, whose kernel drives a screen and USB input. Every VM of an image
+    /// keeps it, since saved state restores only onto the same devices.
+    public var desktop: Bool?
 
     public var isLinux: Bool { kind == .linux }
+    /// Whether the VM has a screen and input: every macOS VM, and a Linux VM with a desktop.
+    public var hasScreen: Bool { !isLinux || desktop == true }
 
     public init(
         kind: Kind? = nil,
