@@ -1,11 +1,15 @@
 # Limits
 
 - macOS allows at most two macOS VMs running at once on one host. Linux VMs don't count toward
-  that, but `serve` keeps at most two slots of any image.
+  that: `serve` keeps at most two slots of a macOS image, and any number of a Linux image, as
+  memory allows.
 - A VM costs its Mac more memory than it's configured with: an 8 GB VM's process took 10.7
   to 13.6 GB once warm in testing, as `paddock top` shows. `serve` counts each VM at 1.7 times its
   memory, measured only for 8 GB VMs, when it warns at startup, and warns again while it runs if
   macOS's memory pressure rises. On a 36 GB Mac, two 8 GB slots brought pressure to warn.
+- A Linux VM costs its Mac about its own memory at most: a 4 GB Debian 13 VM took 0.45 GB idle
+  and 3.97 GB with its memory filled, which the Mac keeps until the VM stops. `serve` counts it at
+  its memory.
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
 - Networking is macOS's shared NAT, or with `--userspace` a network of each VM's own, where a
   VM reaches only the names its `acquire --allow` listed (see

@@ -7,13 +7,13 @@ struct Serve: AsyncParsableCommand {
         abstract: "Keep warm clones of a VM running headless, ready to hand out.",
         discussion: """
             serve keeps a warm VM in each of its slots, two by default, which is as many VMs as \
-            macOS runs at once. It clones the source into each slot with the slot's own machine \
-            identifier and MAC address, boots it until its guest agent answers and saves its \
-            state, both slots at the same time. Each slot then restores a fresh clone of its \
+            macOS runs at once; a Linux image can have more. It clones the source into each slot \
+            with the slot's own machine identifier and MAC address, boots it until its guest agent \
+            answers and saves its state, all the slots at the same time. Each slot then restores a fresh clone of its \
             saved state and keeps it running; if that VM stops, the slot restores another. \
             'paddock acquire' takes a warm VM and 'paddock release' hands it back to be wiped \
             and replaced; they reach serve through a socket in the paddock home that only you \
-            can open. A slot that can't start stays empty, with the reason, and the other keeps \
+            can open. A slot that can't start stays empty, with the reason, and the others keep \
             serving. Press Ctrl-C, or send SIGTERM as launchd does, to stop serve and delete \
             the slots' VMs.
 
@@ -28,7 +28,7 @@ struct Serve: AsyncParsableCommand {
     @Argument(help: "VM to clone, usually the golden image, with the guest agent installed.")
     var source: String
 
-    @Option(help: "Warm VMs to keep, 1 or 2. Use 1 on a Mac that also runs another VM.")
+    @Option(help: "Warm VMs to keep: 1 or 2 of a macOS image, as many as macOS runs at once, or 1 on a Mac that also runs another VM; any number of a Linux image, as memory allows.")
     var slots = 2
 
     @Flag(help: "Give each VM its own userspace network (paddock-net) instead of the shared NAT.")
@@ -42,8 +42,8 @@ struct Serve: AsyncParsableCommand {
 
     func validate() throws {
         try BundleName.validate(source)
-        guard (1...2).contains(slots) else {
-            throw ValidationError("--slots is 1 or 2: macOS runs at most two VMs at once")
+        guard slots >= 1 else {
+            throw ValidationError("--slots is at least 1")
         }
         if join != nil, control == nil {
             throw ValidationError("--join needs --control, the control plane's URL")
@@ -51,6 +51,9 @@ struct Serve: AsyncParsableCommand {
     }
 
     func run() async throws {
+        if slots > 2, !(try PaddockHome.fromEnvironment().bundle(named: source).readConfig().isLinux) {
+            throw PaddockError("--slots is 1 or 2 for a macOS image: macOS runs at most two macOS VMs at once")
+        }
         // Joined before any VM boots, so a bad token or URL fails in seconds.
         var identity: ControlIdentity?
         if let control {
@@ -273,9 +276,10 @@ final class WarmPool {
 
     /// Warns when the slots' VMs together would leave this Mac little memory of its own.
     private func warnAboutMemory(_ source: VMBundle) {
-        guard let memory = try? source.readConfig().memorySize else { return }
+        guard let config = try? source.readConfig() else { return }
+        let memory = config.memorySize
         let total = ProcessInfo.processInfo.physicalMemory
-        let wanted = UInt64(slots.count) * VMSizing.hostMemory(for: memory)
+        let wanted = UInt64(slots.count) * VMSizing.hostMemory(for: memory, linux: config.isLinux)
         // shortcut: 10 GB for macOS and its apps, from the Studio, whose pressure reached warn with two
         // 8 GB VMs on 36 GB; tune once hosts run other workloads.
         guard wanted + (10 << 30) > total else { return }

@@ -7,8 +7,8 @@ kind of host comes back after a restart.
 ## What serve needs
 
 - An Apple silicon Mac with macOS 14 or later (see [Requirements](../README.md#requirements)).
-  macOS runs at most two macOS VMs at once on one Mac, and a VM costs its Mac about 1.7 times
-  its own memory (see [Limits](limits.md)).
+  macOS runs at most two macOS VMs at once on one Mac, and a macOS VM costs its Mac about 1.7
+  times its own memory, a Linux VM about its own (see [Limits](limits.md)).
 - **A login session.** `serve` must run as a user who is logged in at the Mac's screen, whether in
   person, through Screen Sharing, or by automatic login. Two things need one:
   - Keeping slots warm. Each slot restores its VM from saved state, and macOS encrypts saved state
