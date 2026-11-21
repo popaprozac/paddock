@@ -116,6 +116,7 @@ enum LinuxBuild {
         let vm = try HeadlessVM(bundle: bundle, config: config)
         try await vm.start()
         var missing: String?
+        var accessibility = true
         do {
             guard try await vm.agentVersion(within: .seconds(180)) != nil else {
                 throw PaddockError("the guest agent in '\(bundle.name)' didn't answer within 180 s")
@@ -131,6 +132,10 @@ enum LinuxBuild {
                     missing = lines.withLock { $0.last } ?? "its desktop didn't come up"
                     break
                 }
+            }
+            if missing == nil {
+                // axtree reads AT-SPI's bus, which starts with the session when the image has it.
+                accessibility = try await vm.runInGuest(LinuxSeed.accessibilityBusCheck, asRoot: true) { _ in } == 0
             }
             _ = try await vm.runInGuest("sync; (sleep 2; systemctl poweroff) </dev/null >/dev/null 2>&1 &", asRoot: true) { _ in }
             guard try await vm.waitUntilStopped(within: .seconds(120)) else {
@@ -152,6 +157,9 @@ enum LinuxBuild {
         }
         try bundle.writeConfig(config)
         print("  a desktop: its VMs get a \(config.display.widthInPixels)x\(config.display.heightInPixels) screen and USB input")
+        if !accessibility {
+            print("  note: the desktop has no AT-SPI bus, so paddock axtree can't read its apps; install at-spi2-core in a step")
+        }
     }
 
     /// The last lines of the guest's console, as console.log kept them, without terminal escapes.

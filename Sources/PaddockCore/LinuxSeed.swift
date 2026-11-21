@@ -234,6 +234,11 @@ public enum LinuxSeed {
         echo "$dm didn't log the account in to a desktop"
         """#
 
+    /// Succeeds once the account's desktop has AT-SPI's bus, which paddock axtree reads, waiting
+    /// up to 5 s for it to start with the session.
+    public static let accessibilityBusCheck =
+        "for i in 1 2 3 4 5 6 7 8 9 10; do ls /run/user/1000/at-spi/bus* >/dev/null 2>&1 && exit 0; sleep 0.5; done; exit 1"
+
     /// Mounts the build's shared folder at `/mnt/share`, read-only.
     public static let mountShare = "mkdir -p /mnt/share && mount -t virtiofs -o ro \(VMConfiguration.linuxShareTag) /mnt/share"
 
