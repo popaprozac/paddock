@@ -10,7 +10,8 @@ struct Serve: AsyncParsableCommand {
             macOS runs at once; a Linux image can have more. It clones the source into each slot \
             with the slot's own machine identifier and MAC address, boots it until its guest agent \
             answers and saves its state, all the slots at the same time. Each slot then restores a fresh clone of its \
-            saved state and keeps it running; if that VM stops, the slot restores another. \
+            saved state and keeps it running; if that VM stops, the slot restores another. A state that \
+            won't restore, as while the Mac's screen is locked, gets a fresh clone booted instead. \
             'paddock acquire' takes a warm VM and 'paddock release' hands it back to be wiped \
             and replaced; they reach serve through a socket in the paddock home that only you \
             can open. A slot that can't start stays empty, with the reason, and the others keep \
@@ -329,23 +330,27 @@ final class WarmPool {
         }
     }
 
-    /// Restores a fresh clone of the slot's saved state and waits until its agent answers.
+    /// Restores a fresh clone of the slot's saved state and waits until its agent answers. When
+    /// the state won't restore, as while the Mac's screen is locked, which keeps its key from
+    /// paddock, the slot boots a fresh clone of the source instead, and tries its state again next time.
     private func refill(_ slot: Slot) async throws {
         guard let saved = slot.saved else { return }
         let started = ContinuousClock.now
-        let bundle = try home.bundle(named: "\(slot.name)-\(Self.shortID())")
-        slot.current = bundle
-        let config = try VMClone.clone(saved, to: bundle, keepingSavedState: true)
-        let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
-        slot.vm = vm
-        try await vm.restore()
-        // Attached before the guest resumes, the display catches the frames it draws then; a
-        // serve that can't reach the window server just refuses screenshots later.
-        try? vm.attachScreen()
-        try await vm.resume()
+        var how = "restored"
+        let vm: HeadlessVM
+        do {
+            vm = try await startClone(of: saved, in: slot, restoring: true)
+        } catch {
+            print("Slot \(slot.number) boots a fresh clone of '\(image)' instead: \(error.localizedDescription)")
+            await discardCurrent(of: slot)
+            vm = try await startClone(of: try home.bundle(named: image), in: slot, restoring: false)
+            how = "booted"
+        }
+        let bundle = vm.bundle
         let ip = try await waitUntilReady(vm)
-        if config.isLinux {
-            // The guest resumes at the time the slot's state was saved; macOS corrects that itself.
+        if vm.config.isLinux {
+            // A restored guest runs at the time its state was saved, and a booted one starts at 1970
+            // until its network time arrives; macOS corrects that itself.
             do { try await vm.setGuestClock() } catch {
                 print("  warning: couldn't set the clock of '\(bundle.name)': \(error.localizedDescription)")
             }
@@ -355,8 +360,29 @@ final class WarmPool {
             self?.replaceCurrent(of: slot)
         }
         slot.warmAddress = ip
-        print("Slot \(slot.number) warm: '\(bundle.name)' at \(ip), restored in \(DurationFormat.short(ContinuousClock.now - started))")
+        print("Slot \(slot.number) warm: '\(bundle.name)' at \(ip), \(how) in \(DurationFormat.short(ContinuousClock.now - started))")
         handOut()
+    }
+
+    /// Clones `source` into the slot and starts the clone: from the saved state it keeps when
+    /// `restoring`, otherwise with a cold boot under a fresh identity.
+    private func startClone(of source: VMBundle, in slot: Slot, restoring: Bool) async throws -> HeadlessVM {
+        let bundle = try home.bundle(named: "\(slot.name)-\(Self.shortID())")
+        slot.current = bundle
+        let config = try VMClone.clone(source, to: bundle, keepingSavedState: restoring)
+        let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
+        slot.vm = vm
+        // Attached before the guest runs, the display catches the frames it draws then; a serve
+        // that can't reach the window server just refuses screenshots later.
+        if restoring {
+            try await vm.restore()
+            try? vm.attachScreen()
+            try await vm.resume()
+        } else {
+            try? vm.attachScreen()
+            try await vm.start()
+        }
+        return vm
     }
 
     private func handle(_ line: String, _ responder: Responder) {

@@ -10,6 +10,8 @@
 - A Linux VM costs its Mac about its own memory at most: a 4 GB Debian 13 VM took 0.45 GB idle
   and 3.97 GB with its memory filled, which the Mac keeps until the VM stops. `serve` counts it at
   its memory.
+- A slot's saved state doesn't restore while the Mac's screen is locked, so `serve` boots fresh
+  clones instead, which takes longer (see [What serve needs](hosts.md#what-serve-needs)).
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
 - Networking is macOS's shared NAT, or with `--userspace` a network of each VM's own, where a
   VM reaches only the names its `acquire --allow` listed (see
