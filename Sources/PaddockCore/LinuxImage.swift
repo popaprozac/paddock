@@ -139,7 +139,7 @@ public enum LinuxImage {
     /// only once it is complete.
     @discardableResult
     public static func makeBundle(_ bundle: VMBundle, from image: URL, cpuCount: Int, memorySize: UInt64,
-                                  diskSize: UInt64) throws -> VMConfig {
+                                  diskSize: UInt64, rosetta: Bool = false) throws -> VMConfig {
         let staging = try StagingArea(for: bundle)
         let disk = staging.bundle.diskURL
         if image.lastPathComponent.hasSuffix(".tar.xz") {
@@ -162,10 +162,11 @@ public enum LinuxImage {
         } catch {
             throw PaddockError("can't create the EFI variable store: \(error.localizedDescription)")
         }
-        let config = VMConfig(
+        var config = VMConfig(
             kind: .linux, hardwareModel: Data(), machineIdentifier: VZGenericMachineIdentifier().dataRepresentation,
             macAddress: VZMACAddress.randomLocallyAdministered().string, cpuCount: cpuCount, memorySize: memorySize,
             diskSize: diskSize)
+        config.rosetta = rosetta ? true : nil
         try staging.bundle.writeConfig(config)
         try staging.commit()
         return config

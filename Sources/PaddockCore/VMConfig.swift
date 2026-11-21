@@ -49,6 +49,9 @@ public struct VMConfig: Codable, Equatable, Sendable {
     public var diskSize: UInt64
     public var display: Display
     public var os: OSInfo?
+    /// A Linux VM with Rosetta's share, to run x86-64 programs. Every VM of an image keeps it, since
+    /// saved state restores only onto the same devices.
+    public var rosetta: Bool?
 
     public var isLinux: Bool { kind == .linux }
 

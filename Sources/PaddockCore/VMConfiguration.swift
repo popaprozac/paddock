@@ -56,7 +56,7 @@ public enum VMConfiguration {
             let tag = config.isLinux ? linuxShareTag : VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag
             let share = VZVirtioFileSystemDeviceConfiguration(tag: tag)
             share.share = VZSingleDirectoryShare(directory: VZSharedDirectory(url: directory, readOnly: true))
-            configuration.directorySharingDevices = [share]
+            configuration.directorySharingDevices.append(share)
         }
 
         do {
@@ -119,6 +119,37 @@ public enum VMConfiguration {
             console.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: nil, fileHandleForWriting: log)
         }
         configuration.serialPorts = [console]
+        if config.rosetta == true {
+            configuration.directorySharingDevices = [try rosettaShare()]
+        }
+    }
+
+    /// The tag a Linux guest mounts Rosetta's share by, and the abstract socket its translation
+    /// cache, rosettad, listens on in the guest.
+    public static let rosettaTag = "rosetta"
+
+    /// Rosetta's share, with its ahead-of-time translation cache on, which makes launching an
+    /// x86-64 program again about four times faster.
+    static func rosettaShare() throws -> VZVirtioFileSystemDeviceConfiguration {
+        try checkRosetta()
+        let share = try VZLinuxRosettaDirectoryShare()
+        try share.setCachingOptions(.abstractSocket(rosettaTag))
+        let device = VZVirtioFileSystemDeviceConfiguration(tag: rosettaTag)
+        device.share = share
+        return device
+    }
+
+    /// Fails unless this Mac can give a Linux VM Rosetta, saying how to install it if it can.
+    public static func checkRosetta() throws {
+        switch VZLinuxRosettaDirectoryShare.availability {
+        case .installed:
+            break
+        case .notInstalled:
+            throw PaddockError("Rosetta isn't installed on this Mac, and this Linux image uses it. Install it with "
+                + "'softwareupdate --install-rosetta --agree-to-license', which accepts Apple's license for Rosetta")
+        default:
+            throw PaddockError("this Mac can't run Rosetta for Linux VMs, and this Linux image uses it")
+        }
     }
 
     static func platform(bundle: VMBundle, config: VMConfig) throws -> VZMacPlatformConfiguration {

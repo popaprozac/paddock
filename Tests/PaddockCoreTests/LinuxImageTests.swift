@@ -96,6 +96,16 @@ import Virtualization
         try expectLinuxBundle(bundle, diskSize: 4 << 20, config: config)
     }
 
+    @Test func keepsWhetherTheImageUsesRosetta() throws {
+        let tmp = try TemporaryDirectory()
+        let disk = try writeDisk(in: tmp)
+        let plain = try LinuxImage.makeBundle(VMBundle(url: tmp.url.appendingPathComponent("vms/a")), from: disk,
+                                              cpuCount: 2, memorySize: 2 << 30, diskSize: 4 << 20)
+        let rosetta = try LinuxImage.makeBundle(VMBundle(url: tmp.url.appendingPathComponent("vms/b")), from: disk,
+                                                cpuCount: 2, memorySize: 2 << 30, diskSize: 4 << 20, rosetta: true)
+        #expect(plain.rosetta == nil && rosetta.rosetta == true)
+    }
+
     @Test func makesABundleFromARawDisk() throws {
         let tmp = try TemporaryDirectory()
         let disk = try writeDisk(in: tmp)

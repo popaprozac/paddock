@@ -125,7 +125,7 @@ Restored clones share one identity, so only one can run at a time.
   efi-vars     EFI variable store (Linux), in place of aux.img
   config.json  hardware model and machine identifier (base64), MAC address,
                CPU count, memory, disk size, display and the installed macOS build;
-               "kind": "linux" for a Linux VM
+               "kind": "linux" for a Linux VM, and "rosetta": true for one with Rosetta
   state.vzvmsave  optional saved memory and device state of a paused VM
   net.sock     paddock-net's control socket, while the VM runs on the userspace network
   console.log  a Linux guest's console, written afresh each time it starts

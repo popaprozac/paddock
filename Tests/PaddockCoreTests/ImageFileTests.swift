@@ -54,7 +54,7 @@ import Yams
 
     @Test func refusesAMisspelledKeyAnywhere() {
         #expect(failure("from: { macos: latest }\naccount: { name: bench }\nlicence: accept")
-            == "licence: unknown key; expected name, from, vm, account, license, grants, share, steps")
+            == "licence: unknown key; expected name, from, vm, account, license, grants, share, steps, rosetta")
         #expect(failure("from: { macos: latest }\naccount: { name: bench }\nsteps: [{ name: x, user: root, run: id }]")
             == "steps[0].user: unknown key; expected name, run, as")
     }
@@ -104,6 +104,12 @@ import Yams
         #expect(failure("from: { url: 'https://images.example/disk.qcow2', sha256: \(sha256) }\naccount: { name: bench }")
             == "from.url: expected a .tar.xz holding disk.raw, or a .raw disk")
         #expect(failure("from: { debian: 13, sha256: \(sha256) }\naccount: { name: bench }") == "from.sha256: goes with url:")
+    }
+
+    @Test func takesRosettaForLinuxImagesOnly() throws {
+        #expect(try decode("from: { debian: 13 }\naccount: { name: bench }\nrosetta: true").rosetta)
+        #expect(!(try decode("from: { debian: 13 }\naccount: { name: bench }")).rosetta)
+        #expect(failure("from: { macos: latest }\naccount: { name: bench }\nrosetta: true") == "rosetta: is for Linux images only")
     }
 
     @Test func refusesMacOSOnlyKeysInALinuxImage() {

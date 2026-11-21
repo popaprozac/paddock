@@ -107,6 +107,9 @@ public enum ImageTemplate: String, CaseIterable, Sendable {
               # Commands run as this account, uid 1000. It has no password, and sudo needs none.
               name: paddock
 
+            # Uncomment to run x86-64 Linux programs through Rosetta, which this Mac must have.
+            # rosetta: true
+
             # A host folder, read-only in the guest at /mnt/share, and steps that run in order after
             # setup, each in bash with set -e, as the account or as root.
             # share: installers

@@ -38,6 +38,13 @@ import Yams
         #expect(command.first == "sh" && command.last?.hasSuffix("sh /run/paddock-seed/paddock-setup.sh paddock") == true)
     }
 
+    @Test func setsRosettaUpOnlyWhenTheImageUsesIt() {
+        #expect(LinuxSeed.userData(account: "paddock", fullName: "Paddock", rosetta: true)
+            .contains("paddock-setup.sh paddock rosetta\""))
+        #expect(LinuxSeed.userData(account: "paddock", fullName: "Paddock").contains("paddock-setup.sh paddock\""))
+        #expect(LinuxSeed.setupScript.contains(#"if [ "$rosetta" = rosetta ]; then"#))
+    }
+
     @Test func setupScriptIsValidShell() throws {
         #expect(LinuxSeed.setupScript.hasPrefix("#!/bin/sh\n"))
         #expect(LinuxSeed.setupScript.contains("\nEOF\n"))  // the heredoc's end, at the start of its line
