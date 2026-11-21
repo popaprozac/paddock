@@ -13,6 +13,9 @@ enum LinuxBuild {
         let started = ContinuousClock.now
         let image = plan.image
         let home = PaddockHome.fromEnvironment()
+        if image.rosetta {
+            try VMConfiguration.checkRosetta()  // before a download that couldn't be used
+        }
         let source = try await fetch(image.from, disk: plan.disk, home: home)
         let sizing = VMSizing.resolve(cpuCount: image.vm.cpus ?? VMSizing.defaultCPUCount,
                                       memorySize: UInt64(image.vm.memory.map(UInt64.init) ?? defaultMemoryGB) << 30,
@@ -22,11 +25,12 @@ enum LinuxBuild {
             + "\(sizing.memorySize >> 30) GB memory, \(diskGB) GB sparse disk")
         let bundle = try home.bundle(named: plan.name)
         try LinuxImage.makeBundle(bundle, from: source, cpuCount: sizing.cpuCount, memorySize: sizing.memorySize,
-                                  diskSize: diskGB << 30)
+                                  diskSize: diskGB << 30, rosetta: image.rosetta)
         do {
             let seed = bundle.url.appendingPathComponent("seed.iso")
             try LinuxSeed.makeISO(at: seed, agent: plan.guest.appendingPathComponent("linux"), account: image.account.name,
-                                  fullName: image.account.fullName ?? image.account.name, name: plan.name)
+                                  fullName: image.account.fullName ?? image.account.name, name: plan.name,
+                                  rosetta: image.rosetta)
             try await firstBoot(bundle, seed: seed)
             try FileManager.default.removeItem(at: seed)
             // Without the seed: the image must come up on its own, as every clone does.

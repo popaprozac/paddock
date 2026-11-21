@@ -36,6 +36,21 @@ import Virtualization
         #expect(configuration.graphicsDevices.isEmpty && configuration.keyboards.isEmpty && configuration.pointingDevices.isEmpty)
         #expect(configuration.serialPorts.count == 1 && configuration.entropyDevices.count == 1)
         #expect(FileManager.default.fileExists(atPath: bundle.consoleLogURL.path))
+        #expect(configuration.directorySharingDevices.isEmpty)
+    }
+
+    /// With Rosetta, the VM gets its share by the tag the guest mounts. Only on a Mac with Rosetta.
+    @Test(.enabled(if: VZLinuxRosettaDirectoryShare.availability == .installed))
+    func givesARosettaLinuxVMItsShare() throws {
+        let tmp = try TemporaryDirectory()
+        let bundle = VMBundle(url: tmp.url)
+        _ = try VZEFIVariableStore(creatingVariableStoreAt: bundle.efiVariablesURL)
+        var config = VMConfigTests.linuxSample
+        config.rosetta = true
+        let configuration = VZVirtualMachineConfiguration()
+        try VMConfiguration.linux(configuration, bundle: bundle, config: config)
+        let shares = configuration.directorySharingDevices.compactMap { $0 as? VZVirtioFileSystemDeviceConfiguration }
+        #expect(shares.map(\.tag) == ["rosetta"] && shares.first?.share is VZLinuxRosettaDirectoryShare)
     }
 
     @Test(arguments: ["", "not-a-mac", "12:34:56:78:9a"])

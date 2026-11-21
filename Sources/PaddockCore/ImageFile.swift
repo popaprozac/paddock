@@ -93,6 +93,8 @@ public struct ImageFile: Equatable, Sendable {
     public var grants: Grants
     /// As written: relative to the image file's folder unless it starts with "/".
     public var share: String?
+    /// A Linux image runs x86-64 Linux programs through Rosetta.
+    public var rosetta = false
     public var steps: [Step]
 
     /// One line for a file that doesn't decode: where, then what, as in
@@ -130,7 +132,7 @@ public struct ImageFile: Equatable, Sendable {
 
 extension ImageFile: Decodable {
     private enum Keys: String, CodingKey, CaseIterable {
-        case name, from, vm, account, license, grants, share, steps
+        case name, from, vm, account, license, grants, share, steps, rosetta
     }
 
     public init(from decoder: any Decoder) throws {
@@ -154,6 +156,11 @@ extension ImageFile: Decodable {
         grants = try keys.choice(Grants.allCases, forKey: .grants) ?? .managed
         share = try keys.decodeIfPresent(String.self, forKey: .share)
         steps = try keys.decodeIfPresent([Step].self, forKey: .steps) ?? []
+        rosetta = try keys.decodeIfPresent(Bool.self, forKey: .rosetta) ?? false
+        if rosetta, !from.isLinux {
+            // macOS runs Intel apps through Rosetta on its own; this is the Linux share.
+            throw DecodingError.dataCorruptedError(forKey: .rosetta, in: keys, debugDescription: "is for Linux images only")
+        }
     }
 }
 

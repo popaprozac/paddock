@@ -256,6 +256,7 @@ from: { debian: 13 }                 # or { disk: <path> } or { url: <https URL>
 vm: { cpus: 4, memory: 4, disk: 16 } # in GB; these are the defaults
 account: { name: paddock }           # full-name is optional
 share: installers                    # optional: a host folder, read-only in the guest at /mnt/share
+rosetta: true                        # optional: run x86-64 Linux programs through Rosetta
 steps:
   - name: Install git, which paddock task needs
     as: root
@@ -318,6 +319,25 @@ Every clone then has:
 - ssh masked: nothing reaches the guest over the network.
 - The kernel and systemd writing to the guest's console, and the console logging the account in
   without a password. Only paddock on this Mac reaches the console.
+
+### Rosetta
+
+With `rosetta: true`, every VM of the image runs x86-64 Linux programs through Rosetta, as macOS
+runs Intel apps. The Mac needs Rosetta installed: if it isn't, `build` stops, and `serve`'s slots
+stay empty, with the command that installs it, which accepts Apple's license for Rosetta. The image keeps
+the setting, since a slot's saved state restores only onto the same devices.
+
+- The VM gets Rosetta's share, mounted in the guest at `/media/rosetta` and registered for x86-64
+  programs, and `rosettad`, Rosetta's translation cache, with its files in `/var/cache/rosettad`.
+- Rosetta translates a program each time it starts. Measured with small Go programs: 12 ms a
+  launch without the cache and about 3 ms once the cache has the program, against 0.4 ms native.
+  Running a program also took 2.4 to 5.4 times as long as its arm64 build.
+- Steps that run your x86-64 tools put them in the golden image's cache, so every clone starts
+  with it. What a handed-out VM adds to the cache goes when the VM is released, and no cache is
+  shared between VMs, where one workload could leave translations for another to run.
+- A dynamically linked x86-64 program needs its x86-64 libraries in the guest, from Debian's amd64
+  packages; statically linked programs and containers bring their own. Only statically linked
+  ones have been tested.
 
 Setup assumes Debian's system: netplan with systemd-networkd, the `ssh` unit and apt. Images of
 other distributions, and other disk formats such as qcow2, aren't supported.
