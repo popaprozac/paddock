@@ -340,6 +340,12 @@ final class WarmPool {
         try? vm.attachScreen()
         try await vm.resume()
         let ip = try await waitUntilReady(vm)
+        if config.isLinux {
+            // The guest resumes at the time the slot's state was saved; macOS corrects that itself.
+            do { try await vm.setGuestClock() } catch {
+                print("  warning: couldn't set the clock of '\(bundle.name)': \(error.localizedDescription)")
+            }
+        }
         vm.onFailure = { [weak self] error in
             print("Slot \(slot.number): \(error.message); restoring a fresh clone")
             self?.replaceCurrent(of: slot)

@@ -333,6 +333,12 @@ final class HeadlessVM: NSObject {
         try await withAgent { try GuestAgent.askToRun(command, asRoot: asRoot, over: $0, output: output) }
     }
 
+    /// Sets a Linux guest's clock to this Mac's. A restored guest resumes at the time its state was
+    /// saved, and Linux, unlike macOS, doesn't notice the jump.
+    func setGuestClock() async throws {
+        try await withAgent { try GuestAgent.askToSetClock(to: Date(), over: $0) }
+    }
+
     /// Copies the file at `url` into the guest agent's files folder as `name`.
     func putInGuest(_ url: URL, as name: String) async throws {
         try await withAgent { try GuestAgent.askToPut(url, as: name, over: $0) }

@@ -53,6 +53,15 @@ import Testing
         return try GuestAgent.ask(request, over: host, timeout: 1)
     }
 
+    /// The Linux agent's clock request, as paddock-guestd-linux's tests send it.
+    @Test func clockRequestsCarryTheTimeInNanoseconds() throws {
+        let line = GuestAgent.Request(op: "clock", time: 1_763_664_000_123_456_789).line
+        let fields = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+        #expect(fields?["op"] as? String == "clock")
+        #expect((fields?["time"] as? NSNumber)?.int64Value == 1_763_664_000_123_456_789)
+        #expect(!GuestAgent.Request(op: "health").line.contains("time"))
+    }
+
     @Test func askGetsTheAgentsAnswer() throws {
         let response = try askAgainst({ GuestAgent.answer($0) }, GuestAgent.Request(op: "health"))
         #expect(response.version == GuestAgent.version)

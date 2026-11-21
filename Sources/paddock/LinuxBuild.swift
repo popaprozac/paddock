@@ -79,7 +79,8 @@ enum LinuxBuild {
                 throw PaddockError("the guest agent in '\(bundle.name)' didn't answer within 300 s. The guest's console "
                     + "ends:\n\(consoleTail(of: bundle))")
             }
-            try await setClock(vm)
+            // A cloud image boots at 1970 until its network time arrives, which breaks steps that check certificates.
+            try await vm.setGuestClock()
             // cloud-init's last modules may still be running; 2 is done with warnings.
             let status = try await vm.runInGuest("cloud-init status --wait --long", asRoot: true) { print("    \($0)") }
             guard status == 0 || status == 2 else {
@@ -95,13 +96,6 @@ enum LinuxBuild {
             await vm.stop()
             throw error
         }
-    }
-
-    /// Sets the guest's clock from this Mac's. A cloud image boots with its clock at 1970 until
-    /// its network time arrives, and steps that check certificates would fail until then.
-    static func setClock(_ vm: HeadlessVM) async throws {
-        let now = Int(Date().timeIntervalSince1970)
-        _ = try await vm.runInGuest("date -u -s @\(now) >/dev/null", asRoot: true) { _ in }
     }
 
     /// The last lines of the guest's console, as console.log kept them, without terminal escapes.

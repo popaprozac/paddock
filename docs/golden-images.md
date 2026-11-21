@@ -315,7 +315,8 @@ Every clone then has:
   released.
 - A network on any Ethernet interface, matched by name since every clone has a new MAC address,
   with DHCP identifying the guest by its MAC so that paddock finds its lease. Its time comes from
-  time.apple.com, which paddock-net answers on the userspace network.
+  time.apple.com, which paddock-net answers on the userspace network, and `serve` sets each warm
+  VM's clock from this Mac's, since a restored guest resumes at the time its state was saved.
 - ssh masked: nothing reaches the guest over the network.
 - The kernel and systemd writing to the guest's console, and the console logging the account in
   without a password. Only paddock on this Mac reaches the console.
