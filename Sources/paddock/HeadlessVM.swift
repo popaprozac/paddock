@@ -265,7 +265,7 @@ final class HeadlessVM: NSObject {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if let failure { throw failure }
-            if config.isLinux {
+            if !config.isMac {
                 if await state()?.contains("desktop") == true { return true }
             } else if let state = await state(at: SessionHelper.port, name: "paddock-session") {
                 if state.contains("desktop") { return true }
@@ -357,7 +357,7 @@ final class HeadlessVM: NSObject {
     /// from paddock-session, in the guest's desktop session, on macOS; from the guest agent, which
     /// reads AT-SPI, on a Linux desktop.
     func accessibilityTree(output: @escaping @Sendable (String) -> Void) async throws {
-        guard config.isLinux else {
+        guard !config.isMac else {
             return try await withAgent(port: SessionHelper.port, name: "paddock-session") {
                 try SessionHelper.askForTree(over: $0, output: output)
             }
@@ -377,7 +377,7 @@ final class HeadlessVM: NSObject {
     /// check couldn't run. serve warns with it; build reports it.
     func imageProblems(sessionHelper: Bool) async -> [String]? {
         // The checks are macOS's settings: a Linux image's setup is paddock's own build.
-        guard !config.isLinux else { return [] }
+        guard config.isMac else { return [] }
         let output = OSAllocatedUnfairLock(initialState: [String]())
         guard (try? await runInGuest(SourceCheck.command) { line in output.withLock { $0.append(line) } }) == 0 else {
             return nil

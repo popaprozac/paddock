@@ -31,7 +31,7 @@ public enum VMClone {
 
         var config = try source.readConfig()
         try cloneFile(source.diskURL, to: staging.bundle.diskURL)
-        if config.isLinux {
+        if !config.isMac {
             try cloneFile(source.efiVariablesURL, to: staging.bundle.efiVariablesURL)
         } else {
             try cloneFile(source.auxiliaryStorageURL, to: staging.bundle.auxiliaryStorageURL)
@@ -40,7 +40,7 @@ public enum VMClone {
         if keepingSavedState {
             try cloneFile(source.savedStateURL, to: staging.bundle.savedStateURL)
         } else {
-            config.machineIdentifier = config.isLinux
+            config.machineIdentifier = !config.isMac
                 ? VZGenericMachineIdentifier().dataRepresentation : VZMacMachineIdentifier().dataRepresentation
             config.macAddress = VZMACAddress.randomLocallyAdministered().string
         }

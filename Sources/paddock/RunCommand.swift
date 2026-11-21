@@ -68,9 +68,9 @@ struct Run: ParsableCommand {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
         let sharing = share.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
         let config = try bundle.readConfig()
-        if config.isLinux {
+        if !config.isMac {
             guard provision == nil, !recovery else {
-                throw PaddockError("--provision and --recovery are for macOS VMs, and '\(name)' is a Linux VM")
+                throw PaddockError("--provision and --recovery are for macOS VMs, and '\(name)' is a \(config.isWindows ? "Windows" : "Linux") VM")
             }
             guard config.hasScreen else {
                 try MainActor.assumeIsolated { try VMConsole.run(bundle, sharing: sharing) }
@@ -105,7 +105,8 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var interrupt: (any DispatchSourceSignal)?
     private var shutdownRequested = false
 
-    private let linux: Bool  // a desktop Linux VM, which takes none of macOS's start options
+    private let mac: Bool  // a macOS VM; Linux and Windows VMs take none of macOS's start options
+    private let linux: Bool  // a desktop Linux VM, whose display keeps the image's size
     private let provisioning: NSObject?  // VZMacGuestProvisioningOptions, which needs macOS 27
     private let recovery: Bool
 
@@ -114,7 +115,7 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let config = try bundle.readConfig()
         let configuration = try VMConfiguration.make(bundle: bundle, config: config, sharing: sharing)
         let controller = VMWindow(bundle: bundle, lock: lock, machine: VZVirtualMachine(configuration: configuration),
-                                  linux: config.isLinux, provisioning: provisioning, recovery: recovery)
+                                  mac: config.isMac, linux: config.isLinux, provisioning: provisioning, recovery: recovery)
 
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -123,11 +124,12 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fatalError("NSApplication.run returned")
     }
 
-    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, linux: Bool, provisioning: NSObject?,
+    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, mac: Bool, linux: Bool, provisioning: NSObject?,
                  recovery: Bool) {
         self.bundle = bundle
         self.lock = lock
         self.machine = machine
+        self.mac = mac
         self.linux = linux
         self.provisioning = provisioning
         self.recovery = recovery
@@ -157,7 +159,7 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         interrupt = onInterrupt { [weak self] in self?.requestShutdown() }
 
-        if linux {
+        if !mac {
             machine.start { result in
                 if case let .failure(error) = result {
                     Self.exit(1, "Couldn't start '\(self.bundle.name)': \(error.localizedDescription)")

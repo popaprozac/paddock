@@ -147,7 +147,7 @@ actor AgentSession {
         let screen = !config.hasScreen ? "It has no screen; work in it with run_command."
             : "Its screen is \(scale.width)x\(scale.height) in screenshot pixels."
         return [Self.text("""
-            Acquired '\(vm)', a fresh \(config.isLinux ? "Linux" : "macOS") VM, at \(response.ip ?? "an unknown address"). \
+            Acquired '\(vm)', a fresh \(config.isLinux ? "Linux" : config.isWindows ? "Windows" : "macOS") VM, at \(response.ip ?? "an unknown address"). \
             \(screen) Call release when you are done; it is wiped.
             """)]
     }

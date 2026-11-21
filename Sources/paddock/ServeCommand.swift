@@ -52,7 +52,7 @@ struct Serve: AsyncParsableCommand {
     }
 
     func run() async throws {
-        if slots > 2, !(try PaddockHome.fromEnvironment().bundle(named: source).readConfig().isLinux) {
+        if slots > 2, try PaddockHome.fromEnvironment().bundle(named: source).readConfig().isMac {
             throw PaddockError("--slots is 1 or 2 for a macOS image: macOS runs at most two macOS VMs at once")
         }
         // Joined before any VM boots, so a bad token or URL fails in seconds.
@@ -281,7 +281,7 @@ final class WarmPool {
         let memory = config.memorySize
         let total = ProcessInfo.processInfo.physicalMemory
         let wanted = UInt64(slots.count)
-            * VMSizing.hostMemory(for: memory, linux: config.isLinux, desktop: config.desktop == true)
+            * VMSizing.hostMemory(for: memory, linux: !config.isMac, desktop: config.hasScreen)
         // shortcut: 10 GB for macOS and its apps, from the Studio, whose pressure reached warn with two
         // 8 GB VMs on 36 GB; tune once hosts run other workloads.
         guard wanted + (10 << 30) > total else { return }
@@ -717,7 +717,7 @@ final class WarmPool {
                     + "\(DurationFormat.short(Self.sessionTimeout)); turn off the screen lock in the golden image")
             }
         }
-        if vm.config.isLinux, vm.config.hasScreen {
+        if !vm.config.isMac, vm.config.hasScreen {
             guard try await vm.desktopReady(within: Self.sessionTimeout) else {
                 throw PaddockError("'\(vm.bundle.name)' showed no desktop within \(DurationFormat.short(Self.sessionTimeout)); "
                     + "the golden image must log its account in to a desktop by itself, on a kernel that drives the screen "
