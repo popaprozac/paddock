@@ -298,6 +298,15 @@ A build that stops leaves the VM in place to look at; delete it to build again. 
 agent never answers on the first boot, the build prints the end of the guest's console, which
 the VM keeps in `console.log` in its folder.
 
+To change an image by hand, `paddock run debian` boots it with this terminal as its console,
+logged in as the account, in place of a window. Ctrl-C and the like go to the guest; Ctrl-] asks
+it to shut down and a second Ctrl-] forces it off, as shutting down in the guest also ends `run`.
+A serial console can't tell the guest the window's size, so `run` prints the `stty` command that
+does. With `--share`, mount the folder in the guest with
+`sudo mount -t virtiofs paddock-share /mnt/share`. The image empties its machine-id whenever it
+shuts down, so booting it this way doesn't leave one for every clone to share; a VM forced off
+keeps the one it had.
+
 Every clone then has:
 
 - The account, with uid 1000 and no password, and sudo that needs none. `exec` runs commands as

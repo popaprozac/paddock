@@ -13,16 +13,17 @@ public enum VMConfiguration {
     /// `network` replaces macOS's shared NAT with another attachment, such as a
     /// `UserspaceNetwork`'s; a saved state restores only into the same kind it was saved with.
     /// `seed` attaches a disk image read-only as a second disk, as `build` does with a Linux
-    /// image's cloud-init seed.
+    /// image's cloud-init seed. `console` connects a Linux guest's console to something other than
+    /// its console.log, such as `run`'s terminal.
     public static func make(
         bundle: VMBundle, config: VMConfig, sharing directory: URL? = nil, network attachment: VZNetworkDeviceAttachment? = nil,
-        seed: URL? = nil
+        seed: URL? = nil, console: VZSerialPortAttachment? = nil
     ) throws -> VZVirtualMachineConfiguration {
         let configuration = VZVirtualMachineConfiguration()
         configuration.cpuCount = config.cpuCount
         configuration.memorySize = config.memorySize
         if config.isLinux {
-            try linux(configuration, bundle: bundle, config: config)
+            try linux(configuration, bundle: bundle, config: config, console: console)
         } else {
             try mac(configuration, bundle: bundle, config: config)
         }
@@ -91,7 +92,8 @@ public enum VMConfiguration {
     /// A Linux guest's generic platform, EFI boot, entropy and console. No display, keyboard or
     /// pointer: a cloud image's kernel has no GPU driver, and any USB device stops a Linux VM's
     /// saved state from restoring (it fails with "invalid argument").
-    static func linux(_ configuration: VZVirtualMachineConfiguration, bundle: VMBundle, config: VMConfig) throws {
+    static func linux(_ configuration: VZVirtualMachineConfiguration, bundle: VMBundle, config: VMConfig,
+                      console attachment: VZSerialPortAttachment? = nil) throws {
         guard let machineIdentifier = VZGenericMachineIdentifier(dataRepresentation: config.machineIdentifier) else {
             throw PaddockError("config.json for '\(bundle.name)' has an unreadable machine identifier")
         }
@@ -105,13 +107,17 @@ public enum VMConfiguration {
         bootLoader.variableStore = VZEFIVariableStore(url: bundle.efiVariablesURL)
         configuration.bootLoader = bootLoader
         configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
-        // The guest's console, for reading why a guest never came up; each start writes it afresh.
-        guard FileManager.default.createFile(atPath: bundle.consoleLogURL.path, contents: nil),
-              let log = try? FileHandle(forWritingTo: bundle.consoleLogURL) else {
-            throw PaddockError("can't write \(bundle.consoleLogURL.path)")
-        }
         let console = VZVirtioConsoleDeviceSerialPortConfiguration()
-        console.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: nil, fileHandleForWriting: log)
+        if let attachment {
+            console.attachment = attachment
+        } else {
+            // The guest's console, for reading why a guest never came up; each start writes it afresh.
+            guard FileManager.default.createFile(atPath: bundle.consoleLogURL.path, contents: nil),
+                  let log = try? FileHandle(forWritingTo: bundle.consoleLogURL) else {
+                throw PaddockError("can't write \(bundle.consoleLogURL.path)")
+            }
+            console.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: nil, fileHandleForWriting: log)
+        }
         configuration.serialPorts = [console]
     }
 
