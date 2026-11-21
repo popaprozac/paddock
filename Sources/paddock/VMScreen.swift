@@ -17,6 +17,7 @@ final class VMScreen: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let view: VZVirtualMachineView
     private let size: NSSize           // the guest's pixels, one view point each while off screen
+    private let usbWheel: Bool         // the guest's only pointer is VZ's USB one (Linux, Windows): see `scroll`
     private var handBack: (() -> Void)?  // set while a person has the window on screen
     private static var shown: [VMScreen] = []  // on screen now: paddock shows in the Dock while any is
     private static var pump: Timer?            // hands AppKit's events to windows while any is on screen
@@ -26,12 +27,13 @@ final class VMScreen: NSObject, NSWindowDelegate {
     /// window, visible or not.
     private static let offScreen = NSPoint(x: -20_000, y: -20_000)
 
-    init(machine: VZVirtualMachine, display: VMConfig.Display) throws {
+    init(machine: VZVirtualMachine, display: VMConfig.Display, usbWheel: Bool = false) throws {
         guard CGSessionCopyCurrentDictionary() != nil else {
             throw PaddockError("this paddock can't reach the window server; start it from a logged-in session to read VM screens")
         }
         _ = NSApplication.shared  // AppKit needs it before any window; without a bundle it shows no Dock icon
         size = NSSize(width: display.widthInPixels, height: display.heightInPixels)
+        self.usbWheel = usbWheel
         view = VZVirtualMachineView(frame: NSRect(origin: .zero, size: size))
         view.virtualMachine = machine
         window = NSWindow(contentRect: NSRect(origin: Self.offScreen, size: size),
@@ -272,6 +274,14 @@ final class VMScreen: NSObject, NSWindowDelegate {
         // A scroll event made from scratch has no window and sits at the host's own pointer, off
         // the view; one made from a mouse event at the point has both right.
         guard let cgEvent = mouseEvent(.mouseMoved, at: point, clickCount: 0)?.cgEvent else { return }
+        // VZ's USB pointer reports a line delta as 10 high-resolution wheel units (a notch is
+        // 120), in macOS's natural direction, so to a guest that doesn't scroll naturally it is a
+        // twelfth of a notch the wrong way. Windows scrolls 3 lines a notch: 4 per line, turned
+        // around, makes a line a line.
+        // shortcut: measured on Windows 11's vertical wheel (a Linux guest's evdev shows the same
+        // units and direction); horizontal scrolling takes the same change untested, and a guest
+        // set to other lines per notch is off by that.
+        let (down, right) = usbWheel ? (-down * 4, -right * 4) : (down, right)
         cgEvent.type = .scrollWheel
         cgEvent.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(down))
         cgEvent.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(right))

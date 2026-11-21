@@ -128,7 +128,7 @@ final class HeadlessVM: NSObject {
                 + "run commands in it instead")
         }
         if screen == nil {
-            screen = try VMScreen(machine: machine, display: config.display)
+            screen = try VMScreen(machine: machine, display: config.display, usbWheel: !config.isMac)
         }
     }
 
