@@ -7,8 +7,8 @@ import Foundation
 ///
 /// ```yaml
 /// from: { macos: latest }      # or { ipsw: path/to/restore.ipsw }, which pins the version;
-///                              # or for Linux { debian: 13 }, { disk: path/to/image.tar.xz },
-///                              # or { url: https://..., sha256: <hash> }
+///                              # or for Linux { debian: 13 }, { debian: 13, variant: generic },
+///                              # { disk: path/to/image.tar.xz } or { url: https://..., sha256: <hash> }
 /// vm: { cpus: 4, memory: 8, disk: 80 }
 /// account: { name: bench, full-name: Bench }
 /// license: accept              # leave out and a person accepts it
@@ -26,8 +26,9 @@ public struct ImageFile: Equatable, Sendable {
         case latest
         /// A restore image file, which pins the version.
         case ipsw(String)
-        /// The latest build of a Debian release's genericcloud arm64 image, from cloud.debian.org.
-        case debian(Int)
+        /// The latest build of a Debian release's arm64 image in a variant Debian publishes, from
+        /// cloud.debian.org: genericcloud unless the file says generic.
+        case debian(Int, LinuxImage.Debian.Variant)
         /// A Linux disk you keep, which pins the build: a genericcloud `.tar.xz` as Debian
         /// publishes it, or a raw disk image.
         case disk(String)
@@ -95,6 +96,8 @@ public struct ImageFile: Equatable, Sendable {
     public var share: String?
     /// A Linux image runs x86-64 Linux programs through Rosetta.
     public var rosetta = false
+    /// The build must find a working desktop in a Linux image, or fail. It looks for one either way.
+    public var desktop = false
     public var steps: [Step]
 
     /// One line for a file that doesn't decode: where, then what, as in
@@ -132,7 +135,7 @@ public struct ImageFile: Equatable, Sendable {
 
 extension ImageFile: Decodable {
     private enum Keys: String, CodingKey, CaseIterable {
-        case name, from, vm, account, license, grants, share, steps, rosetta
+        case name, from, vm, account, license, grants, share, steps, rosetta, desktop
     }
 
     public init(from decoder: any Decoder) throws {
@@ -161,18 +164,22 @@ extension ImageFile: Decodable {
             // macOS runs Intel apps through Rosetta on its own; this is the Linux share.
             throw DecodingError.dataCorruptedError(forKey: .rosetta, in: keys, debugDescription: "is for Linux images only")
         }
+        desktop = try keys.decodeIfPresent(Bool.self, forKey: .desktop) ?? false
+        if keys.contains(.desktop), !from.isLinux {
+            throw DecodingError.dataCorruptedError(forKey: .desktop, in: keys, debugDescription: "is for Linux images only")
+        }
     }
 }
 
 extension ImageFile.Source: Decodable {
     private enum Keys: String, CodingKey, CaseIterable {
-        case macos, ipsw, debian, disk, url, sha256, sha512
+        case macos, ipsw, debian, disk, url, sha256, sha512, variant
     }
 
     public init(from decoder: any Decoder) throws {
         let keys = try decoder.strictContainer(keyedBy: Keys.self)
         let hashes = keys.allKeys.filter { $0 == .sha256 || $0 == .sha512 }
-        let sources = keys.allKeys.filter { !hashes.contains($0) }
+        let sources = keys.allKeys.filter { !hashes.contains($0) && $0 != .variant }
         guard sources.count == 1, let key = sources.first else {
             throw DecodingError.dataCorrupted(.init(
                 codingPath: decoder.codingPath,
@@ -180,6 +187,9 @@ extension ImageFile.Source: Decodable {
         }
         if key != .url, let hash = hashes.first {
             throw DecodingError.dataCorruptedError(forKey: hash, in: keys, debugDescription: "goes with url:")
+        }
+        if key != .debian, keys.contains(.variant) {
+            throw DecodingError.dataCorruptedError(forKey: .variant, in: keys, debugDescription: "goes with debian:")
         }
         switch key {
         case .macos:
@@ -194,7 +204,7 @@ extension ImageFile.Source: Decodable {
                 throw DecodingError.dataCorruptedError(
                     forKey: .debian, in: keys, debugDescription: "expected \(ImageFile.debianReleases.map(String.init).joined(separator: ", ")), not \(release)")
             }
-            self = .debian(release)
+            self = .debian(release, try keys.choice(LinuxImage.Debian.Variant.allCases, forKey: .variant) ?? .genericcloud)
         case .disk:
             self = .disk(try keys.decode(String.self, forKey: .disk))
         case .url:
@@ -217,8 +227,8 @@ extension ImageFile.Source: Decodable {
                     forKey: hashKey, in: keys, debugDescription: "expected \(algorithm.hexLength) hex digits")
             }
             self = .url(url, checksum)
-        case .sha256, .sha512:
-            preconditionFailure("a hash is never the source; sources leaves them out")
+        case .sha256, .sha512, .variant:
+            preconditionFailure("a hash or variant is never the source; sources leaves them out")
         }
     }
 }

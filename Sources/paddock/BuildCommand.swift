@@ -200,7 +200,7 @@ enum ImageBuild {
             if image.grants == .recovery {
                 try await RecoveryGrant.run(name: plan.name)
             }
-            problems = try await ImageSteps.run(name: plan.name, steps: image.steps, share: plan.share)
+            problems = try await ImageSteps.run(name: plan.name, steps: image.steps, share: plan.share).problems
         } catch {
             let bundle = try? PaddockHome.fromEnvironment().bundle(named: plan.name)
             print("The build stopped; '\(plan.name)' is left at \(bundle?.url.path ?? plan.name) to look at. Delete it to build again.")

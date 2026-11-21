@@ -245,18 +245,22 @@ the server expire hosts that stop reporting.
 ## Linux images
 
 `paddock build` makes a Linux golden image from an image file as well, with no password to type
-and on any macOS paddock runs on. It builds Debian's genericcloud arm64 images, tested with
-Debian 13. A Linux VM has no screen: commands, files and `serve`'s warm slots work, and
-screenshots, input, `show` and `view` refuse it (see [VM bundle format](commands.md#vm-bundle-format)).
-`paddock init debian.yaml --template debian` writes a file to start from:
+and on any macOS paddock runs on. It builds Debian's arm64 cloud images, tested with Debian 13.
+A Linux VM has no screen unless its image has a desktop (see [Desktop Linux](#desktop-linux)):
+commands, files and `serve`'s warm slots work, and screenshots, input, `show` and `view` refuse a
+VM with no screen (see [VM bundle format](commands.md#vm-bundle-format)).
+`paddock init debian.yaml --template debian` writes a file to start from, and
+`--template debian-desktop` one with a desktop:
 
 ```yaml
 # debian.yaml
-from: { debian: 13 }                 # or { disk: <path> } or { url: <https URL>, sha512: <hash> }
+from: { debian: 13 }                 # or { debian: 13, variant: generic }, { disk: <path> }
+                                     # or { url: <https URL>, sha512: <hash> }
 vm: { cpus: 4, memory: 4, disk: 16 } # in GB; these are the defaults
 account: { name: paddock }           # full-name is optional
 share: installers                    # optional: a host folder, read-only in the guest at /mnt/share
 rosetta: true                        # optional: run x86-64 Linux programs through Rosetta
+desktop: true                        # optional: stop the build if the image has no working desktop
 steps:
   - name: Install git, which paddock task needs
     as: root
@@ -265,7 +269,8 @@ steps:
 
 | `from` | The image | Pinned |
 | --- | --- | --- |
-| `{ debian: 13 }` | Debian 13's latest genericcloud arm64 build, from cloud.debian.org | No: Debian publishes new builds |
+| `{ debian: 13 }` | Debian 13's latest genericcloud arm64 build, from cloud.debian.org; its kernel drives only what a cloud VM needs | No: Debian publishes new builds |
+| `{ debian: 13, variant: generic }` | Debian 13's latest generic arm64 build, whose full kernel also drives a screen and USB input, for a desktop | No |
 | `{ disk: <path> }` | A file you keep: a `.tar.xz` holding `disk.raw`, as Debian publishes them, or a raw disk | Yes |
 | `{ url: <https URL>, sha256: <hash> }`, or `sha512:` | A file to download, a `.tar.xz` or `.raw` as its URL's name says | Yes, by its hash |
 
@@ -296,6 +301,8 @@ steps:
 4. Seals the image: it empties `/etc/machine-id`, so each of `serve`'s slots makes its own at its
    first boot, deletes cloud-init's state and logs and the ssh host keys, cleans apt's cache and
    shuts down.
+5. With a display manager enabled, or `desktop: true`, boots the image once more with a screen to
+   check its desktop (see [Desktop Linux](#desktop-linux)).
 
 A build that stops leaves the VM in place to look at; delete it to build again. If the guest
 agent never answers on the first boot, the build prints the end of the guest's console, which
@@ -322,6 +329,59 @@ Every clone then has:
 - ssh masked: nothing reaches the guest over the network.
 - The kernel and systemd writing to the guest's console, and the console logging the account in
   without a password. Only paddock on this Mac reaches the console.
+
+### Desktop Linux
+
+A Linux image with a desktop gives its VMs a screen, a keyboard and a pointer, so `screenshot`,
+`click`, `type`, `key`, `scroll`, `show`, `view` and MCP's screen tools work as they do for macOS,
+and `paddock run` opens it in a window. `axtree` and MCP's `accessibility_tree` refuse it: they
+read macOS's accessibility tree.
+
+The desktop comes from the image: one you point `from:` at that has one, or one your steps
+install. Its kernel must drive a virtio-gpu screen and USB input. Debian's genericcloud kernel
+drives neither, so build from its generic variant; the `debian-desktop` template does, and
+installs a small Xfce, about 100 MB from Debian:
+
+```yaml
+from: { debian: 13, variant: generic }
+account: { name: paddock }
+desktop: true
+steps:
+  - name: Install Xfce
+    as: root
+    run: |
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \
+        xserver-xorg-input-libinput dbus-x11
+      systemctl set-default graphical.target
+```
+
+paddock does what only it can, since it makes the account at the first boot:
+
+- After the steps, if a display manager is enabled, it sets it to log the account in
+  automatically: LightDM, GDM or SDDM. For another, the build says to do that in a step. It also
+  turns off X's screen blanking, since a blank screen screenshots as black.
+- After sealing, it boots the image once more with a screen and USB input, and waits for the
+  guest agent to say the desktop is up: the screen's driver is loaded, the keyboard and pointer
+  are there, the account has an active, unlocked graphical session, and the desktop has drawn (see
+  [Linux guests](guest-agent.md#linux-guests)). When it is, `config.json` gets `"desktop": true`,
+  and the image's VMs get a screen at its display size, 1920x1200, and a USB keyboard and pointer.
+- When it isn't, the build names the first thing missing, such as "its kernel,
+  6.12.117+deb13-cloud-arm64, doesn't drive the screen: it has no virtio-gpu driver", and the image
+  stays headless. With `desktop: true` the build stops there instead. Without a display manager
+  and without the key, there's no extra boot.
+
+`serve` waits for the desktop before it saves a slot's state, so a restored VM is handed out with
+its desktop drawn. Debian's generic kernel drives the USB devices, so slots restore with them; the
+cloud kernel's saved state doesn't restore with USB devices attached. Measured with the template:
+built in 2m 36s, a slot booted in 4.3 s and saved 0.2 GB of state, and each refill restored in
+0.8 to 1.1 s.
+
+- A desktop that locks itself when idle, as GNOME does by default, needs its lock turned off in a
+  step: the account has no password, so a locked VM can't be unlocked from inside.
+- `cmd` in `key` and MCP's `press_keys` reaches Linux as the Super key, so shortcuts there use
+  `ctrl`, as `ctrl+s`.
 
 ### Rosetta
 

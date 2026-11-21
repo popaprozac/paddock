@@ -70,7 +70,7 @@ import Testing
 @Suite struct HostMemoryTests {
     @Test func aVMCostsItsMacMoreThanItsMemory() {
         #expect(VMSizing.hostMemory(for: 8 << 30) == 14_602_888_806)  // 13.6 GB, as measured
-        #expect(VMSizing.hostMemory(for: 4 << 30, linux: true) == 4 << 30)  // 3.97 GB, as measured
+        #expect(VMSizing.hostMemory(for: 4 << 30, linux: true) == 4_509_715_660)  // 4.2 GB, as measured
     }
 
     @Test func pressureLevelsCompare() {

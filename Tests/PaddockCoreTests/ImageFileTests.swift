@@ -54,7 +54,7 @@ import Yams
 
     @Test func refusesAMisspelledKeyAnywhere() {
         #expect(failure("from: { macos: latest }\naccount: { name: bench }\nlicence: accept")
-            == "licence: unknown key; expected name, from, vm, account, license, grants, share, steps, rosetta")
+            == "licence: unknown key; expected name, from, vm, account, license, grants, share, steps, rosetta, desktop")
         #expect(failure("from: { macos: latest }\naccount: { name: bench }\nsteps: [{ name: x, user: root, run: id }]")
             == "steps[0].user: unknown key; expected name, run, as")
     }
@@ -76,13 +76,24 @@ import Yams
     }
 
     @Test func takesALinuxImageFromDebianOrADiskYouKeep() throws {
-        #expect(try decode("from: { debian: 13 }\naccount: { name: bench }").from == .debian(13))
+        #expect(try decode("from: { debian: 13 }\naccount: { name: bench }").from == .debian(13, .genericcloud))
         let pinned = try decode("from: { disk: images/debian-13-genericcloud-arm64.tar.xz }\naccount: { name: bench }")
         #expect(pinned.from == .disk("images/debian-13-genericcloud-arm64.tar.xz") && pinned.from.isLinux)
         #expect(!(try decode("from: { macos: latest }\naccount: { name: bench }")).from.isLinux)
         #expect(failure("from: { debian: 12 }\naccount: { name: bench }") == "from.debian: expected 13, not 12")
         #expect(failure("from: { debian: trixie }\naccount: { name: bench }") == "from.debian: expected a whole number")
         #expect(failure("from: { debian: 13, macos: latest }\naccount: { name: bench }")
+            == "from: give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>")
+    }
+
+    /// Debian's own variant names pick its image; genericcloud unless the file says otherwise.
+    @Test func takesDebiansVariantByItsName() throws {
+        #expect(try decode("from: { debian: 13, variant: generic }\naccount: { name: bench }").from == .debian(13, .generic))
+        #expect(try decode("from: { debian: 13, variant: genericcloud }\naccount: { name: bench }").from == .debian(13, .genericcloud))
+        #expect(failure("from: { debian: 13, variant: nocloud }\naccount: { name: bench }")
+            == "from.variant: expected genericcloud or generic, not nocloud")
+        #expect(failure("from: { disk: d.raw, variant: generic }\naccount: { name: bench }") == "from.variant: goes with debian:")
+        #expect(failure("from: { variant: generic }\naccount: { name: bench }")
             == "from: give one of macos: latest, ipsw: <path>, debian: 13, disk: <path> or url: <https URL>")
     }
 
@@ -112,6 +123,15 @@ import Yams
         #expect(failure("from: { macos: latest }\naccount: { name: bench }\nrosetta: true") == "rosetta: is for Linux images only")
     }
 
+    /// desktop: asks the build to require a desktop; it changes nothing about the source.
+    @Test func takesDesktopForLinuxImagesOnly() throws {
+        let file = try decode("from: { debian: 13 }\naccount: { name: bench }\ndesktop: true")
+        #expect(file.desktop && file.from == .debian(13, .genericcloud))
+        #expect(!(try decode("from: { debian: 13 }\naccount: { name: bench }")).desktop)
+        #expect(failure("from: { macos: latest }\naccount: { name: bench }\ndesktop: true") == "desktop: is for Linux images only")
+        #expect(failure("from: { macos: latest }\naccount: { name: bench }\ndesktop: false") == "desktop: is for Linux images only")
+    }
+
     @Test func refusesMacOSOnlyKeysInALinuxImage() {
         #expect(failure("from: { debian: 13 }\naccount: { name: bench }\nlicense: accept") == "license: is for macOS images only")
         #expect(failure("from: { debian: 13 }\naccount: { name: bench }\ngrants: recovery") == "grants: is for macOS images only")
@@ -132,12 +152,19 @@ import Yams
         for template in ImageTemplate.allCases {
             let file = try decode(template.text)
             #expect(!file.acceptsLicense, "\(template)")
-            #expect(file.steps.map(\.name) == (template == .ci
-                ? ["Install the Command Line Tools", "Check that git works for the account"] : []), "\(template)")
+            let steps: [String] = switch template {
+            case .ci: ["Install the Command Line Tools", "Check that git works for the account"]
+            case .debianDesktop: ["Install Xfce"]
+            default: []
+            }
+            #expect(file.steps.map(\.name) == steps, "\(template)")
             // A Linux image has no license line at all.
             #expect(template.text.contains("# license: accept") == !file.from.isLinux, "\(template)")
         }
-        #expect(try decode(ImageTemplate.debian.text).from == .debian(13))
+        #expect(try decode(ImageTemplate.debian.text).from == .debian(13, .genericcloud))
+        let desktop = try decode(ImageTemplate.debianDesktop.text)
+        #expect(desktop.from == .debian(13, .generic) && desktop.desktop && desktop.steps.first?.user == .root)
+        #expect(desktop.steps.first?.run.contains("apt-get install -y --no-install-recommends \\\n") == true)
         #expect(try decode(ImageTemplate.minimal.text).from == .latest)
         #expect(try decode(ImageTemplate.ci.text).grants == .recovery)
         #expect(try decode(ImageTemplate.managed.text).grants == .managed)

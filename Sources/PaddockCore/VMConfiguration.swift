@@ -89,9 +89,10 @@ public enum VMConfiguration {
         configuration.keyboards = [VZMacKeyboardConfiguration()]
     }
 
-    /// A Linux guest's generic platform, EFI boot, entropy and console. No display, keyboard or
-    /// pointer: a cloud image's kernel has no GPU driver, and any USB device stops a Linux VM's
-    /// saved state from restoring (it fails with "invalid argument").
+    /// A Linux guest's generic platform, EFI boot, entropy and console, and with a desktop, a
+    /// screen at the config's display size, a USB keyboard and a USB pointer. Without one, none of
+    /// those: a cloud image's kernel drives neither, and with USB devices its saved state doesn't
+    /// restore ("invalid argument"). A kernel with XHCI and HID drivers restores with them.
     static func linux(_ configuration: VZVirtualMachineConfiguration, bundle: VMBundle, config: VMConfig,
                       console attachment: VZSerialPortAttachment? = nil) throws {
         guard let machineIdentifier = VZGenericMachineIdentifier(dataRepresentation: config.machineIdentifier) else {
@@ -121,6 +122,14 @@ public enum VMConfiguration {
         configuration.serialPorts = [console]
         if config.rosetta == true {
             configuration.directorySharingDevices = [try rosettaShare()]
+        }
+        if config.desktop == true {
+            let graphics = VZVirtioGraphicsDeviceConfiguration()
+            graphics.scanouts = [VZVirtioGraphicsScanoutConfiguration(
+                widthInPixels: config.display.widthInPixels, heightInPixels: config.display.heightInPixels)]
+            configuration.graphicsDevices = [graphics]
+            configuration.keyboards = [VZUSBKeyboardConfiguration()]
+            configuration.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
         }
     }
 

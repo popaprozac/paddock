@@ -144,8 +144,8 @@ actor AgentSession {
         }
         let scale = ScreenScale(guestWidth: config.display.widthInPixels, guestHeight: config.display.heightInPixels)
         held = (vm, scale)
-        let screen = config.isLinux ? "It has no screen; work in it with run_command."
-            : "Its screen is \(scale.width)x\(scale.height) in screenshot pixels."
+        let screen = !config.hasScreen ? "It has no screen; work in it with run_command."
+            : "Its screen is \(scale.width)x\(scale.height) in screenshot pixels\(config.isLinux ? "; it has no accessibility_tree" : "")."
         return [Self.text("""
             Acquired '\(vm)', a fresh \(config.isLinux ? "Linux" : "macOS") VM, at \(response.ip ?? "an unknown address"). \
             \(screen) Call release when you are done; it is wiped.
@@ -220,7 +220,7 @@ actor AgentSession {
     static let instructions = """
         paddock gives you a fresh VM to work in. Call acquire first, then look with \
         screenshot or accessibility_tree and act with click, type_text, press_keys, scroll and \
-        run_command; a Linux VM has no screen, and takes only run_command. Coordinates are pixels of the screenshot from its top left, and frames in \
+        run_command; a Linux VM without a desktop has no screen, and takes only run_command. Coordinates are pixels of the screenshot from its top left, and frames in \
         the accessibility tree use the same pixels. Input returns once it is sent, so take a \
         screenshot to see what it did. Call release when you are done; the VM is wiped.
         """
@@ -257,7 +257,8 @@ actor AgentSession {
             Press key combinations in order. Each is modifiers and one key joined by +, such as \
             cmd+s, cmd+shift+z, return or escape. Modifiers are cmd, ctrl, opt and shift; keys are \
             characters, plus for +, or return, tab, space, delete, forwarddelete, escape, left, \
-            right, up, down, home, end, pageup, pagedown and f1 to f12.
+            right, up, down, home, end, pageup, pagedown and f1 to f12. In a Linux VM, cmd is the \
+            Super key, so shortcuts there use ctrl, as ctrl+s.
             """,
              inputSchema: schema(["keys": ["type": "array", "items": ["type": "string"]]], required: ["keys"])),
         Tool(name: "scroll", description: "Scroll the content at a point of the screenshot.",

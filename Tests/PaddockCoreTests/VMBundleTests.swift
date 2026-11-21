@@ -78,6 +78,20 @@ import Virtualization
         #expect(try bundle.readConfig() == Self.linuxSample)
     }
 
+    /// Only a Linux VM with a desktop has a screen among Linux VMs; config.json keeps the flag,
+    /// and a headless config doesn't mention it.
+    @Test func knowsWhichVMsHaveAScreen() throws {
+        var desktop = Self.linuxSample
+        desktop.desktop = true
+        #expect(Self.sample.hasScreen && !Self.linuxSample.hasScreen && desktop.hasScreen)
+        let tmp = try TemporaryDirectory()
+        let bundle = VMBundle(url: tmp.url)
+        try bundle.writeConfig(desktop)
+        #expect(try bundle.readConfig() == desktop)
+        try bundle.writeConfig(Self.linuxSample)
+        #expect(!(try String(contentsOf: bundle.configURL, encoding: .utf8)).contains("desktop"))
+    }
+
     @Test func roundTripsThroughBundle() throws {
         let tmp = try TemporaryDirectory()
         let bundle = VMBundle(url: tmp.url)

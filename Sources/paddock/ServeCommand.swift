@@ -693,7 +693,7 @@ final class WarmPool {
 
     /// Waits for the guest agent to answer over vsock and for the guest's network, and, if the
     /// source has paddock-session, for the helper to answer and loginwindow to finish the login,
-    /// so the desktop takes input; then returns the guest's address for the workload. Saving the
+    /// so the desktop takes input, or for a desktop Linux VM's agent to say its desktop is up; then returns the guest's address for the workload. Saving the
     /// slot's state any earlier would hand out every restore mid-login. A restored guest still holds the lease it had when its state was
     /// saved, so its lease is found at once, but its network comes back about 1.5 s after its agent.
     private func waitUntilReady(_ vm: HeadlessVM) async throws -> String {
@@ -714,6 +714,13 @@ final class WarmPool {
             guard try await vm.desktopReady(within: Self.sessionTimeout) else {
                 throw PaddockError("loginwindow in '\(vm.bundle.name)' still covered the screen after "
                     + "\(DurationFormat.short(Self.sessionTimeout)); turn off the screen lock in the golden image")
+            }
+        }
+        if vm.config.isLinux, vm.config.hasScreen {
+            guard try await vm.desktopReady(within: Self.sessionTimeout) else {
+                throw PaddockError("'\(vm.bundle.name)' showed no desktop within \(DurationFormat.short(Self.sessionTimeout)); "
+                    + "the golden image must log its account in to a desktop by itself, on a kernel that drives the screen "
+                    + "and USB input, and not lock it")
             }
         }
         guard let ip = try await vm.leasedAddress(within: Self.timeout) else {

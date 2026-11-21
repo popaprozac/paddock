@@ -7,9 +7,10 @@
   to 13.6 GB once warm in testing, as `paddock top` shows. `serve` counts each VM at 1.7 times its
   memory, measured only for 8 GB VMs, when it warns at startup, and warns again while it runs if
   macOS's memory pressure rises. On a 36 GB Mac, two 8 GB slots brought pressure to warn.
-- A Linux VM costs its Mac about its own memory at most: a 4 GB Debian 13 VM took 0.45 GB idle
-  and 3.97 GB with its memory filled, which the Mac keeps until the VM stops. `serve` counts it at
-  its memory.
+- A restored Linux VM costs its Mac all of its memory at once, plus a little: a 4 GB Debian 13
+  VM took 4.21 GB as soon as it restored, with a desktop or without. One that booted instead, as
+  `serve`'s slots do while the screen is locked, took 0.45 GB idle, or 0.82 GB with a desktop,
+  and keeps whatever it uses until it stops. `serve` counts a Linux VM at 1.05 times its memory.
 - A slot's saved state doesn't restore while the Mac's screen is locked, so `serve` boots fresh
   clones instead, which takes longer (see [What serve needs](hosts.md#what-serve-needs)).
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
@@ -45,9 +46,12 @@
   FileVault, which turns off automatic login, needs a person after every restart (see
   [Setting up Macs](hosts.md)).
 - Apple's macOS license permits macOS VMs for development and testing.
-- A Linux VM has no display, keyboard or pointer. Debian's cloud kernel has no graphics driver, and
-  any USB device stops a Linux VM's saved state from restoring, so screenshots, input, `axtree`,
-  `show` and `view` don't work with Linux VMs.
-- Linux images come only from Debian's genericcloud arm64 builds, or disks in the same format
+- A Linux VM has a display, keyboard and pointer only when its image has a desktop on a kernel
+  that drives them (see [Desktop Linux](golden-images.md#desktop-linux)). Debian's genericcloud
+  kernel has no graphics, USB controller or HID driver, and with USB devices attached its saved
+  state doesn't restore, so a VM of such an image has none, and screenshots, input, `show` and
+  `view` don't work with it.
+- `axtree` works only in macOS VMs; Linux's accessibility tree, AT-SPI, isn't read.
+- Linux images come only from Debian's genericcloud and generic arm64 builds, or disks in the same format
   (see [Linux images](golden-images.md#linux-images)). A Debian 13 golden image takes about 2.8 GB
   of disk, since Debian's tarball holds its disk's zeros and extracting writes them out.

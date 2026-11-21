@@ -1,9 +1,11 @@
 import Foundation
+import os
 import PaddockCore
 
 /// `paddock build <file>` for a Linux image: get the image, make the VM from its disk, boot it
 /// once with the cloud-init seed, which creates the account and sets the image up, then once more
-/// without it to run the steps and seal the image.
+/// without it to run the steps and seal the image. An image with a display manager, or a file
+/// with `desktop: true`, boots a last time with a screen to check its desktop.
 @MainActor
 enum LinuxBuild {
     static let defaultMemoryGB: UInt64 = 4
@@ -34,7 +36,10 @@ enum LinuxBuild {
             try await firstBoot(bundle, seed: seed)
             try FileManager.default.removeItem(at: seed)
             // Without the seed: the image must come up on its own, as every clone does.
-            _ = try await ImageSteps.run(name: plan.name, steps: image.steps, share: plan.share)
+            let steps = try await ImageSteps.run(name: plan.name, steps: image.steps, share: plan.share)
+            if steps.displayManager != nil || image.desktop {
+                try await checkDesktop(bundle, required: image.desktop, from: image.from)
+            }
         } catch {
             print("The build stopped; '\(plan.name)' is left at \(bundle.url.path) to look at. Delete it to build again.")
             throw error
@@ -53,9 +58,11 @@ enum LinuxBuild {
         }
         defer { line.finish() }
         switch from {
-        case let .debian(release):
-            guard let debian = LinuxImage.Debian(release: release) else { throw PaddockError("no Debian \(release) to build from") }
-            print("Checking Debian \(release)'s latest build against \(debian.sumsURL.absoluteString)")
+        case let .debian(release, variant):
+            guard let debian = LinuxImage.Debian(release: release, variant: variant) else {
+                throw PaddockError("no Debian \(release) to build from")
+            }
+            print("Checking Debian \(release)'s latest \(variant.rawValue) build against \(debian.sumsURL.absoluteString)")
             return try await LinuxImage.fetch(debian, into: home.linuxCacheDirectory, progress: progress)
         case let .url(url, checksum):
             print("Getting \(url.absoluteString), which must match its \(checksum.algorithm.rawValue)")
@@ -96,6 +103,55 @@ enum LinuxBuild {
             await vm.stop()
             throw error
         }
+    }
+
+    /// Boots the sealed image with a screen and USB input until the agent says the account's
+    /// desktop is up, then marks the image a desktop, so its VMs get those devices. A desktop
+    /// that doesn't come up leaves the image headless, saying why, or with `required` stops the
+    /// build. Either way the guest shuts itself down, which empties its machine-id again.
+    static func checkDesktop(_ bundle: VMBundle, required: Bool, from source: ImageFile.Source) async throws {
+        var config = try bundle.readConfig()
+        config.desktop = true
+        print("Booting '\(bundle.name)' with a screen to check its desktop")
+        let vm = try HeadlessVM(bundle: bundle, config: config)
+        try await vm.start()
+        var missing: String?
+        do {
+            guard try await vm.agentVersion(within: .seconds(180)) != nil else {
+                throw PaddockError("the guest agent in '\(bundle.name)' didn't answer within 180 s")
+            }
+            let deadline = ContinuousClock.now + .seconds(120)
+            while !(try await vm.desktopReady(within: .seconds(5))) {
+                let lines = OSAllocatedUnfairLock(initialState: [String]())
+                let status = try await vm.runInGuest(LinuxSeed.desktopDiagnosisScript, asRoot: true) { line in
+                    lines.withLock { $0.append(line) }
+                }
+                // 2: it can't come up as the image is; otherwise it may still be starting.
+                if status == 2 || ContinuousClock.now >= deadline {
+                    missing = lines.withLock { $0.last } ?? "its desktop didn't come up"
+                    break
+                }
+            }
+            _ = try await vm.runInGuest("sync; (sleep 2; systemctl poweroff) </dev/null >/dev/null 2>&1 &", asRoot: true) { _ in }
+            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
+                throw PaddockError("'\(bundle.name)' didn't shut down within 120 s of its desktop check")
+            }
+        } catch {
+            await vm.stop()
+            throw error
+        }
+        if var missing {
+            if case let .debian(release, .genericcloud) = source, missing.hasPrefix("its kernel") {
+                missing += " (Debian's generic variant has one that does: from: { debian: \(release), variant: generic })"
+            }
+            guard !required else {
+                throw PaddockError("'\(bundle.name)' has no working desktop: \(missing). The image file says desktop: true")
+            }
+            print("  no desktop: \(missing); the image stays headless")
+            return
+        }
+        try bundle.writeConfig(config)
+        print("  a desktop: its VMs get a \(config.display.widthInPixels)x\(config.display.heightInPixels) screen and USB input")
     }
 
     /// The last lines of the guest's console, as console.log kept them, without terminal escapes.

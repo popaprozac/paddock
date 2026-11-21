@@ -10,6 +10,9 @@ import Virtualization
             == "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-arm64.tar.xz")
         #expect(debian.sumsURL.absoluteString == "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS")
         #expect(LinuxImage.Debian(release: 12) == nil)
+        let generic = try #require(LinuxImage.Debian(release: 13, variant: .generic))
+        #expect(generic.url.absoluteString == "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-arm64.tar.xz")
+        #expect(generic.sumsURL == debian.sumsURL)
         #expect(ImageFile.debianReleases == [13])
     }
 

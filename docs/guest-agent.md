@@ -73,6 +73,12 @@ systemd runs the agent as root and starts it again if it exits. It logs to the j
 - `state` answers `{"output":"network"}` once an interface other than loopback has an IPv4
   address and the guest an IPv4 DNS server, from systemd-resolved's list of servers when it runs,
   else from `/etc/resolv.conf`. There is no session helper.
+- `state` also answers `{"output":"desktop"}` once the account's desktop is up: the screen's
+  driver is loaded (`/dev/dri/card0`), a keyboard and a pointer are in `/proc/bus/input/devices`,
+  systemd-logind has an active, unlocked X11 or Wayland session for uid 1000, and the desktop has
+  drawn: its shell runs as the account (xfdesktop, gnome-shell, plasmashell, cinnamon, mate-panel,
+  budgie-panel, lxqt-panel or lxpanel), or, for another desktop, the session has been up for 5 s.
+  `serve` waits for it on a desktop image before saving a slot's state.
 - `{"op":"clock","time":N}`, with N in nanoseconds since 1970, sets the guest's clock and answers
   `{"exit":0}`. `paddock build` sends it at each boot, since a cloud image boots at 1970, and
   `serve` once each warm VM is ready, since a restored guest resumes at the time its state was
