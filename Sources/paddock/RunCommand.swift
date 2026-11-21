@@ -106,7 +106,6 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var shutdownRequested = false
 
     private let mac: Bool  // a macOS VM; Linux and Windows VMs take none of macOS's start options
-    private let linux: Bool  // a desktop Linux VM, whose display keeps the image's size
     private let provisioning: NSObject?  // VZMacGuestProvisioningOptions, which needs macOS 27
     private let recovery: Bool
 
@@ -115,7 +114,7 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let config = try bundle.readConfig()
         let configuration = try VMConfiguration.make(bundle: bundle, config: config, sharing: sharing)
         let controller = VMWindow(bundle: bundle, lock: lock, machine: VZVirtualMachine(configuration: configuration),
-                                  mac: config.isMac, linux: config.isLinux, provisioning: provisioning, recovery: recovery)
+                                  mac: config.isMac, provisioning: provisioning, recovery: recovery)
 
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -124,13 +123,12 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fatalError("NSApplication.run returned")
     }
 
-    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, mac: Bool, linux: Bool, provisioning: NSObject?,
+    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, mac: Bool, provisioning: NSObject?,
                  recovery: Bool) {
         self.bundle = bundle
         self.lock = lock
         self.machine = machine
         self.mac = mac
-        self.linux = linux
         self.provisioning = provisioning
         self.recovery = recovery
         super.init()
@@ -141,9 +139,10 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let view = VZVirtualMachineView()
         view.virtualMachine = machine
         view.capturesSystemKeys = true
-        // A Linux desktop would keep a size the window gave it in the golden image; it stays at
-        // the image's and the window scales it.
-        view.automaticallyReconfiguresDisplay = !linux
+        // A Linux desktop would keep a size the window gave it in the golden image, and Windows'
+        // display driver refuses sizes above the framebuffer it sized at boot (the VM's display
+        // size), so both stay at the image's size and the window scales it.
+        view.automaticallyReconfiguresDisplay = mac
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
