@@ -6,12 +6,13 @@ import Foundation
 /// Virtualization.framework; JSON stores them as base64. A clone gets a new `machineIdentifier`
 /// and `macAddress` and keeps everything else.
 ///
-/// A Linux VM says so in `kind`; a config without it, as every one before Linux VMs, is macOS. A
-/// Linux VM's `machineIdentifier` is a VZGenericMachineIdentifier, its `hardwareModel` is empty,
-/// and it has a display only with `desktop`.
+/// A Linux or Windows VM says so in `kind`; a config without it, as every one before Linux VMs, is
+/// macOS. A Linux or Windows VM's `machineIdentifier` is a VZGenericMachineIdentifier and its
+/// `hardwareModel` is empty. A Linux VM has a display only with `desktop`; a Windows VM always has one.
 public struct VMConfig: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case linux
+        case windows
     }
 
     public struct Display: Codable, Equatable, Sendable {
@@ -57,7 +58,11 @@ public struct VMConfig: Codable, Equatable, Sendable {
     public var desktop: Bool?
 
     public var isLinux: Bool { kind == .linux }
-    /// Whether the VM has a screen and input: every macOS VM, and a Linux VM with a desktop.
+    public var isWindows: Bool { kind == .windows }
+    /// A macOS VM: Apple's platform and boot loader, rather than the generic platform and EFI that
+    /// Linux and Windows VMs share.
+    public var isMac: Bool { kind == nil }
+    /// Whether the VM has a screen and input: every macOS and Windows VM, and a Linux VM with a desktop.
     public var hasScreen: Bool { !isLinux || desktop == true }
 
     public init(
