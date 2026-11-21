@@ -124,7 +124,7 @@ final class HeadlessVM: NSObject {
     /// still shows nothing, so attach before a restored VM resumes and redraws.
     func attachScreen() throws {
         guard !config.isLinux else {
-            throw PaddockError("'\(bundle.name)' is a Linux VM, which has no screen or input in paddock; use exec")
+            throw PaddockError("'\(bundle.name)' is a Linux VM, which has no screen or input in paddock; run commands in it instead")
         }
         if screen == nil {
             screen = try VMScreen(machine: machine, display: config.display)
@@ -331,6 +331,12 @@ final class HeadlessVM: NSObject {
     /// `output` as it arrives, and returns the command's exit status.
     func runInGuest(_ command: String, asRoot: Bool = false, output: @escaping @Sendable (String) -> Void) async throws -> Int32 {
         try await withAgent { try GuestAgent.askToRun(command, asRoot: asRoot, over: $0, output: output) }
+    }
+
+    /// Sets a Linux guest's clock to this Mac's. A restored guest resumes at the time its state was
+    /// saved, and Linux, unlike macOS, doesn't notice the jump.
+    func setGuestClock() async throws {
+        try await withAgent { try GuestAgent.askToSetClock(to: Date(), over: $0) }
     }
 
     /// Copies the file at `url` into the guest agent's files folder as `name`.

@@ -36,18 +36,22 @@ public enum GuestAgent {
         public var size: Int64?
         /// For `run`: "root", or nil for the workload account.
         public var user: String?
+        /// For `clock`, which only the Linux agent answers: the time to set, in nanoseconds since 1970.
+        public var time: Int64?
 
         private enum CodingKeys: String, CodingKey {
-            case op, command, name, size
+            case op, command, name, size, time
             case user = "as"
         }
 
-        public init(op: String, command: String? = nil, name: String? = nil, size: Int64? = nil, user: String? = nil) {
+        public init(op: String, command: String? = nil, name: String? = nil, size: Int64? = nil, user: String? = nil,
+                    time: Int64? = nil) {
             self.op = op
             self.command = command
             self.name = name
             self.size = size
             self.user = user
+            self.time = time
         }
 
         var line: String {
@@ -275,6 +279,11 @@ public enum GuestAgent {
             throw PaddockError("the guest agent didn't answer")
         }
         return try checked(answer)
+    }
+
+    /// Asks a Linux guest's agent over `fd` to set the guest's clock to `date`.
+    public static func askToSetClock(to date: Date, over fd: Int32) throws {
+        _ = try ask(Request(op: "clock", time: Int64(date.timeIntervalSince1970 * 1_000_000_000)), over: fd)
     }
 
     /// Asks the agent over `fd` to run `command`, passes each output line to `output` as it

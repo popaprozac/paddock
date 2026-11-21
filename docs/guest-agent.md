@@ -74,5 +74,7 @@ systemd runs the agent as root and starts it again if it exits. It logs to the j
   address and the guest an IPv4 DNS server, from systemd-resolved's list of servers when it runs,
   else from `/etc/resolv.conf`. There is no session helper.
 - `{"op":"clock","time":N}`, with N in nanoseconds since 1970, sets the guest's clock and answers
-  `{"exit":0}`.
+  `{"exit":0}`. `paddock build` sends it at each boot, since a cloud image boots at 1970, and
+  `serve` once each warm VM is ready, since a restored guest resumes at the time its state was
+  saved.
 - It doesn't copy per-host preferences, which are macOS's.

@@ -135,18 +135,20 @@ actor AgentSession {
         defer { acquiring = false }
         let response = try await blocking { try ServeClient.send(ServeRequest(op: "acquire", allow: allow)) }
         guard let vm = response.vm else { throw PaddockError("paddock serve handed out no VM") }
-        let display: VMConfig.Display
+        let config: VMConfig
         do {
-            display = try PaddockHome.fromEnvironment().bundle(named: vm).readConfig().display
+            config = try PaddockHome.fromEnvironment().bundle(named: vm).readConfig()
         } catch {
             _ = try? await blocking { try ServeClient.send(ServeRequest(op: "release", vm: vm)) }
             throw error
         }
-        let scale = ScreenScale(guestWidth: display.widthInPixels, guestHeight: display.heightInPixels)
+        let scale = ScreenScale(guestWidth: config.display.widthInPixels, guestHeight: config.display.heightInPixels)
         held = (vm, scale)
+        let screen = config.isLinux ? "It has no screen; work in it with run_command."
+            : "Its screen is \(scale.width)x\(scale.height) in screenshot pixels."
         return [Self.text("""
-            Acquired '\(vm)', a fresh macOS VM, at \(response.ip ?? "an unknown address"). Its screen is \
-            \(scale.width)x\(scale.height) in screenshot pixels. Call release when you are done; it is wiped.
+            Acquired '\(vm)', a fresh \(config.isLinux ? "Linux" : "macOS") VM, at \(response.ip ?? "an unknown address"). \
+            \(screen) Call release when you are done; it is wiped.
             """)]
     }
 
@@ -216,16 +218,16 @@ actor AgentSession {
     }
 
     static let instructions = """
-        paddock gives you a fresh macOS VM to work in. Call acquire first, then look with \
+        paddock gives you a fresh VM to work in. Call acquire first, then look with \
         screenshot or accessibility_tree and act with click, type_text, press_keys, scroll and \
-        run_command. Coordinates are pixels of the screenshot from its top left, and frames in \
+        run_command; a Linux VM has no screen, and takes only run_command. Coordinates are pixels of the screenshot from its top left, and frames in \
         the accessibility tree use the same pixels. Input returns once it is sent, so take a \
         screenshot to see what it did. Call release when you are done; the VM is wiped.
         """
 
     static let tools: [Tool] = [
         Tool(name: "acquire", description: """
-            Take a fresh macOS VM. Call this first; a session holds one VM at a time. With a \
+            Take a fresh VM, macOS or Linux. Call this first; a session holds one VM at a time. With a \
             paddock serve on its userspace network, the VM reaches only the host names in allow, \
             and nothing without it.
             """,

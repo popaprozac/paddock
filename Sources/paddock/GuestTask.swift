@@ -22,7 +22,8 @@ extension HeadlessVM {
     ) async throws -> TaskOutcome {
         try await putInGuest(bundle, as: "in.bundle")
         let cloned = try await runStep(
-            "rm -rf ~/paddock/work && git clone -q ~/paddock/in.bundle ~/paddock/work && git -C ~/paddock/work rev-parse HEAD",
+            "command -v git >/dev/null || { echo \"the guest has no git; install it in the golden image\"; exit 127; } && "
+                + "rm -rf ~/paddock/work && git clone -q ~/paddock/in.bundle ~/paddock/work && git -C ~/paddock/work rev-parse HEAD",
             "clone the bundle")
         // The guest reports the commit to compare against, and it goes back into a command,
         // so it has to look like a commit hash.

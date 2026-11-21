@@ -22,6 +22,9 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 | `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. After `timeout` seconds, 120 by default and at most 3,600, it returns what the command printed so far, and the command goes on running in the VM. |
 | `release` | Hands the VM back to `serve`, which wipes it. |
 
+A Linux VM has no screen: `acquire` says so, `run_command` works in it, and the screen and input
+tools refuse it.
+
 - A session holds one VM at a time. When the client closes stdin, or stops the server with
   SIGINT, SIGTERM or SIGHUP, as a dropped ssh connection does, the server releases the VM it
   holds.

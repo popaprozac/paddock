@@ -31,7 +31,7 @@ enum ImageSteps {
                 throw PaddockError("'\(name)' has paddock-guestd \(version); steps need \(agentVersion) or later")
             }
             if config.isLinux {
-                try await LinuxBuild.setClock(vm)
+                try await vm.setGuestClock()
                 if share != nil {
                     guard try await vm.runInGuest(LinuxSeed.mountShare, asRoot: true, output: { print("    \($0)") }) == 0 else {
                         throw PaddockError("can't mount the shared folder at /mnt/share in '\(name)'")

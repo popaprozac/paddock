@@ -7,20 +7,26 @@ kind of host comes back after a restart.
 ## What serve needs
 
 - An Apple silicon Mac with macOS 14 or later (see [Requirements](../README.md#requirements)).
-  macOS runs at most two macOS VMs at once on one Mac, and a VM costs its Mac about 1.7 times
-  its own memory (see [Limits](limits.md)).
+  macOS runs at most two macOS VMs at once on one Mac, and a macOS VM costs its Mac about 1.7
+  times its own memory, a Linux VM about its own (see [Limits](limits.md)).
 - **A login session.** `serve` must run as a user who is logged in at the Mac's screen, whether in
   person, through Screen Sharing, or by automatic login. Two things need one:
   - Keeping slots warm. Each slot restores its VM from saved state, and macOS encrypts saved state
-    with a key it keeps in the user's keychain, which only a login session can reach.
+    with a key it keeps in the user's keychain, which only a login session can reach, and only
+    while the screen is unlocked.
   - Screenshots, input, `paddock show` and `paddock view`, which need the window server.
 - So `serve` doesn't run as a LaunchDaemon. A daemon starts before anyone logs in, but its slots
   can't save state: in testing on macOS 27, Apple's VM service crashed ("Failed to talk to secd")
   whenever the keychain didn't answer. That was every time before login, and sometimes with the user
   logged in. A daemon gets no screens either.
 - No open port. `serve` links out to the control plane, and nothing connects in to the Mac.
-- The Mac's own screen can lock and its display can sleep, and screenshots and input keep working
-  (tested on macOS 27). `serve` keeps the Mac from idle sleep while it runs, so a sleep timer
+- **The screen unlocked, for fast refills.** While the Mac's screen is locked, every restore fails
+  with "permission denied", so each slot boots a fresh clone of the source instead: about 3 s for
+  a Debian VM, which restores in 0.6 s, and about 33 s for macOS (tested on macOS 27).
+  Saving state still works, and restores work again once the screen is unlocked. Screenshots and
+  input keep working while it's locked. On a Mac that only runs paddock, set System Settings ›
+  Lock Screen never to require a password after the screen saver starts or the display turns off.
+- The display can sleep. `serve` keeps the Mac from idle sleep while it runs, so a sleep timer
   doesn't stop its slots. Closing a laptop's lid or choosing Sleep still puts it to sleep.
 
 ## Running serve at login
@@ -114,6 +120,8 @@ LaunchAgent starts `serve`.
 
 - **Memory:** the VMs share the Mac with its user's own work. Two 8 GB VMs take about 27 GB, so a
   Mac someone works on often fits one slot, `--slots 1`, or smaller VMs.
+- **Screen lock:** while its user is away and the screen is locked, each refill boots a fresh
+  clone rather than restoring one (see [What serve needs](#what-serve-needs)).
 - **Laptops:** closing the lid puts the Mac to sleep, VMs and all. `serve` only stops idle sleep,
   and keeps a laptop on battery awake while it runs.
 - **In a pool:** a Mac that serves the pool takes requests from anyone in it, wherever the Mac
