@@ -36,3 +36,16 @@ for AT-SPI's D-Bus, and `golang.org/x/sys`, which godbus needs. It goes in the `
 `linux` folder with its systemd unit (see [Linux guests](guest-agent.md#linux-guests)). Its tests
 run on the Mac with `go test ./...` there, and `GOOS=linux go vet ./...` checks the Linux-only
 vsock code.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`:
+
+- `swift build` and `swift test` on GitHub's `xcode-27` runner, since paddock uses macOS 27's
+  SDK.
+- `go vet ./...` and `go test ./...` in each Go module on `macos-latest`, then
+  `GOOS=linux go build ./...` in `paddock-control` and `GOOS=linux go vet ./...` in
+  `paddock-guestd-linux`.
+
+GitHub's Mac runners are VMs themselves and can't start VMs, so CI runs the unit tests only.
+Anything that boots a VM, such as `build`, `serve` and the guest agents, is tested on a Mac.
