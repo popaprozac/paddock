@@ -89,6 +89,11 @@ public enum LinuxSeed {
         # turn a disabled ssh back on.
         systemctl mask --now ssh.service ssh.socket
 
+        # No automatic updates, as in macOS images: apt's timers would update and upgrade packages
+        # by themselves, during the build's steps and in every clone, holding apt's lock while they
+        # do. Updating is for the image's steps. Masked, for the same reason as ssh.
+        systemctl mask --now apt-daily.timer apt-daily-upgrade.timer
+
         # paddock-net answers time.apple.com at its gateway; on NAT it is Apple's.
         mkdir -p /etc/systemd/timesyncd.conf.d
         printf '[Time]\nNTP=time.apple.com\n' > /etc/systemd/timesyncd.conf.d/paddock.conf

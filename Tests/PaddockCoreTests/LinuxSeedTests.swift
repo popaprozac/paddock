@@ -49,6 +49,7 @@ import Yams
         #expect(LinuxSeed.setupScript.hasPrefix("#!/bin/sh\n"))
         #expect(LinuxSeed.setupScript.contains("\nEOF\n"))  // the heredoc's end, at the start of its line
         #expect(LinuxSeed.setupScript.contains("dhcp-identifier: mac"))
+        #expect(LinuxSeed.setupScript.contains("\nsystemctl mask --now apt-daily.timer apt-daily-upgrade.timer\n"))
         let tmp = try TemporaryDirectory()
         let script = tmp.url.appendingPathComponent("paddock-setup.sh")
         try Data(LinuxSeed.setupScript.utf8).write(to: script)
