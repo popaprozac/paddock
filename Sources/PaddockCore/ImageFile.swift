@@ -29,8 +29,8 @@ public struct ImageFile: Equatable, Sendable {
         /// The latest build of a Debian release's arm64 image in a variant Debian publishes, from
         /// cloud.debian.org: genericcloud unless the file says generic.
         case debian(Int, LinuxImage.Debian.Variant)
-        /// A Linux disk you keep, which pins the build: a genericcloud `.tar.xz` as Debian
-        /// publishes it, or a raw disk image.
+        /// A Linux disk you keep, which pins the build: a `.tar.xz` as Debian publishes it, a
+        /// qcow2 image as Ubuntu does, or a raw disk image.
         case disk(String)
         /// A Linux disk to download, as `disk` takes them, which must match its hash: the hash pins
         /// the build, wherever the file is.
@@ -214,7 +214,8 @@ extension ImageFile.Source: Decodable {
             }
             guard LinuxImage.isDiskFileName(url.lastPathComponent) else {
                 throw DecodingError.dataCorruptedError(
-                    forKey: .url, in: keys, debugDescription: "expected a .tar.xz holding disk.raw, or a .raw disk")
+                    forKey: .url, in: keys,
+                    debugDescription: "expected a .tar.xz holding disk.raw, a .raw disk, or a .qcow2 or .img disk")
             }
             guard hashes.count == 1, let hashKey = hashes.first else {
                 throw DecodingError.dataCorruptedError(

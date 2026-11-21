@@ -112,8 +112,10 @@ import Yams
         #expect(failure("from: { \(url), sha256: abc }\naccount: { name: bench }") == "from.sha256: expected 64 hex digits")
         #expect(failure("from: { url: 'http://images.example/disk.raw', sha256: \(sha256) }\naccount: { name: bench }")
             == "from.url: expected an https URL, not http://images.example/disk.raw")
-        #expect(failure("from: { url: 'https://images.example/disk.qcow2', sha256: \(sha256) }\naccount: { name: bench }")
-            == "from.url: expected a .tar.xz holding disk.raw, or a .raw disk")
+        #expect(try decode("from: { url: 'https://images.example/ubuntu.img', sha256: \(sha256) }\naccount: { name: bench }").from
+            == .url(URL(string: "https://images.example/ubuntu.img")!, LinuxImage.Checksum(.sha256, sha256)!))
+        #expect(failure("from: { url: 'https://images.example/disk.vmdk', sha256: \(sha256) }\naccount: { name: bench }")
+            == "from.url: expected a .tar.xz holding disk.raw, a .raw disk, or a .qcow2 or .img disk")
         #expect(failure("from: { debian: 13, sha256: \(sha256) }\naccount: { name: bench }") == "from.sha256: goes with url:")
     }
 

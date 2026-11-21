@@ -56,9 +56,10 @@ public enum LinuxImage {
     }
 
     /// Whether a file's name says it's an image `makeBundle` takes: a `.tar.xz` holding
-    /// `disk.raw`, or a `.raw` disk.
+    /// `disk.raw`, a `.raw` disk, or a `.qcow2` or `.img`, which `makeBundle` reads as qcow2 or
+    /// raw by what the file holds.
     public static func isDiskFileName(_ name: String) -> Bool {
-        name.hasSuffix(".tar.xz") || name.hasSuffix(".raw")
+        [".tar.xz", ".raw", ".qcow2", ".img"].contains { name.hasSuffix($0) }
     }
 
     /// The SHA-512 a SHA512SUMS file lists for `file`, in lowercase hex; nil if it lists none.
@@ -143,9 +144,9 @@ public enum LinuxImage {
     }
 
     /// Makes a new Linux VM bundle at `bundle` from `image`: a `.tar.xz` holding `disk.raw`, as
-    /// Debian publishes its cloud images, or a raw disk image. The disk is copied in, grown to
-    /// `diskSize` bytes, and given an EFI variable store and a fresh identity. The bundle appears
-    /// only once it is complete.
+    /// Debian publishes its cloud images, a qcow2 image, as Ubuntu publishes them, or a raw disk
+    /// image. The disk is copied in as a raw disk, grown to `diskSize` bytes, and given an EFI
+    /// variable store and a fresh identity. The bundle appears only once it is complete.
     @discardableResult
     public static func makeBundle(_ bundle: VMBundle, from image: URL, cpuCount: Int, memorySize: UInt64,
                                   diskSize: UInt64, rosetta: Bool = false) throws -> VMConfig {
@@ -153,6 +154,8 @@ public enum LinuxImage {
         let disk = staging.bundle.diskURL
         if image.lastPathComponent.hasSuffix(".tar.xz") {
             try extractDisk(from: image, to: disk)
+        } else if QCOW2.isImage(at: image) {
+            try QCOW2.convert(image, to: disk)
         } else {
             // A clone on the same APFS volume, a copy elsewhere.
             try FileManager.default.copyItem(at: image, to: disk)
