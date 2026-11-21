@@ -21,10 +21,12 @@ struct Run: ParsableCommand {
             --recovery starts the VM in macOS Recovery instead, where Terminal (in the Utilities \
             menu) can run csrutil.
 
-            A Linux VM has no screen, so run connects this terminal to its console instead, logged \
-            in as its account. Ctrl-] asks the guest to shut down, and a second Ctrl-] forces it \
-            off; so does shutting down in the guest. --share is then a folder to mount in the \
-            guest with: sudo mount -t virtiofs paddock-share /mnt/share
+            A Linux VM with a desktop opens in a window too, at its image's screen size, and shuts \
+            down from its desktop. A Linux VM without one has no screen, so run connects this \
+            terminal to its console instead, logged in as its account. Ctrl-] asks the guest to \
+            shut down, and a second Ctrl-] forces it off; so does shutting down in the guest. For a \
+            Linux VM, --share is a folder to mount in the guest with: \
+            sudo mount -t virtiofs paddock-share /mnt/share
             """)
 
     @Argument(help: "VM to boot.")
@@ -65,11 +67,15 @@ struct Run: ParsableCommand {
     func run() throws {
         let bundle = try PaddockHome.fromEnvironment().bundle(named: name)
         let sharing = share.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
-        if try bundle.readConfig().isLinux {
+        let config = try bundle.readConfig()
+        if config.isLinux {
             guard provision == nil, !recovery else {
                 throw PaddockError("--provision and --recovery are for macOS VMs, and '\(name)' is a Linux VM")
             }
-            try MainActor.assumeIsolated { try VMConsole.run(bundle, sharing: sharing) }
+            guard config.hasScreen else {
+                try MainActor.assumeIsolated { try VMConsole.run(bundle, sharing: sharing) }
+            }
+            try MainActor.assumeIsolated { try VMWindow.show(bundle, sharing: sharing) }
         }
         var provisioning: NSObject?
         if let provision {
@@ -99,25 +105,30 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var interrupt: (any DispatchSourceSignal)?
     private var shutdownRequested = false
 
+    private let linux: Bool  // a desktop Linux VM, which takes none of macOS's start options
     private let provisioning: NSObject?  // VZMacGuestProvisioningOptions, which needs macOS 27
     private let recovery: Bool
 
-    static func show(_ bundle: VMBundle, sharing: URL?, provisioning: NSObject? = nil, recovery: Bool = false) throws {
+    static func show(_ bundle: VMBundle, sharing: URL?, provisioning: NSObject? = nil, recovery: Bool = false) throws -> Never {
         let lock = try BundleLock(bundle: bundle)
-        let configuration = try VMConfiguration.make(bundle: bundle, config: try bundle.readConfig(), sharing: sharing)
+        let config = try bundle.readConfig()
+        let configuration = try VMConfiguration.make(bundle: bundle, config: config, sharing: sharing)
         let controller = VMWindow(bundle: bundle, lock: lock, machine: VZVirtualMachine(configuration: configuration),
-                                  provisioning: provisioning, recovery: recovery)
+                                  linux: config.isLinux, provisioning: provisioning, recovery: recovery)
 
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         app.delegate = controller
         app.run()  // Never returns: the controller exits when the guest stops.
+        fatalError("NSApplication.run returned")
     }
 
-    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, provisioning: NSObject?, recovery: Bool) {
+    private init(bundle: VMBundle, lock: BundleLock, machine: VZVirtualMachine, linux: Bool, provisioning: NSObject?,
+                 recovery: Bool) {
         self.bundle = bundle
         self.lock = lock
         self.machine = machine
+        self.linux = linux
         self.provisioning = provisioning
         self.recovery = recovery
         super.init()
@@ -128,7 +139,9 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let view = VZVirtualMachineView()
         view.virtualMachine = machine
         view.capturesSystemKeys = true
-        view.automaticallyReconfiguresDisplay = true
+        // A Linux desktop would keep a size the window gave it in the golden image; it stays at
+        // the image's and the window scales it.
+        view.automaticallyReconfiguresDisplay = !linux
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
@@ -144,6 +157,15 @@ final class VMWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         interrupt = onInterrupt { [weak self] in self?.requestShutdown() }
 
+        if linux {
+            machine.start { result in
+                if case let .failure(error) = result {
+                    Self.exit(1, "Couldn't start '\(self.bundle.name)': \(error.localizedDescription)")
+                }
+            }
+            print("Booted '\(bundle.name)'. Shut down from its desktop when you are done.")
+            return
+        }
         let options = VZMacOSVirtualMachineStartOptions()
         options.startUpFromMacOSRecovery = recovery
         if #available(macOS 27, *), let provisioning = provisioning as? VZMacGuestProvisioningOptions {
