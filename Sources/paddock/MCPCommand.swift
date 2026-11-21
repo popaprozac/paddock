@@ -145,7 +145,7 @@ actor AgentSession {
         let scale = ScreenScale(guestWidth: config.display.widthInPixels, guestHeight: config.display.heightInPixels)
         held = (vm, scale)
         let screen = !config.hasScreen ? "It has no screen; work in it with run_command."
-            : "Its screen is \(scale.width)x\(scale.height) in screenshot pixels\(config.isLinux ? "; it has no accessibility_tree" : "")."
+            : "Its screen is \(scale.width)x\(scale.height) in screenshot pixels."
         return [Self.text("""
             Acquired '\(vm)', a fresh \(config.isLinux ? "Linux" : "macOS") VM, at \(response.ip ?? "an unknown address"). \
             \(screen) Call release when you are done; it is wiped.
@@ -238,7 +238,8 @@ actor AgentSession {
         Tool(name: "accessibility_tree", description: """
             The accessibility tree of the app that has focus, as JSON: each element has its role, \
             its title, value and description when it has them, its frame as [x, y, width, height] \
-            in screenshot pixels, and its children. Text is cut at 500 characters.
+            in screenshot pixels, and its children. Text is cut at 500 characters. A Linux VM's \
+            roles are AT-SPI's names, such as push button.
             """,
              inputSchema: schema([:]), annotations: .init(readOnlyHint: true)),
         Tool(name: "click", description: "Click at a point of the screenshot.",
