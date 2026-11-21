@@ -7,9 +7,10 @@
   to 13.6 GB once warm in testing, as `paddock top` shows. `serve` counts each VM at 1.7 times its
   memory, measured only for 8 GB VMs, when it warns at startup, and warns again while it runs if
   macOS's memory pressure rises. On a 36 GB Mac, two 8 GB slots brought pressure to warn.
-- A Linux VM costs its Mac about its own memory at most: a 4 GB Debian 13 VM took 0.45 GB idle
-  and 3.97 GB with its memory filled, which the Mac keeps until the VM stops. `serve` counts it at
-  its memory.
+- A restored Linux VM costs its Mac all of its memory at once, plus a little: a 4 GB Debian 13
+  VM took 4.21 GB as soon as it restored, with a desktop or without. One that booted instead, as
+  `serve`'s slots do while the screen is locked, took 0.45 GB idle, or 0.82 GB with a desktop,
+  and keeps whatever it uses until it stops. `serve` counts a Linux VM at 1.05 times its memory.
 - A slot's saved state doesn't restore while the Mac's screen is locked, so `serve` boots fresh
   clones instead, which takes longer (see [What serve needs](hosts.md#what-serve-needs)).
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.

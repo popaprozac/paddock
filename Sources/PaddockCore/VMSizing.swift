@@ -9,11 +9,13 @@ public enum VMSizing {
     public static let defaultDiskSize: UInt64 = 80 << 30
 
     /// What a running VM costs its host in memory: the guest's memory and Virtualization's own.
-    /// shortcut: for macOS 1.7 times, measured on 8 GB macOS 27 VMs (10.7 to 13.6 GB once warm);
-    /// for Linux its memory, measured on a 4 GB Debian 13 VM (0.45 GB idle, 3.97 GB with its
-    /// memory filled, which the host keeps until the VM stops). Measure other sizes before trusting it for them.
+    /// A restored VM costs all of its memory at once, so serve's warm VMs do. shortcut: for macOS
+    /// 1.7 times, measured on 8 GB macOS 27 VMs (10.7 to 13.6 GB once warm); for Linux 1.05 times,
+    /// measured on 4 GB Debian 13 VMs, with a desktop or without (4.21 GB as soon as they restored;
+    /// a cold-booted one took 0.45 GB idle, 0.82 GB with a desktop). Measure other sizes before
+    /// trusting it for them.
     public static func hostMemory(for memorySize: UInt64, linux: Bool = false) -> UInt64 {
-        linux ? memorySize : memorySize * 17 / 10
+        linux ? memorySize * 21 / 20 : memorySize * 17 / 10
     }
 
     public struct Limits: Sendable {
