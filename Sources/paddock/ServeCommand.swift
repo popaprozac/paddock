@@ -349,9 +349,9 @@ final class WarmPool {
         }
         let bundle = vm.bundle
         let ip = try await waitUntilReady(vm)
-        if vm.config.isLinux {
-            // A restored guest runs at the time its state was saved, and a booted one starts at 1970
-            // until its network time arrives; macOS corrects that itself.
+        if !vm.config.isMac {
+            // A restored guest runs at the time its state was saved, and a booted Linux one starts at
+            // 1970 until its network time arrives; macOS corrects that itself, Linux and Windows don't.
             do { try await vm.setGuestClock() } catch {
                 print("  warning: couldn't set the clock of '\(bundle.name)': \(error.localizedDescription)")
             }

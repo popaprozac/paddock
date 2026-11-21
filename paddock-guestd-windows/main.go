@@ -1,6 +1,6 @@
 // paddock-guestd for Windows is the agent inside each Windows guest (spike). It speaks the
 // protocol in docs/guest-agent.md, as the macOS and Linux agents do, on vsock port 52525, and
-// answers only the host. It answers health, state and run; put, get and axtree are still to
+// answers only the host. It answers health, state, run and clock; put, get and axtree are still to
 // come. It runs as SYSTEM, started at boot by a scheduled task. Commands run as the account signed
 // in at the console, or as SYSTEM when the host asks for root.
 package main
@@ -30,7 +30,8 @@ var idle = 5 * time.Second
 type request struct {
 	Op      string  `json:"op"`
 	Command *string `json:"command"`
-	User    *string `json:"as"` // for run: "root", or nil for the workload account
+	User    *string `json:"as"`   // for run: "root", or nil for the workload account
+	Time    *int64  `json:"time"` // for clock: the host's time, in nanoseconds since 1970
 }
 
 // response is one answer line; exactly the fields that are set go out.
@@ -109,6 +110,14 @@ func handle(line []byte, out *answerer) response {
 		default:
 			return failed(fmt.Sprintf("run as 'root' or as the workload account, not '%.64s'", *r.User))
 		}
+	case "clock":
+		if r.Time == nil {
+			return failed("clock needs a time")
+		}
+		if err := setClock(time.Unix(0, *r.Time)); err != nil {
+			return failed("can't set the clock: " + err.Error())
+		}
+		return exited(0)
 	}
 	// The host reads "unknown request" as an agent that predates the request.
 	return failed("unknown request '" + r.Op + "'")

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -136,4 +137,18 @@ func streamLines(r io.Reader, out *answerer) {
 			return
 		}
 	}
+}
+
+var procSetSystemTime = windows.NewLazySystemDLL("kernel32.dll").NewProc("SetSystemTime")
+
+// setClock sets the system clock, which SYSTEM may do, to `t`.
+func setClock(t time.Time) error {
+	u := t.UTC()
+	st := windows.Systemtime{Year: uint16(u.Year()), Month: uint16(u.Month()), DayOfWeek: uint16(u.Weekday()),
+		Day: uint16(u.Day()), Hour: uint16(u.Hour()), Minute: uint16(u.Minute()), Second: uint16(u.Second()),
+		Milliseconds: uint16(u.Nanosecond() / 1e6)}
+	if r, _, e := procSetSystemTime.Call(uintptr(unsafe.Pointer(&st))); r == 0 {
+		return e
+	}
+	return nil
 }
