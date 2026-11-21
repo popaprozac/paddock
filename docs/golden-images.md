@@ -334,13 +334,14 @@ Every clone then has:
 
 A Linux image with a desktop gives its VMs a screen, a keyboard and a pointer, so `screenshot`,
 `click`, `type`, `key`, `scroll`, `show`, `view` and MCP's screen tools work as they do for macOS,
-and `paddock run` opens it in a window. `axtree` and MCP's `accessibility_tree` refuse it: they
-read macOS's accessibility tree.
+and `paddock run` opens it in a window. `axtree` and MCP's `accessibility_tree` read the focused
+app's tree through AT-SPI, which needs `at-spi2-core` in the image (see
+[Linux guests](guest-agent.md#linux-guests)).
 
 The desktop comes from the image: one you point `from:` at that has one, or one your steps
 install. Its kernel must drive a virtio-gpu screen and USB input. Debian's genericcloud kernel
 drives neither, so build from its generic variant; the `debian-desktop` template does, and
-installs a small Xfce, about 100 MB from Debian:
+installs a small Xfce, about 100 MB from Debian, with AT-SPI:
 
 ```yaml
 from: { debian: 13, variant: generic }
@@ -353,7 +354,7 @@ steps:
       apt-get update
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \
-        xserver-xorg-input-libinput dbus-x11
+        xserver-xorg-input-libinput dbus-x11 at-spi2-core
       systemctl set-default graphical.target
 ```
 
@@ -371,6 +372,8 @@ paddock does what only it can, since it makes the account at the first boot:
   6.12.117+deb13-cloud-arm64, doesn't drive the screen: it has no virtio-gpu driver", and the image
   stays headless. With `desktop: true` the build stops there instead. Without a display manager
   and without the key, there's no extra boot.
+- With the desktop up, it looks for the account's AT-SPI bus, and notes when there's none, since
+  `axtree` can't read the desktop's apps without it.
 
 `serve` waits for the desktop before it saves a slot's state, so a restored VM is handed out with
 its desktop drawn. Debian's generic kernel drives the USB devices, so slots restore with them; the
@@ -382,6 +385,10 @@ built in 2m 36s, a slot booted in 4.3 s and saved 0.2 GB of state, and each refi
   step: the account has no password, so a locked VM can't be unlocked from inside.
 - `cmd` in `key` and MCP's `press_keys` reaches Linux as the Super key, so shortcuts there use
   `ctrl`, as `ctrl+s`.
+- Tested with GTK apps under X11, as Xfce's are: they publish their trees to AT-SPI on their own,
+  and frames are screen pixels. Qt, Firefox and Chromium publish theirs only when accessibility is
+  turned on (AT-SPI's `IsEnabled`), which paddock doesn't do, and under Wayland AT-SPI gives no
+  screen positions; neither has been tested.
 
 ### Rosetta
 
