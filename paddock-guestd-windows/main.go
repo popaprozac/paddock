@@ -1,20 +1,22 @@
 // paddock-guestd for Windows is the agent inside each Windows guest (spike). It speaks the
 // protocol in docs/guest-agent.md, as the macOS and Linux agents do, on vsock port 52525, and
-// answers only the host. For now it answers health and state; run, put, get and axtree are still
-// to come. It runs as SYSTEM, started at boot by a scheduled task.
+// answers only the host. It answers health, state and run; put, get and axtree are still to
+// come. It runs as SYSTEM, started at boot by a scheduled task. Commands run as the account signed
+// in at the console, or as SYSTEM when the host asks for root.
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"time"
 )
 
 const (
-	version    = "0.1.0"
+	version    = "0.2.0"
 	port       = 52525
 	maxRequest = 64 * 1024
 	// The host's vsock address. viosock sets the peer's CID, so only the host's connections come
@@ -26,7 +28,9 @@ const (
 var idle = 5 * time.Second
 
 type request struct {
-	Op string `json:"op"`
+	Op      string  `json:"op"`
+	Command *string `json:"command"`
+	User    *string `json:"as"` // for run: "root", or nil for the workload account
 }
 
 // response is one answer line; exactly the fields that are set go out.
@@ -39,7 +43,10 @@ type response struct {
 
 func exited(status int) response     { return response{Exit: &status} }
 func failed(message string) response { return response{Error: &message} }
-func output(line string) response    { return response{Output: &line} }
+func output(line []byte) response {
+	text := string(line)
+	return response{Output: &text}
+}
 
 func main() {
 	log.SetFlags(0)
@@ -64,7 +71,7 @@ func main() {
 	}
 }
 
-// serve answers one connection: one request line, then one or more answer lines, sent in one write.
+// serve answers one connection: one request line, then one or more answer lines.
 func serve(c *vsockConn) {
 	defer c.Close()
 	c.setReadTimeout(idle)
@@ -72,30 +79,60 @@ func serve(c *vsockConn) {
 	if err != nil {
 		return
 	}
-	var out bytes.Buffer
-	for _, r := range handle(bytes.TrimRight(line, "\r\n")) {
-		b, _ := json.Marshal(r)
-		out.Write(append(b, '\n'))
-	}
-	io.Copy(c, &out)
+	out := &answerer{w: c}
+	out.send(handle(bytes.TrimRight(line, "\r\n"), out))
 }
 
-func handle(line []byte) []response {
+func handle(line []byte, out *answerer) response {
 	var r request
 	if json.Unmarshal(line, &r) != nil || r.Op == "" {
-		return []response{failed("unreadable request")}
+		return failed("unreadable request")
 	}
 	switch r.Op {
 	case "health":
 		v := version
-		return []response{{Version: &v}}
+		return response{Version: &v}
 	case "state":
-		var answers []response
 		for _, s := range state() {
-			answers = append(answers, output(s))
+			out.send(output([]byte(s)))
 		}
-		return append(answers, exited(0))
+		return exited(0)
+	case "run":
+		if r.Command == nil {
+			return failed("run needs a command")
+		}
+		switch {
+		case r.User == nil:
+			return run(*r.Command, false, out)
+		case *r.User == "root":
+			return run(*r.Command, true, out)
+		default:
+			return failed(fmt.Sprintf("run as 'root' or as the workload account, not '%.64s'", *r.User))
+		}
 	}
 	// The host reads "unknown request" as an agent that predates the request.
-	return []response{failed("unknown request '" + r.Op + "'")}
+	return failed("unknown request '" + r.Op + "'")
+}
+
+// answerer writes one connection's answer lines. Lines that arrive together go out in one
+// write, as the Linux agent's do: many small vsock packets stall Virtualization.framework's
+// vsock. Once a write fails, the client is gone, and the rest is dropped.
+type answerer struct {
+	w    io.Writer
+	gone bool
+}
+
+func (o *answerer) send(rs ...response) {
+	var b bytes.Buffer
+	for _, r := range rs {
+		line, _ := json.Marshal(r)
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	if b.Len() == 0 || o.gone {
+		return
+	}
+	if _, err := o.w.Write(b.Bytes()); err != nil {
+		o.gone = true
+	}
 }

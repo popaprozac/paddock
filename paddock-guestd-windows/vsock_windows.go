@@ -45,6 +45,7 @@ func listen(port uint32) (*vsockListener, error) {
 	if err != nil {
 		return nil, err
 	}
+	noInherit(s)
 	address := sockaddrVM{family: afVsock, port: port, cid: 0xFFFFFFFF}
 	if r, _, e := procBind.Call(uintptr(s), uintptr(unsafe.Pointer(&address)), unsafe.Sizeof(address)); r != 0 {
 		windows.Closesocket(s)
@@ -65,7 +66,15 @@ func (l *vsockListener) accept() (*vsockConn, uint32, error) {
 	if r == socketError {
 		return nil, 0, wsaError(e)
 	}
-	return &vsockConn{windows.Handle(r)}, peer.cid, nil
+	c := windows.Handle(r)
+	noInherit(c)
+	return &vsockConn{c}, peer.cid, nil
+}
+
+// noInherit keeps a socket out of the commands the agent starts: sockets are inheritable, and a
+// command holding a host connection would keep it open after the agent closes it.
+func noInherit(s windows.Handle) {
+	windows.SetHandleInformation(s, windows.HANDLE_FLAG_INHERIT, 0)
 }
 
 // vsockConn is one accepted connection, read and written with recv and send.
