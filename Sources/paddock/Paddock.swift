@@ -1,6 +1,7 @@
 import ArgumentParser
 import CoreFoundation
 import Darwin
+import Foundation
 
 struct Paddock: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -9,6 +10,10 @@ struct Paddock: AsyncParsableCommand {
         version: "0.1.0",
         subcommands: [Install.self, Run.self, Clone.self, Bench.self, Serve.self, Acquire.self, Exec.self, RunTask.self, Screenshot.self, AXTreeCommand.self, Click.self, TypeText.self, Key.self, Scroll.self, Release.self, Show.self, Hide.self, View.self, MCPCommand.self, Init.self, Build.self, GrantCommand.self, Login.self, Logout.self, Hosts.self, Top.self, Askpass.self]
     )
+
+    /// This binary, which scripts/build.sh puts paddock-net and the guest folder next to. Not from
+    /// argv[0], which is only "paddock" when a shell found it on PATH.
+    static let binary = (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
 }
 
 /// Process entry point.
