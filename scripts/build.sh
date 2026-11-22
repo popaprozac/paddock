@@ -63,6 +63,11 @@ mkdir -p "$guest/linux"
 (cd "$root/paddock-guestd-linux" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -trimpath -ldflags='-s -w' -o "$guest/linux/paddock-guestd" .) >&2
 cp "$root/paddock-guestd-linux/paddock-guestd.service" "$guest/linux/"
+# The Windows guests' agent too, for Windows on Arm, with its installer.
+mkdir -p "$guest/windows"
+(cd "$root/paddock-guestd-windows" && GOOS=windows GOARCH=arm64 CGO_ENABLED=0 \
+  go build -trimpath -ldflags='-s -w' -o "$guest/windows/paddock-guestd.exe" .) >&2
+cp "$root/paddock-guestd-windows/install.ps1" "$guest/windows/"
 echo "guest agent files: $guest" >&2
 
 echo "$bin"

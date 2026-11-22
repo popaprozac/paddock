@@ -469,10 +469,10 @@ hardware model, a generic machine identifier and a display of 1024x768. The imag
   `HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation`), and this Mac's time zone.
 - An administrator account that signs in by itself at boot, with no screen lock, screen saver,
   sleep or display sleep, and a US keyboard layout for `type` and `key`.
-- The guest agent, `paddock-guestd.exe` from `paddock-guestd-windows/` (see
-  [Building and testing](development.md)), at `C:\Program Files\paddock`, run as SYSTEM by a
-  scheduled task at startup with no time limit, which restarts it if it exits (see
-  [Windows guests](guest-agent.md#windows-guests)).
+- The guest agent: copy the `guest` folder's `windows` folder, which `scripts/build.sh` makes,
+  into the guest, and run `powershell -ExecutionPolicy Bypass -File install.ps1` in it as an
+  administrator. It installs the agent as a service that starts at boot, and replaces an older
+  agent's scheduled task (see [Windows guests](guest-agent.md#windows-guests)).
 - For `paddock task`, Git for Windows: the tested image has MinGit 2.56.1 for ARM64 in
   `C:\Program Files\MinGit`, with its `cmd` folder on the machine's `PATH`. Check it with
   `paddock exec <vm> -- git --version`.

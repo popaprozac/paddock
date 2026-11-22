@@ -25,3 +25,5 @@ func put(string, int64, io.Reader) response                { return failed(errNo
 func get(string, *answerer) response                       { return failed(errNotWindows.Error()) }
 func axtree(*answerer) response                            { return failed(errNotWindows.Error()) }
 func printFocusedTree(_, _ io.Writer) int                  { return 1 }
+func isService() bool                                      { return false }
+func runService(func() error)                              {}

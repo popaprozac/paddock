@@ -37,11 +37,11 @@ for AT-SPI's D-Bus, and `golang.org/x/sys`, which godbus needs. It goes in the `
 run on the Mac with `go test ./...` there, and `GOOS=linux go vet ./...` checks the Linux-only
 vsock code.
 
-The guest agent for Windows guests, `paddock-guestd.exe` from `paddock-guestd-windows/`, is Go
-too, with `golang.org/x/sys` as its only dependency. Build it for Windows on Arm with
-`GOOS=windows GOARCH=arm64 go build` there; `scripts/build.sh` doesn't build it yet, and an image
-installs it by hand (see [Windows images](golden-images.md#windows-images)). Its tests run on the
-Mac with `go test ./...` there, and `GOOS=windows go vet ./...` checks the Windows-only code.
+It builds the guest agent for Windows guests too, `paddock-guestd.exe` from
+`paddock-guestd-windows/`: Go, for Windows on Arm, with `golang.org/x/sys` as its only dependency.
+It goes in the `guest` folder's `windows` folder with `install.ps1`, which installs it as a
+Windows service (see [Windows guests](guest-agent.md#windows-guests)). Its tests run on the Mac
+with `go test ./...` there, and `GOOS=windows go vet ./...` checks the Windows-only code.
 
 ## Continuous integration
 

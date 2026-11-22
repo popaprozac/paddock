@@ -1,7 +1,7 @@
 // paddock-guestd for Windows is the agent inside each Windows guest. It speaks the
 // protocol in docs/guest-agent.md, as the macOS and Linux agents do, on vsock port 52525, and
 // answers only the host. It answers health, state, run, put, get, clock and axtree. It runs as
-// SYSTEM, started at boot by a scheduled task. Commands, file transfers and the reading of the
+// SYSTEM, as the Windows service paddock-guestd, which install.ps1 sets up. Commands, file transfers and the reading of the
 // accessibility tree run as the account signed in at the console; commands run as SYSTEM when the
 // host asks for root.
 package main
@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	version    = "0.4.0"
+	version    = "0.5.0"
 	port       = 52525
 	maxRequest = 64 * 1024
 	// The host's vsock address. viosock sets the peer's CID, so only the host's connections come
@@ -60,9 +60,18 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "axtree" {
 		os.Exit(printFocusedTree(os.Stdout, os.Stderr))
 	}
+	if isService() {
+		runService(listenAndServe)
+		return
+	}
+	log.Fatal(listenAndServe())
+}
+
+// listenAndServe answers the host's connections until listening fails.
+func listenAndServe() error {
 	listener, err := listen(port)
 	if err != nil {
-		log.Fatalf("paddock-guestd: can't listen on vsock port %d: %v", port, err)
+		return fmt.Errorf("paddock-guestd: can't listen on vsock port %d: %v", port, err)
 	}
 	log.Printf("paddock-guestd %s (Windows) listening on vsock port %d", version, port)
 	for {

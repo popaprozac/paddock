@@ -107,10 +107,14 @@ systemd runs the agent as root and starts it again if it exits. It logs to the j
 
 `paddock-guestd` for Windows guests, from `paddock-guestd-windows/`, is Go built for
 windows/arm64. It speaks the same protocol on the same port, through virtio-win's viosock driver
-and its Winsock provider, and closes connections that don't come from CID 2 in the same way. An
-image runs it as SYSTEM, from a scheduled task at boot that starts it again if it exits (see
-[Windows images](golden-images.md#windows-images)). Its `health` answers `{"version":"0.4.0"}`.
-Where it differs from the Linux agent:
+and its Winsock provider, and closes connections that don't come from CID 2 in the same way.
+`scripts/build.sh` stages it in the `guest` folder's `windows` folder with `install.ps1`, which
+installs it at `C:\Program Files\paddock\paddock-guestd.exe` as the Windows service
+`paddock-guestd` (see [Windows images](golden-images.md#windows-images)). The service runs it as
+SYSTEM from boot, and the service manager starts it again a second after it dies or stops with an
+error, as it does when vsock isn't up yet early in a boot. Its log goes nowhere yet. Its `health`
+answers `{"version":"0.5.0"}`; an agent before 0.5.0 ran from a scheduled task that never started
+it again. Where it differs from the Linux agent:
 
 - `run` uses `cmd.exe /d /s /c` as the account signed in at the console, with its environment, in
   its profile folder, on its desktop, so a window the command opens shows on the screen. An
