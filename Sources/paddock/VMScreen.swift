@@ -16,7 +16,8 @@ import Virtualization
 final class VMScreen: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let view: VZVirtualMachineView
-    private let size: NSSize           // the guest's pixels, one view point each while off screen
+    private var size: NSSize           // the guest's pixels, one view point each while off screen: see `followGuest`
+    private let usbWheel: Bool         // the guest's only pointer is VZ's USB one (Linux, Windows): see `scroll`
     private var handBack: (() -> Void)?  // set while a person has the window on screen
     private static var shown: [VMScreen] = []  // on screen now: paddock shows in the Dock while any is
     private static var pump: Timer?            // hands AppKit's events to windows while any is on screen
@@ -26,12 +27,13 @@ final class VMScreen: NSObject, NSWindowDelegate {
     /// window, visible or not.
     private static let offScreen = NSPoint(x: -20_000, y: -20_000)
 
-    init(machine: VZVirtualMachine, display: VMConfig.Display) throws {
+    init(machine: VZVirtualMachine, display: VMConfig.Display, usbWheel: Bool = false) throws {
         guard CGSessionCopyCurrentDictionary() != nil else {
             throw PaddockError("this paddock can't reach the window server; start it from a logged-in session to read VM screens")
         }
         _ = NSApplication.shared  // AppKit needs it before any window; without a bundle it shows no Dock icon
         size = NSSize(width: display.widthInPixels, height: display.heightInPixels)
+        self.usbWheel = usbWheel
         view = VZVirtualMachineView(frame: NSRect(origin: .zero, size: size))
         view.virtualMachine = machine
         window = NSWindow(contentRect: NSRect(origin: Self.offScreen, size: size),
@@ -165,12 +167,35 @@ final class VMScreen: NSObject, NSWindowDelegate {
         return (contents as! IOSurfaceRef)
     }
 
-    /// The guest's screen in pixels.
+    /// The guest's screen in pixels, as of the last `followGuest`.
     var pixelSize: (width: Int, height: Int) { (Int(size.width), Int(size.height)) }
+
+    /// Brings the view to the guest's framebuffer size, so a guest pixel stays one view point: a
+    /// Linux or Windows guest can change its resolution, and VZ letterboxes a smaller framebuffer
+    /// inside the old view instead. A shown window keeps its scale and takes the new shape. The view
+    /// doesn't reconfigure the guest's display (automaticallyReconfiguresDisplay is off), so this
+    /// only follows. Without a frame yet, nothing changes.
+    func followGuest() {
+        guard let surface = (try? frameSurface()) ?? nil else { return }
+        let current = NSSize(width: IOSurfaceGetWidth(surface), height: IOSurfaceGetHeight(surface))
+        guard current.width > 0, current.height > 0, current != size else { return }
+        let scale = isShown ? window.contentRect(forFrameRect: window.frame).width / size.width : 1
+        size = current
+        if isShown {
+            window.contentAspectRatio = size
+            window.setContentSize(NSSize(width: size.width * scale, height: size.height * scale))
+        } else {
+            window.setFrame(NSRect(origin: Self.offScreen, size: size), display: false)
+        }
+        // VZ places the pointer by its framebuffer subview's frame, which otherwise moves only at
+        // the next layout pass: an event sent before then lands by the old, letterboxed layout.
+        view.layoutSubtreeIfNeeded()
+    }
 
     /// A view's pointer: where it is in the guest's pixels and which buttons are down. Moves,
     /// presses, drags and releases follow from the change.
     func pointer(x: Int, y: Int, left: Bool, right: Bool) {
+        followGuest()
         let point = NSPoint(x: Double(min(max(x, 0), Int(size.width) - 1)) + 0.5,
                             y: size.height - Double(min(max(y, 0), Int(size.height) - 1)) - 0.5)
         if left != pointerLeft {
@@ -272,6 +297,14 @@ final class VMScreen: NSObject, NSWindowDelegate {
         // A scroll event made from scratch has no window and sits at the host's own pointer, off
         // the view; one made from a mouse event at the point has both right.
         guard let cgEvent = mouseEvent(.mouseMoved, at: point, clickCount: 0)?.cgEvent else { return }
+        // VZ's USB pointer reports a line delta as 10 high-resolution wheel units (a notch is
+        // 120), in macOS's natural direction, so to a guest that doesn't scroll naturally it is a
+        // twelfth of a notch the wrong way. Windows scrolls 3 lines a notch: 4 per line, turned
+        // around, makes a line a line.
+        // shortcut: measured on Windows 11's vertical wheel (a Linux guest's evdev shows the same
+        // units and direction); horizontal scrolling takes the same change untested, and a guest
+        // set to other lines per notch is off by that.
+        let (down, right) = usbWheel ? (-down * 4, -right * 4) : (down, right)
         cgEvent.type = .scrollWheel
         cgEvent.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(down))
         cgEvent.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(right))
@@ -281,6 +314,7 @@ final class VMScreen: NSObject, NSWindowDelegate {
 
     /// A point in the view for guest screen pixels, which run from the top left.
     private func viewPoint(x: Int, y: Int) throws -> NSPoint {
+        followGuest()
         let size = view.bounds.size
         guard (0..<Int(size.width)).contains(x), (0..<Int(size.height)).contains(y) else {
             throw PaddockError("\(x), \(y) is off the guest's \(Int(size.width))x\(Int(size.height)) screen")

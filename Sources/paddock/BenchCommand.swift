@@ -105,7 +105,7 @@ final class BenchRunner: NSObject {
     private func run() async throws {
         let source = try home.bundle(named: settings.source)
         let config = try source.readConfig()
-        let os = config.isLinux ? "Linux" : config.os.map { "macOS \($0.version) (\($0.build))" } ?? "macOS"
+        let os = config.isLinux ? "Linux" : config.isWindows ? "Windows" : config.os.map { "macOS \($0.version) (\($0.build))" } ?? "macOS"
         print("""
             Benchmarking \(settings.restore ? "restores of " : "")'\(source.name)'\(settings.userspace ? " on userspace networks" : ""): \(os), \(config.cpuCount) CPUs, \(config.memorySize >> 30) GB memory, \
             \(settings.runs) run\(settings.runs == 1 ? "" : "s")

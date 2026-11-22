@@ -2,7 +2,8 @@
 
 A golden image is the VM every clone starts from. Make one from an image file with
 `paddock build`, with no one at the keyboard, or set one up by hand. Linux images are built from
-an image file too (see [Linux images](#linux-images)).
+an image file too (see [Linux images](#linux-images)). Windows images are set up outside paddock
+for now (see [Windows images](#windows-images)).
 
 ## Build one from an image file
 
@@ -437,3 +438,46 @@ the setting, since a slot's saved state restores only onto the same devices.
 
 Setup assumes the system Debian and Ubuntu share: netplan with systemd-networkd, the `ssh` unit
 and apt. Images of other distributions aren't supported.
+
+## Windows images
+
+paddock runs and serves Windows 11 ARM VMs, but doesn't make their images yet: there's no image
+file or `install` for Windows. A Windows golden image is installed and set up outside paddock,
+then placed in `~/.paddock/vms` as a bundle (see [VM bundle format](commands.md#vm-bundle-format)).
+You bring Microsoft's ISO and the license (see [Limits](limits.md)). Tested on macOS 27, with
+Windows 11 24H2 (build 26100) and virtio-win 0.1.302.
+
+The bundle has `disk.img`, `efi-vars` and a `config.json` with `"kind": "windows"`, an empty
+hardware model, a generic machine identifier and a display of 1024x768. The image needs:
+
+- A UEFI driver that gives Windows Boot Manager a linear framebuffer, without which the VM doesn't
+  boot, since the firmware's virtio-gpu output has none. It goes on the EFI system partition and
+  registers itself in `efi-vars`, so the firmware loads it at every boot. The tested image used
+  `framebuffer.efi` from [mustafaakin/tart](https://github.com/mustafaakin/tart), a fork of Tart
+  under Tart's Fair Source License.
+- Windows installed without Windows Setup's checks for a TPM and Secure Boot, which the VM
+  doesn't have: the tested image was applied with DISM from Windows PE.
+- virtio-win's drivers, from its ISO: viostor for the disk, NetKVM for the network, and viosock
+  with its Winsock provider for vsock.
+- The display at a fixed 1024x768: virtio-win's signed viogpudo, with no test signing; 1024x768
+  saved for Windows' one display; virtio-win's resolution service, vgpusrv, off; and the basic
+  display driver off (the `BasicDisplay` service's `Start` set to 4), or its monitor on the boot
+  framebuffer becomes a second, invisible display that windows and the pointer can wander onto.
+  Don't change the resolution: on Virtualization.framework, viogpudo garbles the screen at any
+  mode change (see [Limits](limits.md)).
+- The guest's clock read as UTC (`RealTimeIsUniversal` set to 1 under
+  `HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation`), and this Mac's time zone.
+- An administrator account that signs in by itself at boot, with no screen lock, screen saver,
+  sleep or display sleep, and a US keyboard layout for `type` and `key`.
+- The guest agent: copy the `guest` folder's `windows` folder, which `scripts/build.sh` makes,
+  into the guest, and run `powershell -ExecutionPolicy Bypass -File install.ps1` in it as an
+  administrator. It installs the agent as a service that starts at boot, and replaces an older
+  agent's scheduled task (see [Windows guests](guest-agent.md#windows-guests)).
+- For `paddock task`, Git for Windows: the tested image has MinGit 2.56.1 for ARM64 in
+  `C:\Program Files\MinGit`, with its `cmd` folder on the machine's `PATH`. Check it with
+  `paddock exec <vm> -- git --version`.
+
+Every clone then has the account signed in at the console, where `exec` runs commands as an
+administrator, so whatever a workload runs can act as one in its own VM, which is wiped when it
+is released. `serve` sets each warm VM's clock from this Mac's, and the agent restarts a restored
+VM's network adapter, which comes back receiving nothing.

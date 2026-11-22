@@ -4,7 +4,7 @@
 
 - An Apple silicon Mac running macOS 14 or later.
 - Swift 6 from Xcode or the Command Line Tools.
-- Go, for `paddock-net`, `paddock-control` and the Linux guest agent. `paddock-net`'s dependencies need Go 1.26; with an older Go installed, Go fetches
+- Go, for `paddock-net`, `paddock-control` and the Linux and Windows guest agents. `paddock-net`'s dependencies need Go 1.26; with an older Go installed, Go fetches
   1.26 itself on the first build.
 - Disk space for one restore image (about 26 GB for macOS 27) plus the golden VM's disk. The disk
   is sparse, so a fresh install takes about 25 GB of its nominal 80 GB. Delete the cached image
@@ -37,6 +37,12 @@ for AT-SPI's D-Bus, and `golang.org/x/sys`, which godbus needs. It goes in the `
 run on the Mac with `go test ./...` there, and `GOOS=linux go vet ./...` checks the Linux-only
 vsock code.
 
+It builds the guest agent for Windows guests too, `paddock-guestd.exe` from
+`paddock-guestd-windows/`: Go, for Windows on Arm, with `golang.org/x/sys` as its only dependency.
+It goes in the `guest` folder's `windows` folder with `install.ps1`, which installs it as a
+Windows service (see [Windows guests](guest-agent.md#windows-guests)). Its tests run on the Mac
+with `go test ./...` there, and `GOOS=windows go vet ./...` checks the Windows-only code.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `main`:
@@ -44,8 +50,8 @@ vsock code.
 - `swift build` and `swift test` on GitHub's `xcode-27` runner, since paddock uses macOS 27's
   SDK.
 - `go vet ./...` and `go test ./...` in each Go module on `macos-latest`, then
-  `GOOS=linux go build ./...` in `paddock-control` and `GOOS=linux go vet ./...` in
-  `paddock-guestd-linux`.
+  `GOOS=linux go build ./...` in `paddock-control`, `GOOS=linux go vet ./...` in
+  `paddock-guestd-linux` and `GOOS=windows go vet ./...` in `paddock-guestd-windows`.
 
 GitHub's Mac runners are VMs themselves and can't start VMs, so CI runs the unit tests only.
 Anything that boots a VM, such as `build`, `serve` and the guest agents, is tested on a Mac with
@@ -56,18 +62,20 @@ the smoke test.
 `scripts/smoke.sh` tests the [supported images](../README.md#supported-images) end to end on
 this Mac, one at a time. It builds each from its template, serves it with one slot, acquires a
 VM and runs a command in it. Where the image has a screen, it also takes a screenshot, opens an
-app with input (a terminal on Xfce, the text editor on GNOME, Go to Folder in Finder on macOS),
-types a marker and finds it in the accessibility tree. Then it releases the VM and deletes the
-image.
+app with input (a terminal on Xfce, the text editor on GNOME, Go to Folder in Finder on macOS,
+Notepad from the Run dialog on Windows), types a marker and finds it in the accessibility tree. In
+a Windows VM it also runs a task that writes the marker to a file, and checks the commit it brings
+back. Then it releases the VM and deletes the image.
 
 ```bash
-scripts/smoke.sh --macos golden
+scripts/smoke.sh --macos golden --windows windows
 ```
 
 - It builds paddock with `scripts/build.sh` first, or tests the binary that `PADDOCK` names.
 - It tests the `debian`, `debian-desktop`, `ubuntu` and `ubuntu-desktop` templates, or the ones
   you name. `--macos <image>` adds a macOS image from the paddock home, cloned in, since a macOS
-  build needs a password.
+  build needs a password. `--windows <image>` adds a Windows image the same way, since paddock
+  can't make one yet; it needs git in the image, for the task.
 - It runs in a paddock home of its own, a temporary folder with your paddock home's cache linked
   in, so your images and a `serve` you run are left alone. macOS's limit of two macOS VMs at
   once still counts both.

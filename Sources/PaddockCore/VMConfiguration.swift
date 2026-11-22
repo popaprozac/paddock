@@ -24,6 +24,8 @@ public enum VMConfiguration {
         configuration.memorySize = config.memorySize
         if config.isLinux {
             try linux(configuration, bundle: bundle, config: config, console: console)
+        } else if config.isWindows {
+            try windows(configuration, bundle: bundle, config: config)
         } else {
             try mac(configuration, bundle: bundle, config: config)
         }
@@ -87,6 +89,43 @@ public enum VMConfiguration {
             VZUSBScreenCoordinatePointingDeviceConfiguration(),
         ]
         configuration.keyboards = [VZMacKeyboardConfiguration()]
+    }
+
+    /// A Windows 11 guest: the generic platform, EFI boot, entropy, a virtio-gpu screen at the
+    /// config's display size, a USB keyboard and a USB pointer, as a desktop Linux VM has, and no
+    /// console, which Windows doesn't drive.
+    ///
+    /// shortcut: Windows Boot Manager hangs at its first instructions on the generic platform unless
+    /// two private settings are on (performance monitoring unit emulation and fine-grained traps);
+    /// replace them if Apple makes them public or Windows stops needing them.
+    static func windows(_ configuration: VZVirtualMachineConfiguration, bundle: VMBundle, config: VMConfig) throws {
+        guard let machineIdentifier = VZGenericMachineIdentifier(dataRepresentation: config.machineIdentifier) else {
+            throw PaddockError("config.json for '\(bundle.name)' has an unreadable machine identifier")
+        }
+        let platform = VZGenericPlatformConfiguration()
+        platform.machineIdentifier = machineIdentifier
+        for name in ["_setPerformanceMonitoringUnitEmulationEnabled:", "_setFineGrainedTrapsEmulationEnabled:"] {
+            let selector = NSSelectorFromString(name)
+            guard platform.responds(to: selector) else {
+                throw PaddockError("this Mac's Virtualization.framework lacks \(name), which Windows guests need to boot")
+            }
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(platform.method(for: selector), to: Setter.self)(platform, selector, true)
+        }
+        configuration.platform = platform
+        guard FileManager.default.fileExists(atPath: bundle.efiVariablesURL.path) else {
+            throw PaddockError("'\(bundle.name)' has no EFI variable store at \(bundle.efiVariablesURL.path)")
+        }
+        let bootLoader = VZEFIBootLoader()
+        bootLoader.variableStore = VZEFIVariableStore(url: bundle.efiVariablesURL)
+        configuration.bootLoader = bootLoader
+        configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+        let graphics = VZVirtioGraphicsDeviceConfiguration()
+        graphics.scanouts = [VZVirtioGraphicsScanoutConfiguration(
+            widthInPixels: config.display.widthInPixels, heightInPixels: config.display.heightInPixels)]
+        configuration.graphicsDevices = [graphics]
+        configuration.keyboards = [VZUSBKeyboardConfiguration()]
+        configuration.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
     }
 
     /// A Linux guest's generic platform, EFI boot, entropy and console, and with a desktop, a

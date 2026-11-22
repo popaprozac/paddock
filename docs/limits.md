@@ -1,8 +1,8 @@
 # Limits
 
-- macOS allows at most two macOS VMs running at once on one host. Linux VMs don't count toward
-  that: `serve` keeps at most two slots of a macOS image, and any number of a Linux image, as
-  memory allows.
+- macOS allows at most two macOS VMs running at once on one host. Linux and Windows VMs don't
+  count toward that: `serve` keeps at most two slots of a macOS image, and any number of a Linux
+  or Windows image, as memory allows.
 - A VM costs its Mac more memory than it's configured with: an 8 GB VM's process took 10.7
   to 13.6 GB once warm in testing, as `paddock top` shows. `serve` counts each VM at 1.7 times its
   memory, measured only for 8 GB VMs, when it warns at startup, and warns again while it runs if
@@ -12,7 +12,8 @@
   once it's used: after opening an app and reading its tree, Debian's Xfce took 4.5 GB and
   Ubuntu's GNOME 6.3 GB. One that booted instead, as `serve`'s slots do while the screen is
   locked, took 0.45 GB idle, or 0.82 GB with Xfce, and keeps whatever it uses until it stops.
-  `serve` counts a Linux VM at 1.15 times its memory, or 1.6 times with a desktop.
+  `serve` counts a Linux VM at 1.15 times its memory, or 1.6 times with a desktop. It counts a
+  Windows VM at 1.6 times too, which hasn't been measured on Windows.
 - A slot's saved state doesn't restore while the Mac's screen is locked, so `serve` boots fresh
   clones instead, which takes longer (see [What serve needs](hosts.md#what-serve-needs)).
 - Clones must be on the same APFS volume as their source. Cloning fails rather than copying.
@@ -61,3 +62,26 @@
   server cloud image, or disks in the same formats (see [Linux images](golden-images.md#linux-images)).
   A Debian 13 golden image takes about 2.8 GB of disk, since Debian's tarball holds its disk's
   zeros and extracting writes them out, and an Ubuntu 26.04 one about 2.6 GB.
+- A Windows VM's display is a fixed 1024x768. virtio-win's signed display driver, viogpudo,
+  garbles the screen on Virtualization.framework at any mode change, so Windows must never change
+  it: a resolution change inside a Windows VM breaks its screen until the VM is released, and in
+  a golden image, for good. virtio-win has fixes under review
+  ([#1687](https://github.com/virtio-win/kvm-guest-drivers-windows/pull/1687),
+  [#1717](https://github.com/virtio-win/kvm-guest-drivers-windows/pull/1717)); until a signed
+  release has one, a larger display needs viogpudo built from source and Windows' test signing.
+  `run`, `show` and `view` scale a Windows VM's screen rather than resize it.
+- A Windows VM needs two private settings of Virtualization.framework, performance monitoring unit
+  emulation and fine-grained traps, without which Windows Boot Manager hangs. A macOS release
+  could drop or change them; paddock then refuses to start a Windows VM.
+- Microsoft's [support page](https://support.microsoft.com/en-us/windows/experience/platform-variants/options-for-using-windows-11-with-mac-computers-with-apple-m1-m2-and-m3-chips)
+  names Parallels Desktop as the authorized way to run Windows 11 Pro and Enterprise for Arm in a
+  VM on Apple silicon Macs, and Windows 365 as the other way to use Windows on one. Whether your
+  license covers running it in paddock is yours to check.
+- A restart inside Windows stops the VM, since Virtualization.framework ends it, so Windows
+  updates that restart need the VM started again.
+- A Windows VM's agent reports the desktop up once the account's session runs Explorer, without
+  checking that it's unlocked, so a Windows image must sign in by itself and never lock. A key
+  sent about a second after a restored Windows VM was handed out was lost once in testing.
+- A Windows VM keeps its image's time zone, which isn't synced from the Mac.
+- Not tested with Windows: the userspace network, `run --share`, which needs WinFsp and
+  virtio-win's virtiofs service in the guest, and horizontal scrolling.

@@ -128,7 +128,7 @@ final class HeadlessVM: NSObject {
                 + "run commands in it instead")
         }
         if screen == nil {
-            screen = try VMScreen(machine: machine, display: config.display)
+            screen = try VMScreen(machine: machine, display: config.display, usbWheel: !config.isMac)
         }
     }
 
@@ -264,7 +264,7 @@ final class HeadlessVM: NSObject {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if let failure { throw failure }
-            if config.isLinux {
+            if !config.isMac {
                 if await state()?.contains("desktop") == true { return true }
             } else if let state = await state(at: SessionHelper.port, name: "paddock-session") {
                 if state.contains("desktop") { return true }
@@ -354,9 +354,9 @@ final class HeadlessVM: NSObject {
 
     /// Asks for the focused app's accessibility tree, passing each line of its JSON to `output`:
     /// from paddock-session, in the guest's desktop session, on macOS; from the guest agent, which
-    /// reads AT-SPI, on a Linux desktop.
+    /// reads AT-SPI on a Linux desktop and UI Automation on Windows.
     func accessibilityTree(output: @escaping @Sendable (String) -> Void) async throws {
-        guard config.isLinux else {
+        guard !config.isMac else {
             return try await withAgent(port: SessionHelper.port, name: "paddock-session") {
                 try SessionHelper.askForTree(over: $0, output: output)
             }
@@ -367,7 +367,8 @@ final class HeadlessVM: NSObject {
         do {
             try await withAgent { try SessionHelper.askForTree(over: $0, output: output) }
         } catch let error as PaddockError where error.message.contains("unknown request") {
-            throw PaddockError("the guest agent in '\(bundle.name)' predates Linux accessibility trees; rebuild the image")
+            throw PaddockError("the guest agent in '\(bundle.name)' predates accessibility trees on "
+                + (config.isWindows ? "Windows; update it in the image" : "Linux; rebuild the image"))
         }
     }
 
@@ -376,7 +377,7 @@ final class HeadlessVM: NSObject {
     /// check couldn't run. serve warns with it; build reports it.
     func imageProblems(sessionHelper: Bool) async -> [String]? {
         // The checks are macOS's settings: a Linux image's setup is paddock's own build.
-        guard !config.isLinux else { return [] }
+        guard config.isMac else { return [] }
         let output = OSAllocatedUnfairLock(initialState: [String]())
         guard (try? await runInGuest(SourceCheck.command) { line in output.withLock { $0.append(line) } }) == 0 else {
             return nil

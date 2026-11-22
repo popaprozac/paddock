@@ -30,6 +30,8 @@ jobs:
           - module: paddock-net
           - module: paddock-guestd-linux
             linux: go vet ./...  # the vsock code builds only for Linux
+          - module: paddock-guestd-windows
+            windows: go vet ./...  # the vsock and Win32 code builds only for Windows
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -43,3 +45,5 @@ jobs:
       - run: go test ./...
       - if: matrix.linux
         run: GOOS=linux ${{ matrix.linux }}
+      - if: matrix.windows
+        run: GOOS=windows ${{ matrix.windows }}
