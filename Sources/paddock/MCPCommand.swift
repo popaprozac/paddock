@@ -239,7 +239,8 @@ actor AgentSession {
             The accessibility tree of the app that has focus, as JSON: each element has its role, \
             its title, value and description when it has them, its frame as [x, y, width, height] \
             in screenshot pixels, and its children. Text is cut at 500 characters. A Linux VM's \
-            roles are AT-SPI's names, such as push button.
+            roles are AT-SPI's names, such as push button, and a Windows VM's are UI Automation's \
+            control types, such as Button.
             """,
              inputSchema: schema([:]), annotations: .init(readOnlyHint: true)),
         Tool(name: "click", description: "Click at a point of the screenshot.",

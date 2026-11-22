@@ -1,8 +1,9 @@
 // paddock-guestd for Windows is the agent inside each Windows guest (spike). It speaks the
 // protocol in docs/guest-agent.md, as the macOS and Linux agents do, on vsock port 52525, and
-// answers only the host. It answers health, state, run and clock; put, get and axtree are still to
-// come. It runs as SYSTEM, started at boot by a scheduled task. Commands run as the account signed
-// in at the console, or as SYSTEM when the host asks for root.
+// answers only the host. It answers health, state, run, clock and axtree; put and get are still to
+// come. It runs as SYSTEM, started at boot by a scheduled task. Commands, and the reading of the
+// accessibility tree, run as the account signed in at the console, or as SYSTEM when the host asks
+// for root.
 package main
 
 import (
@@ -12,11 +13,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"time"
 )
 
 const (
-	version    = "0.2.0"
+	version    = "0.3.0"
 	port       = 52525
 	maxRequest = 64 * 1024
 	// The host's vsock address. viosock sets the peer's CID, so only the host's connections come
@@ -51,6 +53,10 @@ func output(line []byte) response {
 
 func main() {
 	log.SetFlags(0)
+	// How the axtree request reads the desktop: this binary again, as the account signed in.
+	if len(os.Args) == 2 && os.Args[1] == "axtree" {
+		os.Exit(printFocusedTree(os.Stdout, os.Stderr))
+	}
 	listener, err := listen(port)
 	if err != nil {
 		log.Fatalf("paddock-guestd: can't listen on vsock port %d: %v", port, err)
@@ -118,6 +124,8 @@ func handle(line []byte, out *answerer) response {
 			return failed("can't set the clock: " + err.Error())
 		}
 		return exited(0)
+	case "axtree":
+		return axtree(out)
 	}
 	// The host reads "unknown request" as an agent that predates the request.
 	return failed("unknown request '" + r.Op + "'")

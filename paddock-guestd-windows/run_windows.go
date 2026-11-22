@@ -24,36 +24,54 @@ var starting sync.Mutex
 // run runs `command` through cmd.exe, as the account signed in at the console, on its desktop, or
 // as SYSTEM with root, and streams its output and error as lines.
 func run(command string, root bool, out *answerer) response {
-	var r, w windows.Handle
-	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{}))}
-	if err := windows.CreatePipe(&r, &w, &sa, 0); err != nil {
+	system, err := windows.GetSystemDirectory()
+	if err != nil {
 		return failed("can't start the command: " + err.Error())
 	}
-	process, err := start(command, root, w)
+	reader, process, err := startPiped(system+`\cmd.exe`, `cmd.exe /d /s /c "`+command+`"`, root)
 	if err != nil {
-		windows.CloseHandle(r)
 		return failed("can't start the command: " + err.Error())
 	}
 	defer windows.CloseHandle(process)
-	reader := os.NewFile(uintptr(r), "output")
 	streamLines(reader, out)
 	reader.Close()
+	return exited(int(int32(wait(process))))
+}
+
+// startPiped starts the program at appPath with the command line commandLine, as start does,
+// and returns a pipe that reads its output and error, and the process.
+func startPiped(appPath, commandLine string, root bool) (*os.File, windows.Handle, error) {
+	var r, w windows.Handle
+	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{}))}
+	if err := windows.CreatePipe(&r, &w, &sa, 0); err != nil {
+		return nil, 0, err
+	}
+	process, err := start(appPath, commandLine, root, w)
+	if err != nil {
+		windows.CloseHandle(r)
+		return nil, 0, err
+	}
+	return os.NewFile(uintptr(r), "output"), process, nil
+}
+
+// wait waits for `process` to end and gives its exit code.
+func wait(process windows.Handle) uint32 {
 	windows.WaitForSingleObject(process, windows.INFINITE)
 	var code uint32
 	windows.GetExitCodeProcess(process, &code)
-	return exited(int(int32(code)))
+	return code
 }
 
-// start starts cmd.exe /d /s /c "command" with its output and error going to `w`, which it
-// closes, and returns the process.
-func start(command string, root bool, w windows.Handle) (windows.Handle, error) {
-	system, err := windows.GetSystemDirectory()
+// start starts the program at appPath with the command line commandLine, as the account signed
+// in at the console, on its desktop, or as SYSTEM with root, with its output and error going to
+// `w`, which it closes, and returns the process.
+func start(appPath, commandLine string, root bool, w windows.Handle) (windows.Handle, error) {
+	app, err := windows.UTF16PtrFromString(appPath)
 	if err != nil {
 		windows.CloseHandle(w)
 		return 0, err
 	}
-	app, _ := windows.UTF16PtrFromString(system + `\cmd.exe`)
-	line, err := windows.UTF16PtrFromString(`cmd.exe /d /s /c "` + command + `"`)
+	line, err := windows.UTF16PtrFromString(commandLine)
 	if err != nil {
 		windows.CloseHandle(w)
 		return 0, fmt.Errorf("the command has a NUL character")

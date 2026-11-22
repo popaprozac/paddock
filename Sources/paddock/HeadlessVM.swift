@@ -355,7 +355,7 @@ final class HeadlessVM: NSObject {
 
     /// Asks for the focused app's accessibility tree, passing each line of its JSON to `output`:
     /// from paddock-session, in the guest's desktop session, on macOS; from the guest agent, which
-    /// reads AT-SPI, on a Linux desktop.
+    /// reads AT-SPI on a Linux desktop and UI Automation on Windows.
     func accessibilityTree(output: @escaping @Sendable (String) -> Void) async throws {
         guard !config.isMac else {
             return try await withAgent(port: SessionHelper.port, name: "paddock-session") {
@@ -368,7 +368,8 @@ final class HeadlessVM: NSObject {
         do {
             try await withAgent { try SessionHelper.askForTree(over: $0, output: output) }
         } catch let error as PaddockError where error.message.contains("unknown request") {
-            throw PaddockError("the guest agent in '\(bundle.name)' predates Linux accessibility trees; rebuild the image")
+            throw PaddockError("the guest agent in '\(bundle.name)' predates accessibility trees on "
+                + (config.isWindows ? "Windows; update it in the image" : "Linux; rebuild the image"))
         }
     }
 
