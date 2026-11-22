@@ -47,11 +47,17 @@ extension HeadlessVM {
         return TaskOutcome(status: status, changed: changed)
     }
 
-    /// Runs one of the task's own steps in the guest and returns its output, or throws with the
-    /// end of that output.
+    /// Runs one of the task's own steps in the guest and returns the last 5 lines of its output,
+    /// or throws with them. Only those are kept: the workload can make its login shell print
+    /// without end, and serve holds every VM on this Mac.
     private func runStep(_ script: String, _ what: String) async throws -> [String] {
         let lines = OSAllocatedUnfairLock(initialState: [String]())
-        let status = try await runInGuest(script) { line in lines.withLock { $0.append(line) } }
+        let status = try await runInGuest(script) { line in
+            lines.withLock {
+                $0.append(line)
+                if $0.count > 5 { $0.removeFirst() }
+            }
+        }
         let output = lines.withLock { $0 }
         guard status == 0 else {
             throw PaddockError("couldn't \(what) in the guest (exit \(status)): \(output.suffix(5).joined(separator: " / "))")

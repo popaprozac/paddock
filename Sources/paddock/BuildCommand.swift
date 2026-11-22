@@ -154,8 +154,7 @@ enum ImageBuild {
             } else {
                 share = nil
             }
-            let next = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-                .deletingLastPathComponent().appendingPathComponent("guest").path
+            let next = Paddock.binary.deletingLastPathComponent().appendingPathComponent("guest").path
             self.guest = URL(fileURLWithPath: guest ?? next, isDirectory: true).standardizedFileURL
             let installer = image.from.isLinux ? "linux/paddock-guestd" : "install.sh"
             guard FileManager.default.fileExists(atPath: self.guest.appendingPathComponent(installer).path) else {
@@ -406,7 +405,7 @@ enum GuestSSH {
     /// Runs `script` as root in the guest: logs in as `account` with `password`, which ssh gets
     /// from an AskpassServer, and gives sudo the same password ahead of the script on stdin.
     static func runAsRoot(_ script: String, account: String, password: String, at address: String) async throws {
-        let paddock = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
+        let paddock = Paddock.binary.path
         let askpass = try AskpassServer(password: password, helper: paddock)
         defer { askpass.stop() }
         // The guest was created moments ago by this build, on this Mac's private NAT network, so

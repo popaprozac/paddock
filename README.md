@@ -76,7 +76,7 @@ paddock serve golden         # keeps a warm VM ready in each of two slots; leave
 In another terminal:
 
 ```bash
-paddock acquire                      # prints the VM's name, such as golden-slot1-5e2dc9-844a19
+paddock acquire                      # prints Assigned '<vm>' at <ip>; <vm> is a name such as golden-slot1-5e2dc9-844a19
 paddock exec <vm> -- sw_vers
 paddock screenshot <vm>
 paddock release <vm>                 # wipes it; a fresh one is ready in about 6 s

@@ -481,14 +481,18 @@ final class ControlClient {
             return line
         }
         let ending = Self.withoutResult(line) ?? "{}"
-        guard let data = try? Data(contentsOf: file) else {
+        // Read a piece at a time, not whole: a task's bundle can be gigabytes, and this runs on
+        // serve's main actor.
+        guard let handle = try? FileHandle(forReadingFrom: file) else {
             return required ? ServeResponse(error: "serve didn't save the file").line : ending
         }
-        var offset = 0
-        while offset < data.count {
-            let end = min(offset + ControlLink.chunkSize, data.count)
-            try? await send(ControlLink.Message(type: "response", id: id, data: data.subdata(in: offset..<end)), on: socket)
-            offset = end
+        defer { try? handle.close() }
+        do {
+            while let piece = try handle.read(upToCount: ControlLink.chunkSize), !piece.isEmpty {
+                try? await send(ControlLink.Message(type: "response", id: id, data: piece), on: socket)
+            }
+        } catch {
+            return ServeResponse(error: "can't read the file serve saved: \(error.localizedDescription)").line
         }
         return ending
     }

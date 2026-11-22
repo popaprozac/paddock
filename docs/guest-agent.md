@@ -41,7 +41,7 @@ logs in to the guest, where the accessibility API can see apps. It listens only 
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.2.1"}` |
+| `{"op":"health"}` | `{"version":"0.2.2"}` |
 | `{"op":"axtree"}` | `{"output":"..."}` for each line of the focused app's accessibility tree as JSON, then `{"exit":0}` |
 | `{"op":"state"}` | `{"output":"desktop"}` once loginwindow has no window on screen, then `{"exit":0}` |
 
@@ -52,7 +52,9 @@ reads only the owners of on-screen windows, which needs no permission.
 
 Each element of the tree has its role, its subrole, title, value, description and identifier when
 it has them, whether it is enabled and focused, its frame as x, y, width and height in screen
-points from the top left of the display, and its children. Text is cut at 500 characters, and a
+points from the top left of the display, and its children. An element whose frame isn't a finite
+rectangle, as an app's null rectangle isn't, has no frame; a helper before 0.2.2 quits on one
+instead, and `axtree` fails while that app is in front. Text is cut at 500 characters, and a
 tree stops at 5,000 elements and 50 levels. Reading other apps needs the Accessibility
 permission, which macOS grants per binary: `axtree` fails until paddock-session is allowed in
 System Settings > Privacy & Security > Accessibility.

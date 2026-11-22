@@ -107,6 +107,7 @@ actor AgentSession {
             let x = try arguments.int("x"), y = try arguments.int("y")
             let point = try scale.guestPoint(x: x, y: y)
             let lines = try arguments.int("lines", default: 5)
+            guard (1...1000).contains(lines) else { throw PaddockError("lines is 1 to 1,000") }
             let (down, right): (Int, Int)
             switch try arguments.string("direction") {
             case "down": (down, right) = (lines, 0)
@@ -267,7 +268,7 @@ actor AgentSession {
                  "x": ["type": "integer", "description": "Pixels from the left of the screenshot."],
                  "y": ["type": "integer", "description": "Pixels from the top of the screenshot."],
                  "direction": ["type": "string", "enum": ["up", "down", "left", "right"]],
-                 "lines": ["type": "integer", "description": "About how many lines; defaults to 5."],
+                 "lines": ["type": "integer", "description": "About how many lines, 1 to 1,000; defaults to 5."],
              ], required: ["x", "y", "direction"])),
         Tool(name: "run_command", description: """
             Run a shell command in the VM, in a login shell as its user in their home folder, \

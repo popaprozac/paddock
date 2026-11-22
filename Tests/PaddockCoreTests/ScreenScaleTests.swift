@@ -37,4 +37,12 @@ import Testing
         #expect(button["frame"] as? [Int] == [200, 100, 60, 20])
         #expect(button["title"] as? String == "OK")
     }
+
+    @Test func leavesAFrameNoIntHoldsAsItWas() throws {
+        let json = #"{"role":"AXButton","frame":[1e300,0,90,30]}"#
+        let tree = try JSONSerialization.jsonObject(with: Data(json.utf8))
+        let scaled = ScreenScale(guestWidth: 1920, guestHeight: 1200).scalingFrames(of: tree)
+        let out = try #require(scaled as? [String: Any])
+        #expect(out["frame"] as? [Double] == [1e300, 0, 90, 30])
+    }
 }

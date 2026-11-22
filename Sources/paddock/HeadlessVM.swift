@@ -218,8 +218,7 @@ final class HeadlessVM: NSObject {
 
     /// paddock-net, which build.sh puts next to the paddock binary.
     private static var helperURL: URL {
-        URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-            .deletingLastPathComponent().appendingPathComponent("paddock-net")
+        Paddock.binary.deletingLastPathComponent().appendingPathComponent("paddock-net")
     }
 
     /// Waits for the guest's DHCP lease on the NAT network and returns its address, or nil
