@@ -3,7 +3,7 @@ import CoreGraphics
 /// The protocol of paddock-session, the helper that runs in the guest user's desktop session.
 /// It speaks GuestAgent's line protocol on its own vsock port, with these requests:
 ///
-///     {"op":"health"}  ->  {"version":"0.2.1"}
+///     {"op":"health"}  ->  {"version":"0.2.2"}
 ///     {"op":"axtree"}  ->  {"output":"..."} per line of a JSON tree, then {"exit":0}
 ///     {"op":"state"}   ->  {"output":"desktop"} when it holds, then {"exit":0}
 ///
@@ -11,7 +11,7 @@ import CoreGraphics
 /// can replace it, so the host treats its answers as untrusted.
 public enum SessionHelper {
     public static let port: UInt32 = 52526
-    public static let version = "0.2.1"
+    public static let version = "0.2.2"
     /// Where guest/install.sh puts the helper; a guest with a file there runs it at login.
     public static let installedPath = "/usr/local/libexec/paddock-session"
 

@@ -31,7 +31,8 @@ public struct ScreenScale: Equatable, Sendable {
     }
 
     /// An accessibility tree, as JSONSerialization reads it, with every frame, [x, y, width,
-    /// height] in guest pixels, turned into whole screenshot pixels.
+    /// height] in guest pixels, turned into whole screenshot pixels. A frame that isn't four
+    /// numbers an Int can hold stays as it was.
     public func scalingFrames(of tree: Any) -> Any {
         if var element = tree as? [String: Any] {
             for (key, value) in element {
@@ -50,6 +51,8 @@ public struct ScreenScale: Equatable, Sendable {
             return nil
         }
         let sx = Double(width) / Double(guestWidth), sy = Double(height) / Double(guestHeight)
-        return zip(numbers, [sx, sy, sx, sy]).map { Int(($0 * $1).rounded()) }
+        // Int(exactly:), where Int() traps: the guest's numbers are untrusted, and can be any size.
+        let scaled = zip(numbers, [sx, sy, sx, sy]).compactMap { Int(exactly: ($0 * $1).rounded()) }
+        return scaled.count == 4 ? scaled : nil
     }
 }

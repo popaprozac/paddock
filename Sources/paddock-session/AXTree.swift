@@ -51,7 +51,9 @@ enum AXTree {
         node.focused = attribute(element, kAXFocusedAttribute) as? Bool
         if let origin: CGPoint = geometry(element, kAXPositionAttribute, .cgPoint),
            let size: CGSize = geometry(element, kAXSizeAttribute, .cgSize) {
-            node.frame = [origin.x, origin.y, size.width, size.height].map { Int($0.rounded()) }
+            // Int(exactly:), where Int() traps: an app can report a null or infinite rectangle.
+            let frame = [origin.x, origin.y, size.width, size.height].compactMap { Int(exactly: $0.rounded()) }
+            if frame.count == 4 { node.frame = frame }
         }
         if depth < maxDepth, let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement], !children.isEmpty {
             var described: [AXNode] = []

@@ -18,7 +18,7 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 | `acquire` | Takes a warm VM from `serve`, or from the pool on a Mac logged in to a control plane, waiting while the slots fill. `allow` lists the names it may reach on the userspace network. |
 | `screenshot` | The VM's screen as a PNG. |
 | `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
-| `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). |
+| `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). `scroll` moves 1 to 1,000 lines, 5 by default. |
 | `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. After `timeout` seconds, 120 by default and at most 3,600, it returns what the command printed so far, and the command goes on running in the VM. |
 | `release` | Hands the VM back to `serve`, which wipes it. |
 

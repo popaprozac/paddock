@@ -555,7 +555,10 @@ final class WarmPool {
                 case "scroll":
                     guard let x = action.x, let y = action.y else { throw PaddockError("scroll needs x and y") }
                     let down = action.down ?? 0, right = action.right ?? 0
-                    guard abs(down) <= 1000, abs(right) <= 1000 else { throw PaddockError("scroll is at most 1,000 lines") }
+                    // A range, not abs(): abs of Int.min traps, which would end serve and every VM in it.
+                    guard (-1000...1000).contains(down), (-1000...1000).contains(right) else {
+                        throw PaddockError("scroll is at most 1,000 lines")
+                    }
                     try vm.scroll(x: x, y: y, down: down, right: right)
                 default:
                     throw PaddockError("input is click, type, key or scroll")
