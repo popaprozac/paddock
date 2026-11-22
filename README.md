@@ -11,6 +11,8 @@ Apache 2.0.
 - **Golden images from a YAML file**, built with no one at the keyboard, for macOS 15, 26 and 27,
   and for Linux from Debian 13's and Ubuntu 26.04's cloud images, headless or with a desktop,
   and x86-64 programs through Rosetta.
+- **Windows 11 ARM guests**, from an image set up by hand, with the same commands, tasks, screen,
+  input and accessibility tree.
 - **Warm clones.** APFS copy-on-write clones, restored from a saved state, one per slot.
 - **Commands and git tasks** in the guest, through an agent that listens only on vsock.
 - **A network per VM** that reaches only the host names you allow.
@@ -39,12 +41,14 @@ Apache 2.0.
 | macOS 14 | By hand (see [Set one up by hand](docs/golden-images.md#set-one-up-by-hand)) | Not tested |
 | Debian 13, headless or with Xfce | `paddock build`, from the `debian` and `debian-desktop` templates | The smoke test |
 | Ubuntu 26.04 LTS, headless or with GNOME | `paddock build`, from the `ubuntu` and `ubuntu-desktop` templates | The smoke test |
+| Windows 11 ARM | By hand; paddock can't make one yet (see [Windows images](docs/golden-images.md#windows-images)) | 24H2: served, and driven from the CLI and by an agent over MCP |
 
 The smoke test, `scripts/smoke.sh`, builds each Linux template and serves it, drives a VM's
 commands, screen, input and accessibility tree, and does the same for a macOS image it's given
 (see [Smoke test](docs/development.md#smoke-test)). Other macOS point releases, other
 Debian-family cloud images and other desktops on Debian or Ubuntu should work, but aren't
-tested. Images of other Linux distributions aren't supported.
+tested. Images of other Linux distributions aren't supported. A Windows VM's display is a fixed
+1024x768 for now (see [Limits](docs/limits.md)).
 
 ## Quick start
 
@@ -113,13 +117,13 @@ every Mac in it. See
 
 | Doc | What's in it |
 | --- | --- |
-| [Golden images](docs/golden-images.md) | Image files, how `build` sets up each macOS version, setting up by hand, `grant`, what an image allows, MDM |
+| [Golden images](docs/golden-images.md) | Image files, how `build` sets up each macOS version, setting up by hand, `grant`, what an image allows, MDM, Linux and Windows images |
 | [Commands](docs/commands.md) | Every command and its flags, what `paddock top` shows, where paddock keeps its files, running a task over SSH, what `bench` measures |
 | [Agents, screenshots and input](docs/agents.md) | `paddock mcp` and its tools, how screenshots and input work |
 | [Setting up Macs](docs/hosts.md) | What `serve` needs from a Mac, running it at login, and how each kind of host comes back after a restart, FileVault and EC2 Mac included |
 | [A pool of Macs](docs/control-plane.md) | The control plane: setup, commands, placement, where it can run, how it keeps the pool safe |
 | [The userspace network](docs/network.md) | A network per VM that reaches only the names its session allows |
-| [The guest agent](docs/guest-agent.md) | `paddock-guestd` and `paddock-session`: their protocols, how they answer only the host, and the agent for Linux guests |
+| [The guest agent](docs/guest-agent.md) | `paddock-guestd` and `paddock-session`: their protocols, how they answer only the host, and the agents for Linux and Windows guests |
 | [Building and testing](docs/development.md) | The build script, signing, the Go modules, running the tests, CI, the smoke test |
 | [Limits](docs/limits.md) | macOS's limits on VMs, and paddock's own |
 

@@ -29,6 +29,13 @@ tree, and `cmd` reaches it as the Super key, so its shortcuts use `ctrl`. On a W
 such as Ubuntu's GNOME, the tree's frames have sizes but no positions, so take where to click from
 the screenshot (see [Desktop Linux](golden-images.md#desktop-linux)).
 
+A Windows VM takes the screen and input tools and `accessibility_tree` as a macOS VM does, with
+UI Automation's control types, such as `Button`, as roles in its tree. `cmd` reaches it as the
+Windows key, so `cmd+r` opens Run, and its shortcuts use `ctrl`. Its screen is 1024x768, which
+already fits, so its screenshots are at the screen's own size (see
+[Windows images](golden-images.md#windows-images)). `run_command` runs commands in `cmd.exe`, as an
+administrator (see [Windows guests](guest-agent.md#windows-guests)).
+
 - A session holds one VM at a time. When the client closes stdin, or stops the server with
   SIGINT, SIGTERM or SIGHUP, as a dropped ssh connection does, the server releases the VM it
   holds.
@@ -37,8 +44,9 @@ the screenshot (see [Desktop Linux](golden-images.md#desktop-linux)).
   the next call opens a new link. paddock doesn't repeat a call on its own, since repeating a
   command, a click or an acquire could do it twice.
 - Screenshots are scaled to fit 1280x800, keeping the screen's shape: 1920x1200 becomes
-  1280x800. Every coordinate the tools take or return is in the screenshot's pixels, frames in
-  the accessibility tree included, and the server converts them for the guest.
+  1280x800, and a smaller screen keeps its size. Every coordinate the tools take or return is in
+  the screenshot's pixels, frames in the accessibility tree included, and the server converts
+  them for the guest.
 - What the tools return from the guest, its screen, tree and command output, is whatever the
   workload in the VM put there. An agent should trust it no more than the workload.
 
@@ -150,5 +158,9 @@ or the accessibility tree to see the result. While a person has the VM, with `pa
   `pageup`, `pagedown` and `f1` to `f12`.
 - Keys go at about 100 characters a second. The guest drops keys that go down and up much
   faster: typing 500 characters with no pause between key events, 163 arrived in testing.
-- `scroll` directions are the content's with macOS's default natural scrolling. A golden image
-  that turns natural scrolling off scrolls the other way.
+- `scroll` directions are the content's: `--down` brings what's below into view. A macOS guest
+  gets them that way through its default natural scrolling, so a golden image that turns
+  natural scrolling off scrolls the other way. A Linux or Windows guest doesn't scroll
+  naturally, so paddock turns its lines around, and sends each as a third of a wheel notch,
+  since Windows scrolls 3 lines a notch by default. Measured on Windows' vertical scrolling;
+  horizontal scrolling, and a guest set to other lines a notch, aren't tested.

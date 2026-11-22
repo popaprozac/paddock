@@ -4,7 +4,7 @@
 
 - An Apple silicon Mac running macOS 14 or later.
 - Swift 6 from Xcode or the Command Line Tools.
-- Go, for `paddock-net`, `paddock-control` and the Linux guest agent. `paddock-net`'s dependencies need Go 1.26; with an older Go installed, Go fetches
+- Go, for `paddock-net`, `paddock-control` and the Linux and Windows guest agents. `paddock-net`'s dependencies need Go 1.26; with an older Go installed, Go fetches
   1.26 itself on the first build.
 - Disk space for one restore image (about 26 GB for macOS 27) plus the golden VM's disk. The disk
   is sparse, so a fresh install takes about 25 GB of its nominal 80 GB. Delete the cached image
@@ -36,6 +36,12 @@ for AT-SPI's D-Bus, and `golang.org/x/sys`, which godbus needs. It goes in the `
 `linux` folder with its systemd unit (see [Linux guests](guest-agent.md#linux-guests)). Its tests
 run on the Mac with `go test ./...` there, and `GOOS=linux go vet ./...` checks the Linux-only
 vsock code.
+
+The guest agent for Windows guests, `paddock-guestd.exe` from `paddock-guestd-windows/`, is Go
+too, with `golang.org/x/sys` as its only dependency. Build it for Windows on Arm with
+`GOOS=windows GOARCH=arm64 go build` there; `scripts/build.sh` doesn't build it yet, and an image
+installs it by hand (see [Windows images](golden-images.md#windows-images)). Its tests run on the
+Mac with `go test ./...` there, and `GOOS=windows go vet ./...` checks the Windows-only code.
 
 ## Continuous integration
 

@@ -102,3 +102,52 @@ systemd runs the agent as root and starts it again if it exits. It logs to the j
   left out. Under Wayland, apps put every frame at 0, 0 with the right size, since they don't know
   where their windows are.
 - It doesn't copy per-host preferences, which are macOS's.
+
+## Windows guests
+
+`paddock-guestd` for Windows guests, from `paddock-guestd-windows/`, is Go built for
+windows/arm64. It speaks the same protocol on the same port, through virtio-win's viosock driver
+and its Winsock provider, and closes connections that don't come from CID 2 in the same way. An
+image runs it as SYSTEM, from a scheduled task at boot that starts it again if it exits (see
+[Windows images](golden-images.md#windows-images)). Its `health` answers `{"version":"0.4.0"}`.
+Where it differs from the Linux agent:
+
+- `run` uses `cmd.exe /d /s /c` as the account signed in at the console, with its environment, in
+  its profile folder, on its desktop, so a window the command opens shows on the screen. An
+  administrator gets two tokens when it signs in: a filtered one with a standard user's rights,
+  which what it starts gets, and an elevated one, which Windows hands out after a UAC prompt.
+  Commands get the elevated one, as a Linux workload account has sudo with no password, so whatever
+  a workload runs can act as an administrator in its own VM, which is wiped when it is released.
+  What the account opens by clicking still gets the filtered token, and Windows stops some input
+  from a standard window to an elevated one, such as dragging a file onto it. With `"as":"root"` a
+  command runs as SYSTEM. Output comes back without its CR LF line endings.
+- `put` and `get` work on files in the account's `%USERPROFILE%\paddock` folder. The agent opens
+  them while it impersonates the account, never as SYSTEM, so a link planted in the folder
+  reaches only what the account could reach. Files take the profile's permissions: the account,
+  SYSTEM and administrators. A name is one plain name that Windows keeps as given: no separators,
+  colons, wildcards, control characters or leading dot, no trailing dot or space, which Windows
+  drops, and no device name, such as `NUL`, `CON` or `COM1`, with or without an extension.
+- `state` answers `{"output":"network"}` once an adapter that is up, other than loopback, has an
+  IPv4 address and an IPv4 DNS server, and its traffic gets through: its IPv4 gateway answers a
+  ping within 0.5 s, or the adapter received something meanwhile, as on a network whose gateway
+  ignores pings. After Virtualization.framework restores a saved state, virtio-win's NetKVM
+  driver sends but receives nothing until its adapter restarts, so the agent disables and enables
+  an adapter that received nothing during an unanswered ping, at most every 15 s, with `netsh`.
+- `state` also answers `{"output":"desktop"}` once a session other than session 0 is active and
+  runs `explorer.exe`. It doesn't check that the session is unlocked, so an image signs in by
+  itself and never locks.
+- `clock` sets the guest's clock as the Linux agent's does, and `serve` sends it to each warm
+  Windows VM once it's ready.
+- `axtree` answers the tree of the app in front, in the same shape. UI Automation reads only the
+  desktop of the session it runs in, so the agent runs itself again as the account, with the
+  account's elevated token, in its session. The app in front is the process whose window is in
+  front, with all of that process's windows on screen, and the tree is UI Automation's control
+  view of them. The root is an `Application` element titled with the program's name, such as
+  `Notepad`. Each element has UI Automation's control type as its role, such as `Button`, `Edit`
+  or `Document`, its name as title, its text or number as value (for a document, its first 500
+  characters), its help text as description and its automation id as identifier when it has them,
+  its frame as x, y, width and height in screen pixels from the top left, which it leaves out for
+  an element off screen, whether it is enabled and has the keyboard focus, and its children, with
+  macOS's limits. A packaged app whose windows belong to ApplicationFrameHost, such as Settings,
+  comes with that host's other windows on screen.
+- It doesn't copy per-host preferences, which are macOS's.
