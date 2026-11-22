@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	version = "0.1.0"
+	version = "0.1.1"
 	port    = 52525
 	// Output lines longer than this are split, so every answer line stays well under the 64 KB
 	// the host's reader accepts even after JSON escaping.

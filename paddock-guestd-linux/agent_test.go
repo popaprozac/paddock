@@ -66,7 +66,7 @@ func lines(answer []byte) []string {
 
 func TestHealthAnswersTheVersion(t *testing.T) {
 	got := lines(ask(t, testAgent(t), `{"op":"health"}`, nil, false))
-	if want := []string{`{"version":"0.1.0"}`}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+	if want := []string{`{"version":"0.1.1"}`}; strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
@@ -247,19 +247,39 @@ func TestShellRunsOnlyAsTheAccount(t *testing.T) {
 		"1/comm": "systemd\n", "1/status": "Uid:\t0\t0\t0\t0\n",
 		"self/comm": "xfdesktop\n",
 	})
-	if !shellRuns(proc, "1000") {
+	if runningShell(proc, "1000") != "xfdesktop" {
 		t.Fatal("missed xfdesktop")
 	}
-	if shellRuns(proc, "1001") {
+	if runningShell(proc, "1001") != "" {
 		t.Fatal("took another user's shell")
 	}
-	if shellRuns(writeFiles(t, map[string]string{"9/comm": "xterm\n", "9/status": "Uid:\t1000\n"}), "1000") {
+	if runningShell(writeFiles(t, map[string]string{"9/comm": "xterm\n", "9/status": "Uid:\t1000\n"}), "1000") != "" {
 		t.Fatal("took xterm for a desktop")
 	}
 }
 
 func TestSettledWaitsFromTheSessionsStart(t *testing.T) {
-	if settled("6.9 20.1\n", 2.0) || !settled("7.0 20.1\n", 2.0) || settled("", 0) {
+	if settled("6.9 20.1\n", 2.0, 5) || !settled("7.0 20.1\n", 2.0, 5) || settled("", 0, 5) {
 		t.Fatal("wrong settle time")
+	}
+}
+
+func TestGNOMEIsUpOnlyOnceItsShellHasStarted(t *testing.T) {
+	started, notStarted := func() bool { return true }, func() bool { return false }
+	if !drawn("xfdesktop", "14.0 1.0\n", 13.9, notStarted) {
+		t.Fatal("waited on Xfce")
+	}
+	// GNOME's shell runs from the session's start, before it takes input.
+	if drawn("gnome-shell", "14.3 1.0\n", 14.1, notStarted) {
+		t.Fatal("counted GNOME up before its shell said it started")
+	}
+	if !drawn("gnome-shell", "14.3 1.0\n", 14.1, started) {
+		t.Fatal("missed GNOME's start")
+	}
+	if !drawn("gnome-shell", "74.5 1.0\n", 14.1, notStarted) {
+		t.Fatal("waited past the backstop for a GNOME that doesn't log its start")
+	}
+	if drawn("", "18.0 1.0\n", 14.1, started) || !drawn("", "19.1 1.0\n", 14.1, notStarted) {
+		t.Fatal("wrong settle for an unknown desktop")
 	}
 }

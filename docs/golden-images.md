@@ -385,9 +385,10 @@ paddock does what only it can, since it makes the account at the first boot:
   unlock it with. GNOME without `dconf-cli` gets a note to install it in a step.
 - After sealing, it boots the image once more with a screen and USB input, and waits for the
   guest agent to say the desktop is up: the screen's driver is loaded, the keyboard and pointer
-  are there, the account has an active, unlocked graphical session, and the desktop has drawn (see
-  [Linux guests](guest-agent.md#linux-guests)). When it is, `config.json` gets `"desktop": true`,
-  and the image's VMs get a screen at its display size, 1920x1200, and a USB keyboard and pointer.
+  are there, the account has an active, unlocked graphical session, and the desktop has drawn and
+  takes input (see [Linux guests](guest-agent.md#linux-guests)). When it is, `config.json` gets
+  `"desktop": true`, and the image's VMs get a screen at its display size, 1920x1200, and a USB
+  keyboard and pointer.
 - When it isn't, the build names the first thing missing, such as "its kernel,
   6.12.117+deb13-cloud-arm64, doesn't drive the screen: it has no virtio-gpu driver", and the image
   stays headless. With `desktop: true` the build stops there instead. Without a display manager
