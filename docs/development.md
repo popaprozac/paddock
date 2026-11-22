@@ -53,11 +53,12 @@ the smoke test.
 
 ## Smoke test
 
-`scripts/smoke.sh` tests the supported images end to end on this Mac, one at a time. It builds
-each from its template, serves it with one slot, acquires a VM and runs a command in it. Where
-the image has a screen, it also takes a screenshot, opens an app with input (a terminal on Xfce,
-the text editor on GNOME, Go to Folder in Finder on macOS), types a marker and finds it in the
-accessibility tree. Then it releases the VM and deletes the image.
+`scripts/smoke.sh` tests the [supported images](../README.md#supported-images) end to end on
+this Mac, one at a time. It builds each from its template, serves it with one slot, acquires a
+VM and runs a command in it. Where the image has a screen, it also takes a screenshot, opens an
+app with input (a terminal on Xfce, the text editor on GNOME, Go to Folder in Finder on macOS),
+types a marker and finds it in the accessibility tree. Then it releases the VM and deletes the
+image.
 
 ```bash
 scripts/smoke.sh --macos golden
