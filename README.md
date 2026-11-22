@@ -41,11 +41,11 @@ Apache 2.0.
 | macOS 14 | By hand (see [Set one up by hand](docs/golden-images.md#set-one-up-by-hand)) | Not tested |
 | Debian 13, headless or with Xfce | `paddock build`, from the `debian` and `debian-desktop` templates | The smoke test |
 | Ubuntu 26.04 LTS, headless or with GNOME | `paddock build`, from the `ubuntu` and `ubuntu-desktop` templates | The smoke test |
-| Windows 11 ARM | By hand; paddock can't make one yet (see [Windows images](docs/golden-images.md#windows-images)) | 24H2: served, and driven from the CLI and by an agent over MCP |
+| Windows 11 ARM | By hand; paddock can't make one yet (see [Windows images](docs/golden-images.md#windows-images)) | 24H2: served, and driven by an agent over MCP; the smoke test |
 
 The smoke test, `scripts/smoke.sh`, builds each Linux template and serves it, drives a VM's
-commands, screen, input and accessibility tree, and does the same for a macOS image it's given
-(see [Smoke test](docs/development.md#smoke-test)). Other macOS point releases, other
+commands, screen, input and accessibility tree, and does the same for a macOS or Windows image
+it's given (see [Smoke test](docs/development.md#smoke-test)). Other macOS point releases, other
 Debian-family cloud images and other desktops on Debian or Ubuntu should work, but aren't
 tested. Images of other Linux distributions aren't supported. A Windows VM's display is a fixed
 1024x768 for now (see [Limits](docs/limits.md)).

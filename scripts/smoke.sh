@@ -2,36 +2,43 @@
 # Smoke-tests paddock on this Mac, one supported image at a time: builds it from its template,
 # serves it, acquires a VM and runs a command in it. Where it has a screen, it also takes a
 # screenshot, opens an app with input, types a marker into it and finds the marker in the
-# accessibility tree. Then it releases the VM and deletes the image.
+# accessibility tree. In a Windows VM it also runs a task. Then it releases the VM and deletes the
+# image.
 #
 # It runs in a paddock home of its own, so your images and any serve you run are left alone;
 # downloads go through your cache. It prints a table to paste into a PR, keeps each image's logs
 # and screenshots in the folder it names, and exits non-zero if any image failed.
 #
-# Usage: scripts/smoke.sh [--macos <image>] [template ...]
-#   template  debian, debian-desktop, ubuntu or ubuntu-desktop; all four when none is named
-#   --macos   also test this macOS image from your paddock home, cloned in: a macOS build needs
-#             a password, so the script doesn't make one
-#   PADDOCK   a paddock binary to test, instead of building one with scripts/build.sh
+# Usage: scripts/smoke.sh [--macos <image>] [--windows <image>] [template ...]
+#   template   debian, debian-desktop, ubuntu or ubuntu-desktop; all four when none is named
+#   --macos    also test this macOS image from your paddock home, cloned in: a macOS build needs
+#              a password, so the script doesn't make one
+#   --windows  also test this Windows image from your paddock home, cloned in: paddock can't
+#              make one yet
+#   PADDOCK    a paddock binary to test, instead of building one with scripts/build.sh
 set -uo pipefail
 
-usage="usage: $0 [--macos <image>] [debian|debian-desktop|ubuntu|ubuntu-desktop ...]"
+usage="usage: $0 [--macos <image>] [--windows <image>] [debian|debian-desktop|ubuntu|ubuntu-desktop ...]"
 root=$(cd "$(dirname "$0")/.." && pwd)
 user_home=${PADDOCK_HOME:-$HOME/.paddock}
 macos=""
+windows=""
 templates=()
 while [[ $# -gt 0 ]]; do
   case $1 in
     --macos) macos=${2:?$usage}; shift 2 ;;
+    --windows) windows=${2:?$usage}; shift 2 ;;
     debian | debian-desktop | ubuntu | ubuntu-desktop) templates+=("$1"); shift ;;
     *) echo "$usage" >&2; exit 64 ;;
   esac
 done
 [[ ${#templates[@]} -eq 0 ]] && templates=(debian debian-desktop ubuntu ubuntu-desktop)
-if [[ -n $macos && ! -d $user_home/vms/$macos ]]; then
-  echo "no image named '$macos' in $user_home/vms" >&2
-  exit 1
-fi
+for image in "$macos" "$windows"; do
+  if [[ -n $image && ! -d $user_home/vms/$image ]]; then
+    echo "no image named '$image' in $user_home/vms" >&2
+    exit 1
+  fi
+done
 
 out=$(mktemp -d -t paddock-smoke)
 if [[ -n ${PADDOCK:-} ]]; then
@@ -73,10 +80,10 @@ limit() { perl -e 'alarm shift; exec @ARGV or die "$ARGV[0]: $!\n"' "$@"; }
 seconds() { if (($1 >= 60)); then echo "$(($1 / 60))m $(($1 % 60))s"; else echo "$1s"; fi; }
 
 # Checks one image, setting the table's columns as it goes and step to the step that's running.
-# kind: linux (no screen), xfce, gnome or macos.
+# kind: linux (no screen), xfce, gnome, macos or windows.
 check() {
   local name=$1 kind=$2 dir=$3 started acquired
-  if [[ $kind == macos ]]; then
+  if [[ $kind == macos || $kind == windows ]]; then
     step=clone
     cp -c -R "$user_home/vms/$name" "$home/vms/" || return 1
     build=cloned
@@ -106,6 +113,7 @@ check() {
   step=exec
   local command="uname -sr"
   [[ $kind == macos ]] && command="sw_vers -productVersion"
+  [[ $kind == windows ]] && command="ver"  # which prints a blank line first
   os=$(limit 60 "$paddock" exec "$vm" -- "$command" 2>"$dir/exec.err" | tail -1) || return 1
 
   if [[ $kind != linux ]]; then
@@ -123,6 +131,9 @@ check() {
         "$paddock" click "$vm" 35 15 && sleep 1.5 && "$paddock" type "$vm" "text editor" &&
           sleep 3 && "$paddock" key "$vm" return ;;
       macos) "$paddock" key "$vm" cmd+shift+g ;;  # Finder's Go to Folder
+      windows)  # Notepad, from the Run dialog: cmd is the Windows key
+        "$paddock" key "$vm" cmd+r && sleep 1.5 && "$paddock" type "$vm" notepad &&
+          "$paddock" key "$vm" return ;;
     esac >/dev/null 2>"$dir/input.err" || return 1
     sleep 3
     "$paddock" type "$vm" "$marker" >/dev/null 2>>"$dir/input.err" || return 1
@@ -136,6 +147,20 @@ check() {
     tree="$(jq -r '"\([.. | objects | select(has("role"))] | length) elements in \(.title // .role)"' "$dir/tree.json")" ||
       return 1
     limit 60 "$paddock" screenshot "$vm" -o "$dir/typed.png" >/dev/null 2>&1
+  fi
+
+  if [[ $kind == windows ]]; then
+    # A task commits what a command changed on a branch. A Windows image has git, which task
+    # needs, and its own task steps, in cmd.exe.
+    step=task
+    git init -q "$dir/repo" &&
+      git -C "$dir/repo" -c user.name=smoke -c user.email=smoke@localhost -c commit.gpgsign=false \
+        commit -q --allow-empty -m smoke &&
+      git -C "$dir/repo" bundle create -q "$dir/in.bundle" HEAD || return 1
+    limit 120 "$paddock" task "$vm" --bundle "$dir/in.bundle" --result "$dir/out.bundle" \
+      -- "(echo $marker)>smoke.txt" >"$dir/task.log" 2>&1 || return 1
+    git -C "$dir/repo" fetch -q "$dir/out.bundle" HEAD &&
+      git -C "$dir/repo" show FETCH_HEAD:smoke.txt | grep -q "$marker" || return 1
   fi
 
   step=release
@@ -165,6 +190,7 @@ for template in "${templates[@]}"; do
   esac
 done
 [[ -n $macos ]] && smoke "$macos" macos
+[[ -n $windows ]] && smoke "$windows" windows
 
 commit=$(git -C "$root" rev-parse --short HEAD)
 [[ -n $(git -C "$root" status --porcelain --untracked-files=no) ]] && commit+=" with uncommitted changes"

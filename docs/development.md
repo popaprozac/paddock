@@ -62,18 +62,20 @@ the smoke test.
 `scripts/smoke.sh` tests the [supported images](../README.md#supported-images) end to end on
 this Mac, one at a time. It builds each from its template, serves it with one slot, acquires a
 VM and runs a command in it. Where the image has a screen, it also takes a screenshot, opens an
-app with input (a terminal on Xfce, the text editor on GNOME, Go to Folder in Finder on macOS),
-types a marker and finds it in the accessibility tree. Then it releases the VM and deletes the
-image.
+app with input (a terminal on Xfce, the text editor on GNOME, Go to Folder in Finder on macOS,
+Notepad from the Run dialog on Windows), types a marker and finds it in the accessibility tree. In
+a Windows VM it also runs a task that writes the marker to a file, and checks the commit it brings
+back. Then it releases the VM and deletes the image.
 
 ```bash
-scripts/smoke.sh --macos golden
+scripts/smoke.sh --macos golden --windows windows
 ```
 
 - It builds paddock with `scripts/build.sh` first, or tests the binary that `PADDOCK` names.
 - It tests the `debian`, `debian-desktop`, `ubuntu` and `ubuntu-desktop` templates, or the ones
   you name. `--macos <image>` adds a macOS image from the paddock home, cloned in, since a macOS
-  build needs a password.
+  build needs a password. `--windows <image>` adds a Windows image the same way, since paddock
+  can't make one yet; it needs git in the image, for the task.
 - It runs in a paddock home of its own, a temporary folder with your paddock home's cache linked
   in, so your images and a `serve` you run are left alone. macOS's limit of two macOS VMs at
   once still counts both.
