@@ -30,6 +30,22 @@ Apache 2.0.
 - About 50 GB free: the macOS restore image (about 26 GB, which you can delete afterward) and the
   golden image (about 25 GB).
 
+## Supported images
+
+| Guest | How it's made | Tested |
+| --- | --- | --- |
+| macOS 27 | `paddock build` | 27.2.1: built, granted and served; the smoke test |
+| macOS 26 and 15 | `paddock build`, offline from Recovery | 26.6.2 and 15.6.1: built, granted and served |
+| macOS 14 | By hand (see [Set one up by hand](docs/golden-images.md#set-one-up-by-hand)) | Not tested |
+| Debian 13, headless or with Xfce | `paddock build`, from the `debian` and `debian-desktop` templates | The smoke test |
+| Ubuntu 26.04 LTS, headless or with GNOME | `paddock build`, from the `ubuntu` and `ubuntu-desktop` templates | The smoke test |
+
+The smoke test, `scripts/smoke.sh`, builds each Linux template and serves it, drives a VM's
+commands, screen, input and accessibility tree, and does the same for a macOS image it's given
+(see [Smoke test](docs/development.md#smoke-test)). Other macOS point releases, other
+Debian-family cloud images and other desktops on Debian or Ubuntu should work, but aren't
+tested. Images of other Linux distributions aren't supported.
+
 ## Quick start
 
 **1. Build paddock.**
