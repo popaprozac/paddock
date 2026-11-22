@@ -65,7 +65,7 @@ stages it in the `guest` folder's `linux` folder with `paddock-guestd.service`, 
 installs both from its cloud-init seed (see [Linux images](golden-images.md#linux-images)): the
 binary at `/usr/local/libexec/paddock-guestd` and the unit in `/etc/systemd/system`, enabled.
 systemd runs the agent as root and starts it again if it exits. It logs to the journal. Its
-`health` answers `{"version":"0.1.0"}`. Where it differs from the macOS agent:
+`health` answers `{"version":"0.1.1"}`. Where it differs from the macOS agent:
 
 - `run` uses a login bash (`bash -l`) as the account with uid 1000, in its home folder, with
   stdin closed, and with `"as":"root"` as root in `/root`. A command that a signal ends exits with
@@ -76,9 +76,16 @@ systemd runs the agent as root and starts it again if it exits. It logs to the j
 - `state` also answers `{"output":"desktop"}` once the account's desktop is up: the screen's
   driver is loaded (`/dev/dri/card0`), a keyboard and a pointer are in `/proc/bus/input/devices`,
   systemd-logind has an active, unlocked X11 or Wayland session for uid 1000, and the desktop has
-  drawn: its shell runs as the account (xfdesktop, gnome-shell, plasmashell, cinnamon, mate-panel,
-  budgie-panel, lxqt-panel or lxpanel), or, for another desktop, the session has been up for 5 s.
-  `serve` waits for it on a desktop image before saving a slot's state.
+  drawn and takes input: its shell runs as the account (xfdesktop, gnome-shell, plasmashell,
+  cinnamon, mate-panel, budgie-panel, lxqt-panel or lxpanel), or, for another desktop, the session
+  has been up for 5 s. GNOME Shell runs from the start of its session, but covers the screen with
+  an actor that swallows input until its startup animation is over, when it logs "GNOME Shell
+  started" to the journal with `MESSAGE_ID=f3ea493c22934e26811cd62abe8e203a`. So for GNOME the
+  agent waits for that entry in this boot's journal, or for the session to have been up for 60 s,
+  should a GNOME stop logging it. `serve` waits for the desktop on a desktop image before saving a
+  slot's state, so a VM restored from that state takes input at once. An agent before 0.1.1
+  counts GNOME up early, and its VMs drop a click sent in their first second: rebuild a GNOME
+  image to get the new agent.
 - `{"op":"clock","time":N}`, with N in nanoseconds since 1970, sets the guest's clock and answers
   `{"exit":0}`. `paddock build` sends it at each boot, since a cloud image boots at 1970, and
   `serve` once each warm VM is ready, since a restored guest resumes at the time its state was

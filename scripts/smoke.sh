@@ -116,9 +116,6 @@ check() {
     [[ -n $screen ]] || return 1
 
     step=input
-    # shortcut: GNOME drops a click sent in the first second after a restore (lost at 0 s, taken
-    # at 1 s, twice each); drop this wait once serve hands out a desktop VM only when its input works.
-    sleep 2
     local marker="paddock smoke $RANDOM"
     case $kind in
       xfce) "$paddock" key "$vm" ctrl+alt+t ;;  # a terminal
