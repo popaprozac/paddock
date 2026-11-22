@@ -44,8 +44,8 @@ vsock code.
 - `swift build` and `swift test` on GitHub's `xcode-27` runner, since paddock uses macOS 27's
   SDK.
 - `go vet ./...` and `go test ./...` in each Go module on `macos-latest`, then
-  `GOOS=linux go build ./...` in `paddock-control` and `GOOS=linux go vet ./...` in
-  `paddock-guestd-linux`.
+  `GOOS=linux go build ./...` in `paddock-control`, `GOOS=linux go vet ./...` in
+  `paddock-guestd-linux` and `GOOS=windows go vet ./...` in `paddock-guestd-windows`.
 
 GitHub's Mac runners are VMs themselves and can't start VMs, so CI runs the unit tests only.
 Anything that boots a VM, such as `build`, `serve` and the guest agents, is tested on a Mac with
