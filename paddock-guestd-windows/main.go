@@ -1,9 +1,9 @@
 // paddock-guestd for Windows is the agent inside each Windows guest (spike). It speaks the
 // protocol in docs/guest-agent.md, as the macOS and Linux agents do, on vsock port 52525, and
-// answers only the host. It answers health, state, run, clock and axtree; put and get are still to
-// come. It runs as SYSTEM, started at boot by a scheduled task. Commands, and the reading of the
-// accessibility tree, run as the account signed in at the console, or as SYSTEM when the host asks
-// for root.
+// answers only the host. It answers health, state, run, put, get, clock and axtree. It runs as
+// SYSTEM, started at boot by a scheduled task. Commands, file transfers and the reading of the
+// accessibility tree run as the account signed in at the console; commands run as SYSTEM when the
+// host asks for root.
 package main
 
 import (
@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	version    = "0.3.0"
+	version    = "0.4.0"
 	port       = 52525
 	maxRequest = 64 * 1024
 	// The host's vsock address. viosock sets the peer's CID, so only the host's connections come
@@ -33,6 +33,8 @@ type request struct {
 	Op      string  `json:"op"`
 	Command *string `json:"command"`
 	User    *string `json:"as"`   // for run: "root", or nil for the workload account
+	Name    *string `json:"name"` // for put and get: a file in the account's paddock folder
+	Size    *int64  `json:"size"` // for put: how many bytes follow the request line
 	Time    *int64  `json:"time"` // for clock: the host's time, in nanoseconds since 1970
 }
 
@@ -40,6 +42,7 @@ type request struct {
 type response struct {
 	Version *string `json:"version,omitempty"`
 	Output  *string `json:"output,omitempty"`
+	Chunk   *int    `json:"chunk,omitempty"`
 	Exit    *int    `json:"exit,omitempty"`
 	Error   *string `json:"error,omitempty"`
 }
@@ -82,15 +85,17 @@ func main() {
 func serve(c *vsockConn) {
 	defer c.Close()
 	c.setReadTimeout(idle)
-	line, err := bufio.NewReaderSize(c, maxRequest).ReadSlice('\n')
+	in := bufio.NewReaderSize(c, maxRequest)
+	line, err := in.ReadSlice('\n')
 	if err != nil {
 		return
 	}
 	out := &answerer{w: c}
-	out.send(handle(bytes.TrimRight(line, "\r\n"), out))
+	out.send(handle(bytes.TrimRight(line, "\r\n"), in, out))
 }
 
-func handle(line []byte, out *answerer) response {
+// handle answers one request; `in` reads what follows its line, such as a put's bytes.
+func handle(line []byte, in io.Reader, out *answerer) response {
 	var r request
 	if json.Unmarshal(line, &r) != nil || r.Op == "" {
 		return failed("unreadable request")
@@ -116,6 +121,16 @@ func handle(line []byte, out *answerer) response {
 		default:
 			return failed(fmt.Sprintf("run as 'root' or as the workload account, not '%.64s'", *r.User))
 		}
+	case "put":
+		if r.Name == nil || !isFileName(*r.Name) || r.Size == nil || *r.Size < 0 || *r.Size > maxFileSize {
+			return failed(fmt.Sprintf("put needs a plain file name and a size up to %d bytes", maxFileSize))
+		}
+		return put(*r.Name, *r.Size, in)
+	case "get":
+		if r.Name == nil || !isFileName(*r.Name) {
+			return failed("get needs a plain file name")
+		}
+		return get(*r.Name, out)
 	case "clock":
 		if r.Time == nil {
 			return failed("clock needs a time")
@@ -139,6 +154,13 @@ type answerer struct {
 	gone bool
 }
 
+// sendChunk sends a chunk line and its bytes in one write.
+func (o *answerer) sendChunk(data []byte) {
+	n := len(data)
+	line, _ := json.Marshal(response{Chunk: &n})
+	o.write(append(append(line, '\n'), data...))
+}
+
 func (o *answerer) send(rs ...response) {
 	var b bytes.Buffer
 	for _, r := range rs {
@@ -146,10 +168,14 @@ func (o *answerer) send(rs ...response) {
 		b.Write(line)
 		b.WriteByte('\n')
 	}
-	if b.Len() == 0 || o.gone {
+	o.write(b.Bytes())
+}
+
+func (o *answerer) write(b []byte) {
+	if len(b) == 0 || o.gone {
 		return
 	}
-	if _, err := o.w.Write(b.Bytes()); err != nil {
+	if _, err := o.w.Write(b); err != nil {
 		o.gone = true
 	}
 }

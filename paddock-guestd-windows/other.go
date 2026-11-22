@@ -21,5 +21,7 @@ func (*vsockConn) setReadTimeout(time.Duration)            {}
 func state() []string                                      { return nil }
 func run(string, bool, *answerer) response                 { return failed(errNotWindows.Error()) }
 func setClock(time.Time) error                             { return errNotWindows }
+func put(string, int64, io.Reader) response                { return failed(errNotWindows.Error()) }
+func get(string, *answerer) response                       { return failed(errNotWindows.Error()) }
 func axtree(*answerer) response                            { return failed(errNotWindows.Error()) }
 func printFocusedTree(_, _ io.Writer) int                  { return 1 }

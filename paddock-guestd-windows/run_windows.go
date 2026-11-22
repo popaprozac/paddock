@@ -98,18 +98,9 @@ func start(appPath, commandLine string, root bool, w windows.Handle) (windows.Ha
 // startAsConsoleUser starts the process as the account signed in at the console, with its
 // environment and profile folder, on its interactive desktop, so what it opens shows there.
 func startAsConsoleUser(app, line *uint16, si *windows.StartupInfo, pi *windows.ProcessInformation) error {
-	var token windows.Token
-	if err := windows.WTSQueryUserToken(windows.WTSGetActiveConsoleSessionId(), &token); err != nil {
-		return fmt.Errorf("no one is signed in at the console: %w", err)
-	}
-	// An administrator signs in with a filtered token and an elevated one linked to it, as UAC
-	// does. Commands get the elevated one, as a Linux guest's workload account has sudo without a
-	// password; a standard account has no linked token and keeps its own.
-	if !token.IsElevated() {
-		if linked, err := token.GetLinkedToken(); err == nil {
-			token.Close()
-			token = linked
-		}
+	token, err := consoleUserToken()
+	if err != nil {
+		return err
 	}
 	defer token.Close()
 	var env *uint16
@@ -124,6 +115,25 @@ func startAsConsoleUser(app, line *uint16, si *windows.StartupInfo, pi *windows.
 	si.Desktop, _ = windows.UTF16PtrFromString(`winsta0\default`)
 	return windows.CreateProcessAsUser(token, app, line, nil, nil, true,
 		windows.CREATE_NO_WINDOW|windows.CREATE_UNICODE_ENVIRONMENT, env, dir, si, pi)
+}
+
+// consoleUserToken is the token of the account signed in at the console, which commands and
+// file transfers run as.
+func consoleUserToken() (windows.Token, error) {
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(windows.WTSGetActiveConsoleSessionId(), &token); err != nil {
+		return 0, fmt.Errorf("no one is signed in at the console: %w", err)
+	}
+	// An administrator signs in with a filtered token and an elevated one linked to it, as UAC
+	// does. Commands get the elevated one, as a Linux guest's workload account has sudo without a
+	// password; a standard account has no linked token and keeps its own.
+	if !token.IsElevated() {
+		if linked, err := token.GetLinkedToken(); err == nil {
+			token.Close()
+			token = linked
+		}
+	}
+	return token, nil
 }
 
 // streamLines sends what `r` gives as lines without their CR LF, splitting any over outputChunk,
