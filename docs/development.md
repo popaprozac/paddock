@@ -48,4 +48,30 @@ vsock code.
   `paddock-guestd-linux`.
 
 GitHub's Mac runners are VMs themselves and can't start VMs, so CI runs the unit tests only.
-Anything that boots a VM, such as `build`, `serve` and the guest agents, is tested on a Mac.
+Anything that boots a VM, such as `build`, `serve` and the guest agents, is tested on a Mac with
+the smoke test.
+
+## Smoke test
+
+`scripts/smoke.sh` tests the supported images end to end on this Mac, one at a time. It builds
+each from its template, serves it with one slot, acquires a VM and runs a command in it. Where
+the image has a screen, it also takes a screenshot, opens an app with input (a terminal on Xfce,
+the text editor on GNOME, Go to Folder in Finder on macOS), types a marker and finds it in the
+accessibility tree. Then it releases the VM and deletes the image.
+
+```bash
+scripts/smoke.sh --macos golden
+```
+
+- It builds paddock with `scripts/build.sh` first, or tests the binary that `PADDOCK` names.
+- It tests the `debian`, `debian-desktop`, `ubuntu` and `ubuntu-desktop` templates, or the ones
+  you name. `--macos <image>` adds a macOS image from the paddock home, cloned in, since a macOS
+  build needs a password.
+- It runs in a paddock home of its own, a temporary folder with your paddock home's cache linked
+  in, so your images and a `serve` you run are left alone. macOS's limit of two macOS VMs at
+  once still counts both.
+- The desktop builds download their packages each time: about 100 MB for Xfce, and 1 to 1.5 GB
+  for GNOME. A run of all four templates and a macOS image took about 10 minutes on a Mac Studio.
+- It prints a table for a pull request: each image's build, boot and restore times, the OS it
+  reports, the screen's size and the app whose tree it read. It keeps each image's logs and
+  screenshots in the folder it names, and exits with 1 if any image failed.
