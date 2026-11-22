@@ -1,4 +1,4 @@
-// paddock-guestd for Windows is the agent inside each Windows guest (spike). It speaks the
+// paddock-guestd for Windows is the agent inside each Windows guest. It speaks the
 // protocol in docs/guest-agent.md, as the macOS and Linux agents do, on vsock port 52525, and
 // answers only the host. It answers health, state, run, put, get, clock and axtree. It runs as
 // SYSTEM, started at boot by a scheduled task. Commands, file transfers and the reading of the

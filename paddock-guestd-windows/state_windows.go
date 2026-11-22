@@ -18,8 +18,9 @@ import (
 // through (see networkReady), and "desktop" once someone is signed in to the console with
 // Explorer running in that session.
 //
-// shortcut: "desktop" doesn't check that the session is unlocked; the spike's image signs in
-// automatically and never locks. Check WTSSessionInfoEx's lock state before images that can lock.
+// shortcut: "desktop" doesn't check that the session is unlocked; a Windows image signs in
+// automatically and never locks (docs/golden-images.md). Check WTSSessionInfoEx's lock state
+// before images that can lock.
 func state() []string {
 	var lines []string
 	if networkReady() {
