@@ -654,3 +654,41 @@ func TestAViewOfSomeoneElsesVMIsRefused(t *testing.T) {
 		t.Fatalf("another client's view %+v", got)
 	}
 }
+
+// A release the Mac never got, as one sent while it was offline, is kept and sent again once the
+// Mac reports the VM.
+func TestAReleaseTheMacDidntGetIsSentAgainWhenItReports(t *testing.T) {
+	c := newTestControl(t)
+	key, publicKey := newHostKey(t)
+	_, enrolled := c.enroll(t, c.token(t), "studio", publicKey)
+	vm := "golden-slot1-abc"
+	if err := c.srv.state.addHandout(handout{VM: vm, Host: enrolled.Host, Client: "client-gone", Since: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	c.srv.releaseAll("client-gone")
+	if h := c.srv.state.handout(vm); h == nil || h.Releasing != "client removed" {
+		t.Fatalf("after a release to an offline Mac: %+v", h)
+	}
+
+	conn, _, err := c.link(t, enrolled.Host, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.CloseNow() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wsjson.Write(ctx, conn, message{Type: "capacity", Slots: []slot{{Number: 1, State: "assigned", VM: vm}}})
+	var request message
+	if err := wsjson.Read(ctx, conn, &request); err != nil || request.Serve != `{"op":"release","vm":"`+vm+`"}` {
+		t.Fatalf("request %+v, %v", request, err)
+	}
+	if c.srv.state.handout(vm) == nil {
+		t.Fatal("the hand-out was forgotten before the Mac answered")
+	}
+	wsjson.Write(ctx, conn, message{Type: "response", ID: request.ID, Line: `{"vm":"` + vm + `"}`, Done: true})
+	eventually(t, "the hand-out to be forgotten", func() bool { return c.srv.state.handout(vm) == nil })
+	audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+	if !strings.Contains(string(audited), `"event":"released","host":"`+enrolled.Host+`","client":"client-gone","vm":"`+vm+`","reason":"client removed"`) {
+		t.Fatalf("audit log:\n%s", audited)
+	}
+}

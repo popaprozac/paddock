@@ -94,7 +94,9 @@ apart.
 - **A VM is its acquirer's.** The control plane keeps which client holds each VM, in its state, so
   a restart keeps it. Only that client can use or release the VM; anyone else's request for it is
   refused. A hand-out ends when its client releases the VM or is removed or logs out, or when the
-  VM's Mac reports its slots without it, as after its `serve` stops or restarts.
+  VM's Mac reports its slots without it, as after its `serve` stops or restarts. The control plane
+  keeps a release its Mac didn't answer, as one sent while the Mac was offline, and sends it again
+  when the Mac next reports the VM.
 - **Removal is immediate.** `remove-host` deletes the Mac's key and closes its link; its next link
   is refused. `remove-client` and `paddock logout` do the same for a client, and release its VMs.
 - **State.** Everything is in `~/.paddock/control`, or `-state`, which only the control plane's user

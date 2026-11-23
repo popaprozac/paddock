@@ -109,6 +109,9 @@ type handout struct {
 	Client string    `json:"client"`
 	Image  string    `json:"image,omitempty"`
 	Since  time.Time `json:"since"`
+	// Why it's being released, until its Mac answers the release: one it never got, as while it
+	// was offline, is sent again when it next reports.
+	Releasing string `json:"releasing,omitempty"`
 }
 
 func (s *state) addHandout(h handout) error {
@@ -127,6 +130,18 @@ func (s *state) handout(vm string) *handout {
 		return &copied
 	}
 	return nil
+}
+
+// markReleasing keeps why the VM's hand-out is being released, the first time it's asked to.
+func (s *state) markReleasing(vm, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := s.data.Handouts[vm]
+	if h == nil || h.Releasing != "" {
+		return nil
+	}
+	h.Releasing = reason
+	return s.save()
 }
 
 // removeHandout forgets the VM's hand-out and says whether there was one, so that of the paths
