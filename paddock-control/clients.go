@@ -26,20 +26,20 @@ type clientLink struct {
 // clientLink takes a client's WebSocket, has it prove it holds its enrolled key, then answers its
 // requests, each with the request's ID, until the link closes.
 func (s *server) clientLink(w http.ResponseWriter, r *http.Request) {
-	if !s.startPending() {
-		http.Error(w, "too many links waiting to authenticate", http.StatusServiceUnavailable)
+	address := addressOf(r)
+	if !s.startPending(address) {
+		http.Error(w, "too many links from this address waiting to authenticate", http.StatusServiceUnavailable)
 		return
 	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
-		s.endPending()
+		s.endPending(address)
 		return
 	}
-	conn.SetReadLimit(linkMessageLimit)
 	client, err := s.authenticate(r.Context(), conn, clientKind)
-	s.endPending()
+	s.endPending(address)
 	if err != nil {
-		s.audit.record(auditEvent{Event: "client-link-refused", Client: client, Remote: r.RemoteAddr, Reason: err.Error()})
+		s.recordRefusal(auditEvent{Event: "client-link-refused", Client: client, Remote: r.RemoteAddr, Reason: err.Error()})
 		conn.Close(websocket.StatusPolicyViolation, "not an enrolled client")
 		return
 	}

@@ -509,7 +509,8 @@ func (s *server) releaseAll(client string) {
 
 // forgetMissing forgets host's hand-outs whose VM its report names in no slot: its serve stopped
 // or restarted, which deletes them. A VM still in a slot stays, even warm, as in a report sent
-// just before the hand-out; serve names every clone anew, so a restart leaves no old name.
+// just before the hand-out; serve names every clone anew, so a restart leaves no old name. Of the
+// VMs it still has, the releases it didn't answer are sent again.
 func (s *server) forgetMissing(host string, slots []slot) {
 	reported := map[string]bool{}
 	for _, slot := range slots {
@@ -524,16 +525,29 @@ func (s *server) forgetMissing(host string, slots []slot) {
 			s.audit.record(auditEvent{Event: "released", Client: h.Client, Host: host, VM: h.VM, Reason: "the Mac no longer has it"})
 		}
 	}
+	for _, h := range s.state.handoutsWhere(func(h handout) bool { return h.Host == host && reported[h.VM] && h.Releasing != "" }) {
+		go s.releaseOn(h.Client, host, h.VM, h.Releasing) // its answer comes through the read loop that called this
+	}
 }
 
-// releaseOn hands a VM back to its host and forgets its hand-out, recording why.
+// releaseOn hands a VM back to its host and, once the host answers, forgets its hand-out,
+// recording why. Until then the hand-out is kept as being released, and forgetMissing tries again.
 func (s *server) releaseOn(client, host, vm, reason string) {
+	if err := s.state.markReleasing(vm, reason); err != nil {
+		log.Printf("can't save a release: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	answered := false
 	if answers, stop, err := s.forward(ctx, host, serveRequest{"op": "release", "vm": vm}.line()); err == nil {
-		for range answers {
+		for answer := range answers {
+			answered = answered || answer.Line != ""
 		}
 		stop()
+	}
+	if !answered {
+		log.Printf("%s didn't answer the release of %s: sending it again when it reports", host, vm)
+		return
 	}
 	if removed, _ := s.state.removeHandout(vm); removed {
 		s.audit.record(auditEvent{Event: "released", Client: client, Host: host, VM: vm, Reason: reason})

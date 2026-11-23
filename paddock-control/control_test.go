@@ -247,14 +247,72 @@ func TestEnrollNeedsAValidUnusedToken(t *testing.T) {
 	}
 }
 
-func TestEnrollStopsAfterTooManyFailures(t *testing.T) {
+// A caller that loops on bad tokens can neither lock others out nor fill the disk with refusals.
+func TestManyRefusalsDontStopEnrollmentAndOnlyAFewAreRecorded(t *testing.T) {
 	c := newTestControl(t)
 	_, publicKey := newHostKey(t)
-	for i := 0; i < enrollFailLimit; i++ {
+	for i := 0; i < refusalRecordLimit+5; i++ {
 		c.enroll(t, "pj1.wrong", "studio", publicKey)
 	}
-	if status, _ := c.enroll(t, c.token(t), "studio", publicKey); status != http.StatusTooManyRequests {
-		t.Fatalf("after %d failures: %d", enrollFailLimit, status)
+	if status, _ := c.enroll(t, c.token(t), "studio", publicKey); status != http.StatusOK {
+		t.Fatalf("after %d refusals: %d", refusalRecordLimit+5, status)
+	}
+	audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+	if n := strings.Count(string(audited), `"event":"enroll-refused"`); n != refusalRecordLimit {
+		t.Fatalf("%d refusals recorded, not %d", n, refusalRecordLimit)
+	}
+}
+
+func TestALinkReadsOnlySmallMessagesUntilItAuthenticates(t *testing.T) {
+	c := newTestControl(t)
+	key, publicKey := newHostKey(t)
+	_, enrolled := c.enroll(t, c.token(t), "studio", publicKey)
+	if _, _, err := c.link(t, strings.Repeat("h", authMessageLimit), key); websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
+		t.Fatalf("a large auth message: %v", err)
+	}
+	conn, _, err := c.link(t, enrolled.Host, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := strings.Repeat("x", 2*authMessageLimit)
+	wsjson.Write(context.Background(), conn, message{Type: "capacity", Slots: []slot{{Number: 1, State: "empty", Reason: reason}}})
+	c.waitFor(t, "a large report once linked", func(list []hostStatus) bool {
+		return len(list) == 1 && len(list[0].Slots) == 1 && list[0].Slots[0].Reason == reason
+	})
+}
+
+// A Mac that says nothing, as one whose network dropped without a goodbye, goes offline.
+func TestAMacThatSaysNothingIsDisconnected(t *testing.T) {
+	c := newTestControl(t)
+	c.srv.silence = 300 * time.Millisecond
+	key, publicKey := newHostKey(t)
+	_, enrolled := c.enroll(t, c.token(t), "studio", publicKey)
+	if _, _, err := c.link(t, enrolled.Host, key); err != nil {
+		t.Fatal(err)
+	}
+	c.waitFor(t, "the quiet Mac to go offline", func(list []hostStatus) bool { return len(list) == 1 && !list[0].Online })
+	audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+	if !strings.Contains(string(audited), `"reason":"nothing from the Mac for 300ms"`) {
+		t.Fatalf("audit log:\n%s", audited)
+	}
+}
+
+func TestOneAddressCantHoldUpAnothersLinks(t *testing.T) {
+	s := newServer(nil, nil, nil)
+	for i := 0; i < pendingPerAddress; i++ {
+		if !s.startPending("192.0.2.1") {
+			t.Fatalf("link %d refused", i+1)
+		}
+	}
+	if s.startPending("192.0.2.1") {
+		t.Fatal("one address got more than its share")
+	}
+	if !s.startPending("192.0.2.2") {
+		t.Fatal("another address was held up")
+	}
+	s.endPending("192.0.2.1")
+	if !s.startPending("192.0.2.1") {
+		t.Fatal("a link done authenticating still counts")
 	}
 }
 

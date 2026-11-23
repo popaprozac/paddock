@@ -127,3 +127,22 @@ func TestAnAbandonedRequestDoesntBlockTheHostsLink(t *testing.T) {
 		t.Fatalf("the next request's answers: %+v", got)
 	}
 }
+
+// A client slow to read its answers still hears that the link closed, after the answers it was
+// already sent, and doesn't wait for more.
+func TestARequestWhoseAnswersAreBackedUpStillHearsTheLinkClose(t *testing.T) {
+	p := &pendingRequest{answers: make(chan message, 1), gone: make(chan struct{})}
+	p.answers <- message{Type: "response", Line: "first"}
+	l := &link{pending: map[string]*pendingRequest{"r1": p}}
+	go l.failPending()
+	eventually(t, "the link to close", func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return l.closed
+	})
+	time.Sleep(50 * time.Millisecond) // failPending meets the full buffer before anyone reads
+	got := collect(t, p.answers)
+	if len(got) != 2 || got[0].Line != "first" || got[1].Error == "" || !got[1].Done {
+		t.Fatalf("answers %+v", got)
+	}
+}

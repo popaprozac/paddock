@@ -79,6 +79,12 @@ func TestEachTokenEnrollsOnlyItsKindAndIsKeptWhenMisused(t *testing.T) {
 	if status != http.StatusBadRequest || !strings.Contains(response.Error, "join token") {
 		t.Fatalf("a join token as a client: %d %+v", status, response)
 	}
+	// The kind is the token's own, not its prefix's: a login token passed off as a join token
+	// still can't add a Mac.
+	status, response = c.enrollAs(t, hostKind, "pj1."+strings.TrimPrefix(login, "pl1."), publicKey)
+	if status != http.StatusBadRequest || !strings.Contains(response.Error, "paddock login") {
+		t.Fatalf("a login token with a join token's prefix, as a host: %d %+v", status, response)
+	}
 	if status, response := c.enrollAs(t, clientKind, login, publicKey); status != http.StatusOK || !strings.HasPrefix(response.Client, "client-") {
 		t.Fatalf("the login token, kept, as a client: %d %+v", status, response)
 	}
