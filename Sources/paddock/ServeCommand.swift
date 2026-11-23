@@ -535,47 +535,51 @@ final class WarmPool {
         guard let request, let (_, vm, current) = handedOut(request.vm) else {
             return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
         }
-        // A person and an agent sharing one pointer and keyboard would undo each other.
-        guard !vm.isShown else {
-            return responder.finish(ServeResponse(error: "a person has '\(current.name)' on this Mac's screen, so input "
-                + "waits until they hand it back, with paddock hide or by closing its window").line)
-        }
-        guard !vm.isViewed else {
-            return responder.finish(ServeResponse(error: "a person is driving '\(current.name)' with paddock view, so input "
-                + "waits until they close the view").line)
-        }
         Task {
             do {
                 guard let action = request.input else { throw PaddockError("input needs an action") }
-                switch action.kind {
-                case "click":
-                    guard let x = action.x, let y = action.y else { throw PaddockError("click needs x and y") }
-                    guard let button = VMScreen.MouseButton(rawValue: action.button ?? "left") else {
-                        throw PaddockError("click's button is left or right")
+                // After the requests before it: the MCP server runs an agent's calls side by side.
+                try await vm.inputs.run {
+                    // A person and an agent sharing one pointer and keyboard would undo each other.
+                    // Checked when its turn comes, since a person may have taken the VM meanwhile.
+                    guard !vm.isShown else {
+                        throw PaddockError("a person has '\(current.name)' on this Mac's screen, so input waits "
+                            + "until they hand it back, with paddock hide or by closing its window")
                     }
-                    let count = action.count ?? 1
-                    guard (1...3).contains(count) else { throw PaddockError("click's count is 1 to 3") }
-                    try vm.click(x: x, y: y, button: button, count: count)
-                case "type":
-                    guard let text = action.text, (1...10_000).contains(text.count) else {
-                        throw PaddockError("type needs text of 1 to 10,000 characters")
+                    guard !vm.isViewed else {
+                        throw PaddockError("a person is driving '\(current.name)' with paddock view, so input waits "
+                            + "until they close the view")
                     }
-                    try await vm.press(KeyInput.strokes(typing: text))
-                case "key":
-                    guard let keys = action.keys, (1...100).contains(keys.count) else {
-                        throw PaddockError("key needs 1 to 100 key combinations")
+                    switch action.kind {
+                    case "click":
+                        guard let x = action.x, let y = action.y else { throw PaddockError("click needs x and y") }
+                        guard let button = VMScreen.MouseButton(rawValue: action.button ?? "left") else {
+                            throw PaddockError("click's button is left or right")
+                        }
+                        let count = action.count ?? 1
+                        guard (1...3).contains(count) else { throw PaddockError("click's count is 1 to 3") }
+                        try vm.click(x: x, y: y, button: button, count: count)
+                    case "type":
+                        guard let text = action.text, (1...10_000).contains(text.count) else {
+                            throw PaddockError("type needs text of 1 to 10,000 characters")
+                        }
+                        try await vm.press(KeyInput.strokes(typing: text))
+                    case "key":
+                        guard let keys = action.keys, (1...100).contains(keys.count) else {
+                            throw PaddockError("key needs 1 to 100 key combinations")
+                        }
+                        try await vm.press(keys.map(KeyInput.stroke))
+                    case "scroll":
+                        guard let x = action.x, let y = action.y else { throw PaddockError("scroll needs x and y") }
+                        let down = action.down ?? 0, right = action.right ?? 0
+                        // A range, not abs(): abs of Int.min traps, which would end serve and every VM in it.
+                        guard (-1000...1000).contains(down), (-1000...1000).contains(right) else {
+                            throw PaddockError("scroll is at most 1,000 lines")
+                        }
+                        try vm.scroll(x: x, y: y, down: down, right: right)
+                    default:
+                        throw PaddockError("input is click, type, key or scroll")
                     }
-                    try await vm.press(keys.map(KeyInput.stroke))
-                case "scroll":
-                    guard let x = action.x, let y = action.y else { throw PaddockError("scroll needs x and y") }
-                    let down = action.down ?? 0, right = action.right ?? 0
-                    // A range, not abs(): abs of Int.min traps, which would end serve and every VM in it.
-                    guard (-1000...1000).contains(down), (-1000...1000).contains(right) else {
-                        throw PaddockError("scroll is at most 1,000 lines")
-                    }
-                    try vm.scroll(x: x, y: y, down: down, right: right)
-                default:
-                    throw PaddockError("input is click, type, key or scroll")
                 }
                 responder.finish(ServeResponse(exit: 0).line)
             } catch {

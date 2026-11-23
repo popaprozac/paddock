@@ -39,6 +39,8 @@ administrator (see [Windows guests](guest-agent.md#windows-guests)).
 - A session holds one VM at a time. When the client closes stdin, or stops the server with
   SIGINT, SIGTERM or SIGHUP, as a dropped ssh connection does, the server releases the VM it
   holds.
+- A VM's clicks, typing, key presses and scrolls run one call at a time, in the order `serve`
+  gets them, so two calls' keys never mix. Calls sent together can run in either order.
 - Through a control plane, a session keeps one link open for all its tool calls. If the link
   drops, as when the control plane restarts, a call that was under way fails with the reason, and
   the next call opens a new link. paddock doesn't repeat a call on its own, since repeating a
