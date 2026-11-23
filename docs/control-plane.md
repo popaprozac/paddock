@@ -80,12 +80,13 @@ apart.
   same with a key of its own in `$PADDOCK_HOME/client/client.key`, signing after
   `paddock-client-v1:`, so a Mac's key can't act as a client, or a client's as a Mac.
 - **Tokens.** One use, an hour by default, kept only as a SHA-256, never logged. A join token adds
-  a Mac and a login token a client; neither works as the other. After 10 failed enrollments in a
-  minute, enrollment stops for the rest of that minute. Until it's used, anyone with a token can
-  add a Mac or log in, so pass it only to the Mac or person you add.
+  a Mac and a login token a client; neither works as the other. A token is 32 random bytes, too
+  many to guess, so failed enrollments never stop anyone else's. Until it's used, anyone with a
+  token can add a Mac or log in, so pass it only to the Mac or person you add.
 - **Nothing without identity.** A caller the control plane doesn't know can reach only enrollment,
   which needs a valid token. Everything else takes an enrolled Mac's or client's signature, or the
-  admin socket, which only the control plane's user can open.
+  admin socket, which only the control plane's user can open. Until a link has signed, its messages
+  can be 4 KB at most, and one address can have 16 links waiting to sign.
 - **The VMs, never the Mac.** Down a Mac's link the control plane sends only `serve`'s VM requests
   (acquire, release, exec, axtree, input, screenshot and task), which `serve` checks as it checks
   its own socket's: only VMs it handed out. The Mac refuses a request that names a file, and picks
@@ -102,7 +103,8 @@ apart.
   links again), the hashes of unused tokens and which client holds each VM, until the VM's Mac
   stops reporting it; `audit.log`, a JSON line for each token made, Mac or client enrolled, refused
   or removed, link opened, refused or closed, VM handed out or released, and request, with its
-  client, VM and operation, with no secrets in it; and `admin.sock`.
+  client, VM and operation, with no secrets in it; and `admin.sock`. It records at most 10 refused
+  enrollments and links a minute, so a caller trying again and again can't fill the disk.
 - **Everyone logged in sees the pool.** Every client sees every Mac, its slots, what each Mac and
   VM uses, and which client holds each VM, in `paddock hosts` and `paddock top`. The numbers are
   measured on each Mac, never asked of a guest.

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -26,15 +27,16 @@ const (
 )
 
 const (
-	enrollBodyLimit  = 16 << 10
-	linkMessageLimit = 1 << 20
-	authTimeout      = 10 * time.Second
-	pingInterval     = 30 * time.Second
-	pendingLinkLimit = 64
-	enrollFailWindow = time.Minute
-	enrollFailLimit  = 10
-	defaultTokenTTL  = time.Hour
-	maxTokenTTL      = 24 * time.Hour
+	enrollBodyLimit    = 16 << 10
+	authMessageLimit   = 4 << 10 // until a link authenticates; its auth message is under 200 bytes
+	linkMessageLimit   = 1 << 20
+	authTimeout        = 10 * time.Second
+	pingInterval       = 30 * time.Second
+	pendingPerAddress  = 16
+	refusalWindow      = time.Minute
+	refusalRecordLimit = 10
+	defaultTokenTTL    = time.Hour
+	maxTokenTTL        = 24 * time.Hour
 )
 
 // message is every message on a host's or client's link, as one JSON object; which fields it has
@@ -119,19 +121,19 @@ type server struct {
 	audit     *auditLog
 	now       func() time.Time
 
-	mu           sync.Mutex
-	links        map[string]*link // by host ID, for hosts online now
-	clientLinks  map[string]map[*clientLink]bool
-	waiters      []*waiter      // acquires waiting for a warm slot, oldest first
-	reserved     map[string]int // by host: warm slots acquires on their way are counting on
-	pending      int            // links not yet authenticated
-	stopping     bool           // closeAll has run
-	enrollFailed []time.Time    // failed enrollments in the last enrollFailWindow
+	mu          sync.Mutex
+	links       map[string]*link // by host ID, for hosts online now
+	clientLinks map[string]map[*clientLink]bool
+	waiters     []*waiter      // acquires waiting for a warm slot, oldest first
+	reserved    map[string]int // by host: warm slots acquires on their way are counting on
+	pending     map[string]int // links not yet authenticated, by remote address
+	stopping    bool           // closeAll has run
+	refusals    []time.Time    // refusals recorded in the last refusalWindow
 }
 
 func newServer(st *state, authority *authority, audit *auditLog) *server {
 	return &server{state: st, authority: authority, audit: audit, now: time.Now, links: map[string]*link{},
-		clientLinks: map[string]map[*clientLink]bool{}, reserved: map[string]int{}}
+		clientLinks: map[string]map[*clientLink]bool{}, reserved: map[string]int{}, pending: map[string]int{}}
 }
 
 func (s *server) routes() http.Handler {
@@ -156,14 +158,9 @@ type enrollResponse struct {
 }
 
 // enroll trades a token for an ID under the caller's public key: a join token makes a host, a
-// login token a client. Every refusal of a token looks the same to the caller, and too many in a
-// minute stop all enrollments for the rest of it. A token of the other kind is kept, with what to
-// do instead.
+// login token a client. Every refusal of a token looks the same to the caller. A token of the
+// other kind is kept, with what to do instead.
 func (s *server) enroll(w http.ResponseWriter, r *http.Request) {
-	if !s.enrollAllowed() {
-		writeJSON(w, http.StatusTooManyRequests, enrollResponse{Error: "too many failed enrollments; try again in a minute"})
-		return
-	}
 	var request enrollRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, enrollBodyLimit)).Decode(&request); err != nil {
 		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: "the request isn't JSON"})
@@ -177,10 +174,14 @@ func (s *server) enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: `"as" is host or client`})
 		return
 	}
+	// Before the token, so a refusal records a name of at most 64 characters.
+	if err := validateName(request.Name); err != nil {
+		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: err.Error()})
+		return
+	}
 	command := map[kind]string{hostKind: "paddock-control join-token", clientKind: "paddock-control login-token"}[wanted]
 	refuse := func(reason string) {
-		s.enrollFailure()
-		s.audit.record(auditEvent{Event: "enroll-refused", Name: request.Name, Remote: r.RemoteAddr, Reason: reason})
+		s.recordRefusal(auditEvent{Event: "enroll-refused", Name: request.Name, Remote: r.RemoteAddr, Reason: reason})
 		writeJSON(w, http.StatusUnauthorized, enrollResponse{Error: "the token isn't valid, or was used or expired: make a new one with '" + command + "'"})
 	}
 	tokenKind, secret, _, err := parseToken(request.Token)
@@ -193,10 +194,6 @@ func (s *server) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := parseMemberKey(request.PublicKey); err != nil {
-		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: err.Error()})
-		return
-	}
-	if err := validateName(request.Name); err != nil {
 		writeJSON(w, http.StatusBadRequest, enrollResponse{Error: err.Error()})
 		return
 	}
@@ -246,44 +243,47 @@ func otherKind(k kind) kind {
 	return hostKind
 }
 
-func (s *server) enrollAllowed() bool {
+// recordRefusal records a refused enrollment or link in the audit log, unless refusalRecordLimit
+// already were in the last refusalWindow: a caller that loops on refusals can't fill the disk, and
+// is refused all the same.
+func (s *server) recordRefusal(event auditEvent) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	cutoff := s.now().Add(-enrollFailWindow)
-	kept := s.enrollFailed[:0]
-	for _, t := range s.enrollFailed {
+	cutoff := s.now().Add(-refusalWindow)
+	kept := s.refusals[:0]
+	for _, t := range s.refusals {
 		if t.After(cutoff) {
 			kept = append(kept, t)
 		}
 	}
-	s.enrollFailed = kept
-	return len(kept) < enrollFailLimit
-}
-
-func (s *server) enrollFailure() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.enrollFailed = append(s.enrollFailed, s.now())
+	record := len(kept) < refusalRecordLimit
+	if record {
+		kept = append(kept, s.now())
+	}
+	s.refusals = kept
+	s.mu.Unlock()
+	if record {
+		s.audit.record(event)
+	}
 }
 
 // link takes a host's WebSocket, has it prove it holds its enrolled key by signing fresh random
 // bytes, then keeps what it reports until the link closes. One link per host: a new one replaces
 // the old.
 func (s *server) link(w http.ResponseWriter, r *http.Request) {
-	if !s.startPending() {
-		http.Error(w, "too many links waiting to authenticate", http.StatusServiceUnavailable)
+	address := addressOf(r)
+	if !s.startPending(address) {
+		http.Error(w, "too many links from this address waiting to authenticate", http.StatusServiceUnavailable)
 		return
 	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
-		s.endPending()
+		s.endPending(address)
 		return
 	}
-	conn.SetReadLimit(linkMessageLimit)
 	host, err := s.authenticate(r.Context(), conn, hostKind)
-	s.endPending()
+	s.endPending(address)
 	if err != nil {
-		s.audit.record(auditEvent{Event: "link-refused", Host: host, Remote: r.RemoteAddr, Reason: err.Error()})
+		s.recordRefusal(auditEvent{Event: "link-refused", Host: host, Remote: r.RemoteAddr, Reason: err.Error()})
 		conn.Close(websocket.StatusPolicyViolation, "not an enrolled host")
 		return
 	}
@@ -340,8 +340,9 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticate sends a challenge and checks the host's or client's signature over it; it returns
-// the ID, also on failure when the caller named one.
+// the ID, also on failure when the caller named one. Until then the link reads small messages only.
 func (s *server) authenticate(ctx context.Context, conn *websocket.Conn, k kind) (string, error) {
+	conn.SetReadLimit(authMessageLimit)
 	ctx, cancel := context.WithTimeout(ctx, authTimeout)
 	defer cancel()
 	nonce := make([]byte, 32)
@@ -374,6 +375,7 @@ func (s *server) authenticate(ctx context.Context, conn *websocket.Conn, k kind)
 	if !ecdsa.VerifyASN1(key, digest[:], answer.Signature) {
 		return id, errors.New("bad signature")
 	}
+	conn.SetReadLimit(linkMessageLimit)
 	return id, nil
 }
 
@@ -396,20 +398,31 @@ func (s *server) keepAlive(ctx context.Context, conn *websocket.Conn) {
 	}
 }
 
-func (s *server) startPending() bool {
+// addressOf is the address a link waiting to authenticate counts against: the caller's, without
+// its port, so one caller can't hold up everyone else's links.
+func addressOf(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func (s *server) startPending(address string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.pending >= pendingLinkLimit {
+	if s.pending[address] >= pendingPerAddress {
 		return false
 	}
-	s.pending++
+	s.pending[address]++
 	return true
 }
 
-func (s *server) endPending() {
+func (s *server) endPending(address string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pending--
+	if s.pending[address]--; s.pending[address] == 0 {
+		delete(s.pending, address)
+	}
 }
 
 // register makes l the host's link and returns the one it replaces, if any.
