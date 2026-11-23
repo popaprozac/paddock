@@ -601,7 +601,7 @@ final class WarmPool {
             do {
                 let image = try await vm.screenshot()
                 // Encoding takes about 70 ms; keep it off the main actor.
-                try await Task.detached { try FrameImage.writePNG(image, to: URL(fileURLWithPath: path)) }.value
+                try await Task.detached { try FrameImage.pngData(image).write(to: URL(fileURLWithPath: path)) }.value
                 responder.finish(ServeResponse(result: path).line)
             } catch {
                 responder.finish(ServeResponse(error: error.localizedDescription).line)

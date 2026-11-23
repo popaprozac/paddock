@@ -34,7 +34,7 @@ public enum FrameImage {
         return image
     }
 
-    /// Reads the image in the file at `url`, such as a PNG `writePNG` wrote.
+    /// Reads the image in the file at `url`, such as a PNG `pngData` made.
     public static func read(_ url: URL) throws -> CGImage {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
@@ -70,16 +70,5 @@ public enum FrameImage {
             throw PaddockError("can't encode a PNG")
         }
         return data as Data
-    }
-
-    /// Writes `image` to `url` as a PNG, replacing any file there.
-    public static func writePNG(_ image: CGImage, to url: URL) throws {
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
-            throw PaddockError("can't write \(url.path)")
-        }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else {
-            throw PaddockError("can't write \(url.path)")
-        }
     }
 }

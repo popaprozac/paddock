@@ -42,11 +42,9 @@ import Testing
         #expect(throws: PaddockError.self) { try FrameImage.image(from: surface(format: 0x5247_4241)) }  // 'RGBA'
     }
 
-    @Test func writesAPNG() throws {
-        let tmp = try TemporaryDirectory()
-        let url = tmp.url.appendingPathComponent("frame.png")
-        try FrameImage.writePNG(FrameImage.image(from: surface()), to: url)
-        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+    @Test func encodesAPNG() throws {
+        let png = try FrameImage.pngData(FrameImage.image(from: surface()))
+        let source = try #require(CGImageSourceCreateWithData(png as CFData, nil))
         #expect(CGImageSourceGetType(source) as String? == "public.png")
         let read = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
         #expect(read.width == 4 && read.height == 2)

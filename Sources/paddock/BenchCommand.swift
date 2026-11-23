@@ -138,7 +138,7 @@ final class BenchRunner: NSObject {
     }
 
     private func runOnce(source: VMBundle) async throws -> Sample {
-        let bundle = try home.bundle(named: "\(source.name.prefix(40))-bench-\(Self.shortID())")
+        let bundle = try home.bundle(named: "\(source.name.prefix(40))-bench-\(WarmPool.shortID())")
         clone = bundle
         do {
             let sample = try await measure(source: source, into: bundle, restoring: settings.restore)
@@ -153,7 +153,7 @@ final class BenchRunner: NSObject {
     /// Cold-boots a clone of `source` until it is ready, then pauses it and saves its state into
     /// the clone's bundle, which every restore run is cloned from.
     private func saveBootedClone(of source: VMBundle) async throws -> VMBundle {
-        let bundle = try home.bundle(named: "\(source.name.prefix(40))-saved-\(Self.shortID())")
+        let bundle = try home.bundle(named: "\(source.name.prefix(40))-saved-\(WarmPool.shortID())")
         clone = bundle
         do {
             let sample = try await measure(source: source, into: bundle, restoring: false)
@@ -279,10 +279,6 @@ final class BenchRunner: NSObject {
         } else {
             try? FileManager.default.removeItem(at: bundle.url)
         }
-    }
-
-    private static func shortID() -> String {
-        UUID().uuidString.prefix(6).lowercased()
     }
 
     private func abort() {
