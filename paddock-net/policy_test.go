@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestPolicyMatchesNamesAndSubdomains(t *testing.T) {
-	p, err := parsePolicy("github.com, *.githubusercontent.com,Example.ORG.")
+	p, err := newPolicy([]string{"github.com", " *.githubusercontent.com", "Example.ORG."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestPolicyMatchesNamesAndSubdomains(t *testing.T) {
 }
 
 func TestEmptyPolicyAllowsNothing(t *testing.T) {
-	p, err := parsePolicy("")
+	p, err := newPolicy(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,9 +36,9 @@ func TestEmptyPolicyAllowsNothing(t *testing.T) {
 }
 
 func TestPolicyRefusesEntriesThatAreNotNames(t *testing.T) {
-	for _, list := range []string{"*", "*.", "a..b", "-a.com", "a_b.com", "*.*.com", "1.2.3.4:443", "http://a.com"} {
-		if _, err := parsePolicy(list); err == nil {
-			t.Errorf("parsePolicy(%q) accepted it", list)
+	for _, entry := range []string{"*", "*.", "a..b", "-a.com", "a_b.com", "*.*.com", "1.2.3.4:443", "http://a.com"} {
+		if _, err := newPolicy([]string{entry}); err == nil {
+			t.Errorf("newPolicy accepted %q", entry)
 		}
 	}
 }

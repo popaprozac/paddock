@@ -14,11 +14,6 @@ type policy struct {
 	suffixes []string // ".example.com" for "*.example.com"
 }
 
-// parsePolicy reads a comma-separated list of entries.
-func parsePolicy(list string) (*policy, error) {
-	return newPolicy(strings.Split(list, ","))
-}
-
 func newPolicy(entries []string) (*policy, error) {
 	p := &policy{names: map[string]bool{}}
 	for _, entry := range entries {

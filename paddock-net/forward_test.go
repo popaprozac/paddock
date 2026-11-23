@@ -71,9 +71,9 @@ func TestHTTPHostRefusesARequestWithoutAHost(t *testing.T) {
 // forwardOnce runs one guest connection through a forwarder whose dial records the address and
 // answers with a pipe that echoes "pong" after reading what was passed on. It returns what the
 // forwarder logged, too.
-func forwardOnce(t *testing.T, list string, port uint16, send []byte) (dialed string, got []byte, logged []string) {
+func forwardOnce(t *testing.T, allowed string, port uint16, send []byte) (dialed string, got []byte, logged []string) {
 	t.Helper()
-	p, err := parsePolicy(list)
+	p, err := newPolicy([]string{allowed})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,12 +2,12 @@
 //
 // Its stdin is a datagram socket carrying the VM's Ethernet frames, one per datagram, the way
 // Virtualization.framework's file-handle network attachment sends them. It answers DHCP with a
-// fixed address and lets the guest reach only the names on its -allow list: DNS answers those
-// names and refuses the rest, and TCP to ports 80 and 443 is carried out through the host's own
-// sockets to the name the guest asks for, if it is on the list. Everything else the guest sends
-// goes nowhere. Nothing on the host's networks can open a connection to the guest. With
-// -control, paddock can replace the list while the VM runs. It logs each decision to stderr and
-// exits when the paddock process that started it does.
+// fixed address and lets the guest reach only the names on its list: DNS answers those names and
+// refuses the rest, and TCP to ports 80 and 443 is carried out through the host's own sockets to
+// the name the guest asks for, if it is on the list. Everything else the guest sends goes
+// nowhere. Nothing on the host's networks can open a connection to the guest. The list starts
+// empty, and paddock replaces it over the -control socket while the VM runs. It logs each
+// decision to stderr and exits when the paddock process that started it does.
 package main
 
 import (
@@ -26,20 +26,15 @@ import (
 
 func main() {
 	mac := flag.String("mac", "", "the guest's MAC address, which DHCP gives "+guestIP)
-	allow := flag.String("allow", "", "comma-separated names the guest may reach, as host.example or *.example; none without it")
 	control := flag.String("control", "", "a Unix socket path to listen on for new lists from paddock")
 	flag.Parse()
 	if _, err := net.ParseMAC(*mac); err != nil {
 		stdlog.Fatalf("paddock-net: -mac: %v", err)
 	}
-	p, err := parsePolicy(*allow)
-	if err != nil {
-		stdlog.Fatalf("paddock-net: -allow: %v", err)
-	}
 	log.SetLevel(log.WarnLevel) // gvisor-tap-vsock's own logging
 
 	logf := limitedLog(stdlog.New(os.Stderr, "paddock-net: ", stdlog.LstdFlags), rate.NewLimiter(50, 200))
-	current := holding(p)
+	current := holding(&policy{})
 	networkSwitch, err := newNetwork(*mac, current, logf)
 	if err != nil {
 		stdlog.Fatalf("paddock-net: %v", err)
