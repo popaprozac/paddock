@@ -17,7 +17,6 @@ type clientLink struct {
 	conn      *websocket.Conn
 	remote    string
 	connected time.Time
-	writeMu   sync.Mutex // answers to requests on one link go out one at a time
 	mu        sync.Mutex
 	lastSeen  time.Time
 	uploads   map[string]chan message // data the client sends after a request, by the request's ID
@@ -160,9 +159,9 @@ func (l *clientLink) dropUpload(id string) {
 	delete(l.uploads, id)
 }
 
+// write sends m. Answers to several requests on one link can be sent at once: the WebSocket
+// library sends one whole message at a time.
 func (l *clientLink) write(ctx context.Context, m message) error {
-	l.writeMu.Lock()
-	defer l.writeMu.Unlock()
 	return wsjson.Write(ctx, l.conn, m)
 }
 
