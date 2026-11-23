@@ -263,9 +263,7 @@ enum GoldenBuild {
             try await GuestSSH.runAsRoot(finishScript(acceptLicense: acceptLicense), account: account, password: password,
                                          at: address)
             print("  waiting for the guest to shut down")
-            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
-                throw PaddockError("'\(name)' didn't shut down within 120 s of its setup")
-            }
+            try await vm.waitForShutdown(after: "its setup")
         } catch {
             await vm.saveScreen(as: "paddock-build-\(name)")
             await vm.stop()
@@ -289,9 +287,7 @@ enum GoldenBuild {
             try await Task.sleep(for: .milliseconds(500))
             try await vm.press(KeyInput.strokes(typing: password + "\n"))
             try await vm.press(KeyInput.strokes(typing: OfflineSetup.recoveryScript(account: account, fullName: fullName)))
-            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
-                throw PaddockError("'\(name)' didn't shut down after the setup typed in Recovery's Terminal, so a step failed")
-            }
+            try await vm.waitForShutdown(after: "the setup typed in Recovery's Terminal, so a step failed")
         } catch {
             await vm.saveScreen(as: "paddock-build-\(name)")
             await vm.stop()
@@ -336,9 +332,7 @@ enum GoldenBuild {
             guard status == 0 else {
                 throw PaddockError("the guest's setup failed with status \(status)")
             }
-            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
-                throw PaddockError("'\(name)' didn't shut down within 120 s of its setup")
-            }
+            try await vm.waitForShutdown(after: "its setup")
         } catch {
             await vm.saveScreen(as: "paddock-build-\(name)")
             await vm.stop()

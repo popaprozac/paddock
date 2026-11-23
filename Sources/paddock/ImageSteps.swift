@@ -81,9 +81,7 @@ enum ImageSteps {
             let problems = await vm.imageProblems(sessionHelper: await vm.hasSessionHelper())
             print("  shutting down")
             _ = try await vm.runInGuest("sync; (sleep 2; shutdown -h now) </dev/null >/dev/null 2>&1 &", asRoot: true) { _ in }
-            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
-                throw PaddockError("'\(name)' didn't shut down within 120 s of its steps")
-            }
+            try await vm.waitForShutdown(after: "its steps")
             return Outcome(problems: problems, displayManager: displayManager)
         } catch {
             await vm.stop()
