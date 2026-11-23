@@ -464,7 +464,11 @@ final class WarmPool {
         slot.assigned = true
         print("Slot \(slot.number) assigned: '\(current.name)' at \(warmAddress)"
             + (allow.isEmpty ? "" : ", allowing \(allow.joined(separator: ", "))"))
-        responder.finish(ServeResponse(vm: current.name, ip: warmAddress).line)
+        // What the VM is, for a client on another Mac, which can't read its config.
+        let config = vm.config
+        responder.finish(ServeResponse(
+            vm: current.name, ip: warmAddress, os: config.kind?.rawValue ?? "macos", screen: config.hasScreen,
+            width: config.display.widthInPixels, height: config.display.heightInPixels).line)
     }
 
     /// Runs a command in a VM this serve handed out, streaming its output to the caller.

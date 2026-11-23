@@ -33,6 +33,10 @@ struct InputAction: Codable {
 struct ServeResponse: Codable {
     var vm: String?
     var ip: String?
+    var os: String?      // acquire: macos, linux or windows
+    var screen: Bool?    // acquire: whether the VM has a screen
+    var width: Int?      // acquire: the guest's screen in pixels, as its config sets it
+    var height: Int?
     var output: String?  // exec: one line of the command's output
     var exit: Int32?     // exec and task: the command's exit status, last
     var result: String?  // task: where the bundle of new commits was saved, if there are any
