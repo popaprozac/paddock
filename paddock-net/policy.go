@@ -59,9 +59,17 @@ func holding(p *policy) *atomic.Pointer[policy] {
 	return &current
 }
 
-// normalize lowercases a name and drops the trailing dot of a fully qualified one.
+// normalize lowercases a name's ASCII letters and drops the trailing dot of a fully qualified
+// one. Only ASCII: Unicode lowercasing turns gİthub.com into github.com, so a name unlike any on
+// the list would pass as one on it.
 func normalize(name string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+	lower := strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, strings.TrimSpace(name))
+	return strings.TrimSuffix(lower, ".")
 }
 
 // isHostName accepts dot-separated labels of lowercase letters, digits and inner hyphens.

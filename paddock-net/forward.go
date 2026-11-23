@@ -68,6 +68,13 @@ func (f *forwarder) serve(guest net.Conn, address string, port uint16) {
 		f.logf("deny %s:%d: %v", address, port, err)
 		return
 	}
+	// One spelling for the check, the log and the connection. Quoted, a name that isn't a host
+	// name, such as one with a line break, can't write a log line of its own.
+	name = normalize(name)
+	if !isHostName(name) {
+		f.logf("deny %q:%d: not a host name", name, port)
+		return
+	}
 	if !f.policy.Load().allows(name) {
 		f.logf("deny %s:%d: not on the list", name, port)
 		return

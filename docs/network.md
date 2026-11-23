@@ -19,12 +19,15 @@ deletes it with its network. `bench --userspace` passes no list.
 | Anything else | Drops it: UDP other than DNS, NTP and DHCP to the gateway, so DNS sent to any other server too, and ICMP. |
 
 An entry `example.com` matches that name only; `*.example.com` matches every name under it, but
-not `example.com` itself. Connections from the host never go to a loopback or link-local address,
+not `example.com` itself. Matching ignores the case of ASCII letters and a trailing dot. The guest
+reaches a name only if it's spelled as a host name, in letters, digits, hyphens and dots: a TLS
+server name or `Host` with any other character, such as `gİthub.com`, is refused, and logged in
+quotes. Connections from the host never go to a loopback or link-local address,
 whatever a name resolves to, so the host's own services and EC2's instance metadata stay out of
 reach. Nothing on the host's networks can open a connection to the guest. Each decision is one
 line on paddock-net's stderr, which is `serve`'s or `bench`'s, such as `now allowing github.com`,
-`allow github.com:443`, `deny example.com:443: not on the list` and `deny dns example.com: not
-on the list`.
+`allow github.com:443`, `deny example.com:443: not on the list`, `deny "gİthub.com":443: not a
+host name` and `deny dns example.com: not on the list`.
 
 paddock-net doesn't decrypt TLS, so a client can name an allowed host in its ClientHello and then
 ask that server for another site it also serves. Only ports 80 and 443 work, so git needs HTTPS
