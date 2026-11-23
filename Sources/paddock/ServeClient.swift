@@ -62,6 +62,22 @@ enum ServeClient {
         return first
     }
 
+    /// Runs `request`, an exec or a task, passing each line of the command's output to `output`,
+    /// and returns the command's exit status and the answer's result.
+    static func run(_ request: ServeRequest, local: Bool = false,
+                    output: (String) -> Void) throws -> (status: Int32, result: String?) {
+        var last: ServeResponse?
+        try stream(request, local: local) { response in
+            if let line = response.output { output(line) }
+            if response.exit != nil { last = response }
+            return last == nil
+        }
+        guard let last, let status = last.exit else {
+            throw PaddockError("paddock serve closed the connection before the command finished")
+        }
+        return (status, last.result)
+    }
+
     /// Passes each answer line to `onResponse` until serve closes the connection or
     /// `onResponse` returns false. An error answer throws.
     static func stream(_ request: ServeRequest, image: String? = nil, local: Bool = false,
@@ -358,18 +374,8 @@ struct Exec: ParsableCommand {
     }
 
     func run() throws {
-        var status: Int32?
         let request = ServeRequest(op: "exec", vm: vm, command: command.joined(separator: " "))
-        try ServeClient.stream(request, local: target.local) { response in
-            if let output = response.output {
-                print(output)
-            }
-            status = response.exit ?? status
-            return status == nil
-        }
-        guard let status else {
-            throw PaddockError("paddock serve closed the connection before the command finished")
-        }
+        let status = try ServeClient.run(request, local: target.local) { print($0) }.status
         if status != 0 {
             throw ExitCode(status)
         }
@@ -413,21 +419,9 @@ struct RunTask: ParsableCommand {
             op: "task", vm: vm, command: command.joined(separator: " "),
             bundle: URL(fileURLWithPath: bundle).standardizedFileURL.path,
             result: URL(fileURLWithPath: result).standardizedFileURL.path)
-        var last: ServeResponse?
-        try ServeClient.stream(request, local: target.local) { response in
-            if let output = response.output {
-                print(output)
-            }
-            if response.exit != nil {
-                last = response
-            }
-            return last == nil
-        }
-        guard let last, let status = last.exit else {
-            throw PaddockError("paddock serve closed the connection before the task finished")
-        }
+        let (status, saved) = try ServeClient.run(request, local: target.local) { print($0) }
         // stdout carries the command's output, so the summary goes to stderr.
-        let summary = last.result.map { "New commits saved to \($0)" } ?? "No changes"
+        let summary = saved.map { "New commits saved to \($0)" } ?? "No changes"
         FileHandle.standardError.write(Data((summary + "\n").utf8))
         if status != 0 {
             throw ExitCode(status)
