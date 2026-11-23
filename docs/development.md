@@ -65,7 +65,10 @@ VM and runs a command in it. Where the image has a screen, it also takes a scree
 app with input (a terminal on Xfce, the text editor on GNOME, Go to Folder in Finder on macOS,
 Notepad from the Run dialog on Windows), types a marker and finds it in the accessibility tree. In
 a Windows VM it also runs a task that writes the marker to a file, and checks the commit it brings
-back. Then it releases the VM and deletes the image.
+back. Debian runs on the [userspace network](network.md), acquired with `--allow example.com`:
+from inside the VM, example.com must answer over HTTP, example.org must not resolve, and a request
+to example.com's address for example.org must get no answer, with paddock-net logging both
+refusals. Then it releases the VM and deletes the image.
 
 ```bash
 scripts/smoke.sh --macos golden --windows windows
@@ -76,11 +79,14 @@ scripts/smoke.sh --macos golden --windows windows
   you name. `--macos <image>` adds a macOS image from the paddock home, cloned in, since a macOS
   build needs a password. `--windows <image>` adds a Windows image the same way, since paddock
   can't make one yet; it needs git in the image, for the task.
-- It runs in a paddock home of its own, a temporary folder with your paddock home's cache linked
-  in, so your images and a `serve` you run are left alone. macOS's limit of two macOS VMs at
+- It runs in a paddock home of its own, a folder in `/tmp` with your paddock home's cache linked
+  in, so your images and a `serve` you run are left alone. It isn't in `$TMPDIR`, where the path
+  of a VM's network control socket would be too long. The logs and screenshots go in a folder in
+  `$TMPDIR`. macOS's limit of two macOS VMs at
   once still counts both.
 - The desktop builds download their packages each time: about 100 MB for Xfce, and 1 to 1.5 GB
   for GNOME. A run of all four templates and a macOS image took about 10 minutes on a Mac Studio.
+- The Debian check needs this Mac to reach example.com.
 - It prints a table for a pull request: each image's build, boot and restore times, the OS it
   reports, the screen's size and the app whose tree it read. It keeps each image's logs and
   screenshots in the folder it names, and exits with 1 if any image failed.

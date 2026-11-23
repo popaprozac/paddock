@@ -45,7 +45,8 @@ Apache 2.0.
 
 The smoke test, `scripts/smoke.sh`, builds each Linux template and serves it, drives a VM's
 commands, screen, input and accessibility tree, and does the same for a macOS or Windows image
-it's given (see [Smoke test](docs/development.md#smoke-test)). Other macOS point releases, other
+it's given; on Debian it also checks the userspace network's allowlist (see
+[Smoke test](docs/development.md#smoke-test)). Other macOS point releases, other
 Debian-family cloud images and other desktops on Debian or Ubuntu should work, but aren't
 tested. Images of other Linux distributions aren't supported. A Windows VM's display is a fixed
 1024x768 for now (see [Limits](docs/limits.md)).
