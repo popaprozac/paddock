@@ -20,7 +20,7 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 | `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
 | `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). `scroll` moves 1 to 1,000 lines, 5 by default. |
 | `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. After `timeout` seconds, 120 by default and at most 3,600, it returns what the command printed so far, and the command goes on running in the VM. |
-| `release` | Hands the VM back to `serve`, which wipes it. |
+| `release` | Hands the VM back to `serve`, which wipes it. A VM that's already gone, as after `serve` restarted, fails to release, but the session lets go of it all the same and can acquire another. |
 
 A Linux VM without a desktop has no screen: `acquire` says so, `run_command` works in it, and the
 screen and input tools refuse it. A desktop Linux VM takes the screen and input tools and

@@ -78,8 +78,10 @@ actor AgentSession {
             return try await acquire(allow: arguments.strings("allow"))
         case "release":
             let vm = try heldVM().vm
-            _ = try await blocking { try ServeClient.send(ServeRequest(op: "release", vm: vm)) }
+            // Forgotten first: a VM that's gone, as after serve restarted, can't be released, and
+            // the session must still be free to acquire another.
             held = nil
+            _ = try await blocking { try ServeClient.send(ServeRequest(op: "release", vm: vm)) }
             return [Self.text("Handed '\(vm)' back; serve wipes it.")]
         case "screenshot":
             return [try await screenshot()]
