@@ -132,6 +132,36 @@ import Virtualization
         #expect(FileManager.default.fileExists(atPath: disk.path))  // the image itself is left as it was
     }
 
+    @Test func copiesTheDiskALinkPointsAtAndLeavesItAsItWas() throws {
+        let tmp = try TemporaryDirectory()
+        let disk = try writeDisk(in: tmp)
+        let link = tmp.url.appendingPathComponent("current.raw")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: disk)
+        let bundle = VMBundle(url: tmp.url.appendingPathComponent("vms/debian"))
+        let config = try LinuxImage.makeBundle(bundle, from: link, cpuCount: 2, memorySize: 2 << 30, diskSize: 4 << 20)
+        try expectLinuxBundle(bundle, diskSize: 4 << 20, config: config)
+        let copied = try FileManager.default.attributesOfItem(atPath: bundle.diskURL.path)
+        #expect(copied[.type] as? FileAttributeType == .typeRegular)
+        #expect(try FileManager.default.attributesOfItem(atPath: disk.path)[.size] as? UInt64 == 1 << 20)
+    }
+
+    @Test func refusesATarballWhoseDiskIsALink() throws {
+        let tmp = try TemporaryDirectory()
+        let elsewhere = tmp.url.appendingPathComponent("elsewhere.raw")
+        try Data(repeating: 0x5a, count: 1 << 20).write(to: elsewhere)
+        let link = tmp.url.appendingPathComponent("image/disk.raw")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: elsewhere)
+        let archive = try tarball(of: link)
+        let bundle = VMBundle(url: tmp.url.appendingPathComponent("vms/debian"))
+        let error = #expect(throws: PaddockError.self) {
+            try LinuxImage.makeBundle(bundle, from: archive, cpuCount: 2, memorySize: 2 << 30, diskSize: 4 << 20)
+        }
+        #expect(error?.message.contains("isn't a regular file") == true)
+        #expect(try FileManager.default.attributesOfItem(atPath: elsewhere.path)[.size] as? UInt64 == 1 << 20)
+        #expect(!FileManager.default.fileExists(atPath: bundle.url.path))
+    }
+
     @Test func leavesNoBundleWhenTheImageWontFit() throws {
         let tmp = try TemporaryDirectory()
         let disk = try writeDisk(in: tmp)

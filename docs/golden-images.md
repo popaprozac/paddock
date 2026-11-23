@@ -292,6 +292,9 @@ steps:
   an external data file, extended L2 entries or zstd fails with the reason: convert it to a raw
   disk first. A `.img` can be either qcow2 or raw; paddock tells them apart by what the file
   holds.
+- paddock copies the image a `disk` path names and never changes it, so the path can be a link,
+  such as `current.raw` pointing at the image you've pinned. A `.tar.xz` whose `disk.raw` is a
+  link rather than a file is refused.
 - Debian's cloud image has no `git`, which `paddock task` needs: install it with a step, as the
   file above does. Without it, `task` stops, saying the guest has no git. Ubuntu's has it.
 - `license` and `grants` are for macOS images, and a Linux file with either fails the check. The
