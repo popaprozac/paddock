@@ -28,6 +28,11 @@ extension HeadlessVM {
         let status = try await runInGuest(TaskScripts.run(command, windows: windows), output: output)
 
         let saved = try await runStep(TaskScripts.save(since: base, windows: windows), "commit and bundle the result")
+        // The commits the command made come back all the same.
+        if saved.contains(TaskScripts.uncommitted) {
+            output("paddock: git couldn't commit the changes the command left uncommitted, so they stay in the "
+                + "clone in the VM, " + (windows ? #"%USERPROFILE%\paddock\work"# : "~/paddock/work"))
+        }
         let changed = saved.last == "changed"
         if changed {
             try await getFromGuest("out.bundle", to: result)
@@ -84,19 +89,25 @@ private enum TaskScripts {
         windows ? "cd /d \(windowsWork) && \(windowsIdentity) && \(command)" : "cd ~/paddock/work && \(identity) && \(command)"
     }
 
+    /// What save prints when it can't commit what the command left, as with a stale index.lock.
+    static let uncommitted = "uncommitted"
+
     /// Commits what changed and, if the branch has commits since `base`, bundles them as
-    /// out.bundle and prints "changed".
+    /// out.bundle and prints "changed". A failed commit doesn't stop the bundle: it prints
+    /// `uncommitted` instead, so the command's own commits still come back.
     static func save(since base: String, windows: Bool) -> String {
         if windows {
-            return "cd /d \(windowsWork) && \(windowsIdentity) && git add -A && "
-                + #"(git diff --cached --quiet || git commit -q -m "Changes from a paddock task") && "#
+            return "cd /d \(windowsWork) && \(windowsIdentity) && "
+                + #"((git add -A && (git diff --cached --quiet || git commit -q -m "Changes from a paddock task")) "#
+                + "|| echo \(uncommitted)) && "
                 + #"(if exist "%USERPROFILE%\paddock\out.bundle" del /f /q "%USERPROFILE%\paddock\out.bundle") && "#
                 + "for /f %n in ('git rev-list --count \(base)..HEAD') do @if %n gtr 0 "
                 + #"(git bundle create -q "%USERPROFILE%\paddock\out.bundle" \#(base)..HEAD && echo changed)"#
         }
         return """
-            cd ~/paddock/work && \(identity) && git add -A && \
-            { git diff --cached --quiet || git commit -q -m 'Changes from a paddock task'; } && \
+            cd ~/paddock/work && \(identity) && \
+            { { git add -A && { git diff --cached --quiet || git commit -q -m 'Changes from a paddock task'; }; } \
+            || echo \(uncommitted); } && \
             rm -f ~/paddock/out.bundle && \
             if [ "$(git rev-list --count \(base)..HEAD)" -gt 0 ]; then \
             git bundle create -q ~/paddock/out.bundle \(base)..HEAD && echo changed; fi
