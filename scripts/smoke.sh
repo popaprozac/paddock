@@ -2,8 +2,9 @@
 # Smoke-tests paddock on this Mac, one supported image at a time: builds it from its template,
 # serves it, acquires a VM and runs a command in it. Where it has a screen, it also takes a
 # screenshot, opens an app with input, types a marker into it and finds the marker in the
-# accessibility tree. In a Windows VM it also runs a task. Then it releases the VM and deletes the
-# image.
+# accessibility tree. In a Windows VM it also runs a task. Debian runs on the userspace network,
+# where it also checks that the VM reaches only the name it's allowed. Then it releases the VM and
+# deletes the image.
 #
 # It runs in a paddock home of its own, so your images and any serve you run are left alone;
 # downloads go through your cache. It prints a table to paste into a PR, keeps each image's logs
@@ -51,7 +52,11 @@ else
   }
 fi
 
-home=$out/home
+# The home is short and outside $TMPDIR: there, the path of a VM's paddock-net control socket, in its
+# bundle, would pass the 103 bytes a socket path can have, and its slot couldn't start.
+# shortcut: a long PADDOCK_HOME still hits that limit; paddock-net taking its control socket
+# without a path would lift it.
+home=$(mktemp -d /tmp/paddock-smoke.XXXXXX)
 mkdir -p "$home/vms" "$user_home/cache"
 ln -s "$user_home/cache" "$home/cache"
 export PADDOCK_HOME=$home PADDOCK_LOCAL=1
@@ -77,12 +82,19 @@ trap 'exit 130' INT TERM
 # Runs a command, killing it after the given seconds, since macOS has no timeout(1).
 limit() { perl -e 'alarm shift; exec @ARGV or die "$ARGV[0]: $!\n"' "$@"; }
 
+# Asks example.com's address over HTTP for the host $1, printing the start of the answer.
+http() {
+  limit 30 "$paddock" exec "$vm" -- \
+    "exec 3<>/dev/tcp/example.com/80 && printf 'GET / HTTP/1.0\r\nHost: $1\r\n\r\n' >&3 && head -c 8 <&3"
+}
+
 seconds() { if (($1 >= 60)); then echo "$(($1 / 60))m $(($1 % 60))s"; else echo "$1s"; fi; }
 
 # Checks one image, setting the table's columns as it goes and step to the step that's running.
-# kind: linux (no screen), xfce, gnome, macos or windows.
+# kind: linux (no screen), xfce, gnome, macos or windows. network: nat or userspace.
 check() {
-  local name=$1 kind=$2 dir=$3 started acquired
+  local name=$1 kind=$2 dir=$3 network=$4 started acquired serve_flags="" acquire_flags=""
+  if [[ $network == userspace ]]; then serve_flags=--userspace acquire_flags="--allow example.com"; fi
   if [[ $kind == macos || $kind == windows ]]; then
     step=clone
     cp -c -R "$user_home/vms/$name" "$home/vms/" || return 1
@@ -96,7 +108,7 @@ check() {
   fi
 
   step=serve
-  "$paddock" serve "$name" --slots 1 >"$dir/serve.log" 2>&1 &
+  "$paddock" serve "$name" --slots 1 $serve_flags >"$dir/serve.log" 2>&1 &
   serve_pid=$!
   for _ in $(seq 120); do
     [[ -S $home/serve.sock ]] && break
@@ -104,7 +116,7 @@ check() {
     sleep 0.5
   done
   step=acquire
-  acquired=$(limit 900 "$paddock" acquire 2>"$dir/acquire.err") || return 1
+  acquired=$(limit 900 "$paddock" acquire $acquire_flags 2>"$dir/acquire.err") || return 1
   vm=$(sed -nE "s/^Assigned '([^']+)'.*/\1/p" <<<"$acquired")
   [[ -n $vm ]] || return 1
   boot=$(sed -nE 's/^  slot 1 booted at .* in (.*), saved .*/\1/p' "$dir/serve.log" | head -1)
@@ -115,6 +127,18 @@ check() {
   [[ $kind == macos ]] && command="sw_vers -productVersion"
   [[ $kind == windows ]] && command="ver"  # which prints a blank line first
   os=$(limit 60 "$paddock" exec "$vm" -- "$command" 2>"$dir/exec.err" | tail -1) || return 1
+
+  if [[ $network == userspace ]]; then
+    # The VM reaches example.com alone: it resolves and answers over HTTP, example.org doesn't
+    # resolve, and asking example.com's address for example.org gets no answer.
+    step=allowlist
+    [[ $(http example.com 2>"$dir/allowlist.err" | tail -1) == HTTP/1.* ]] || return 1
+    [[ -z $(http example.org 2>>"$dir/allowlist.err" | tail -1) ]] || return 1
+    [[ $(limit 30 "$paddock" exec "$vm" -- "getent hosts example.org || echo refused" 2>>"$dir/allowlist.err" |
+      tail -1) == refused ]] || return 1
+    grep -q "deny example.org:80: not on the list" "$dir/serve.log" &&
+      grep -q "deny dns example.org: not on the list" "$dir/serve.log" || return 1
+  fi
 
   if [[ $kind != linux ]]; then
     step=screenshot
@@ -171,14 +195,15 @@ check() {
 rows=()
 failed=0
 smoke() {
-  local name=$1 kind=$2 dir=$out/$1 result
+  local name=$1 kind=$2 network=${3:-nat} dir=$out/$1 result label=$1
+  [[ $network == userspace ]] && label="$name (userspace)"
   build=- boot=- warm=- os=- screen=- tree=-
   mkdir -p "$dir"
   echo "Testing $name"
-  if check "$name" "$kind" "$dir"; then result=pass; else result="**failed at $step**"; failed=1; fi
+  if check "$name" "$kind" "$dir" "$network"; then result=pass; else result="**failed at $step**"; failed=1; fi
   stop_serve
   rm -rf "${home:?}/vms/$name"
-  rows+=("| $name | $build | $boot | $warm | $os | $screen | $tree | $result |")
+  rows+=("| $label | $build | $boot | $warm | $os | $screen | $tree | $result |")
   echo "  $result"
 }
 
@@ -186,6 +211,7 @@ for template in "${templates[@]}"; do
   case $template in
     debian-desktop) smoke "$template" xfce ;;
     ubuntu-desktop) smoke "$template" gnome ;;
+    debian) smoke "$template" linux userspace ;;
     *) smoke "$template" linux ;;
   esac
 done
