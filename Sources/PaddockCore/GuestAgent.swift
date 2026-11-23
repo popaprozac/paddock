@@ -7,7 +7,7 @@ import SystemConfiguration
 /// The agent listens only on vsock, so nothing on the VM network can reach it. Each
 /// connection carries one request line of JSON and gets one or more answer lines back:
 ///
-///     {"op":"health"}                       ->  {"version":"0.6.0"}
+///     {"op":"health"}                       ->  {"version":"0.6.1"}
 ///     {"op":"run","command":"ls"}           ->  {"output":"..."} per line, then {"exit":0}
 ///     {"op":"run","command":"ls","as":"root"}  ->  the same, run as root
 ///     {"op":"put","name":"a","size":N} + N bytes  ->  {"exit":0}
@@ -23,7 +23,7 @@ import SystemConfiguration
 public enum GuestAgent {
     /// The vsock port the agent listens on inside the guest.
     public static let port: UInt32 = 52525
-    public static let version = "0.6.0"
+    public static let version = "0.6.1"
 
     /// Output lines longer than this are split, so every answer line stays well under the
     /// 64 KB a reader accepts even after JSON escaping.

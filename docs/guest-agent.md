@@ -12,7 +12,7 @@ back:
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.6.0"}` |
+| `{"op":"health"}` | `{"version":"0.6.1"}` |
 | `{"op":"run","command":"..."}` | `{"output":"..."}` for each line of the command's combined stdout and stderr, then `{"exit":N}` |
 | `{"op":"run","command":"...","as":"root"}` | The same, with the command run as root |
 | `{"op":"put","name":"...","size":N}` followed by N bytes | `{"exit":0}` once the file is stored |
@@ -26,7 +26,10 @@ answers only the host, nothing in the guest can ask. An agent before 0.6.0 ignor
 the command as the account. Output lines over 8 KB are split. `put` and
 `get` work on files in that account's `~/paddock` folder, named by one plain path component, up
 to 4 GiB; the account itself reads and writes them, never the root agent, and stored files are
-readable only by it. The host refuses a `get` larger than it asked for and deletes a partial file.
+readable only by it. A `put` the guest can't store, as on a full disk, fails saying so, and the
+agent goes on; one before 0.6.1 was killed by it, and launchd restarted it, which cut off every
+command running through it. The host refuses a `get` larger than it asked for and deletes a
+partial file.
 
 When it starts, before the user logs in, the agent copies the user's per-host preferences into
 place for the Mac it runs on. macOS keeps some settings, such as when the screen saver starts,

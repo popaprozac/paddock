@@ -35,6 +35,9 @@ extension GuestAgent {
         } catch {
             return Response(error: "can't store '\(name)': \(error.localizedDescription)")
         }
+        // A store that stopped early, as on a full disk, fails the write instead of killing the agent
+        // with SIGPIPE, and every command running through it.
+        _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         var remaining = size
         while remaining > 0, let chunk = responder.receive(upTo: Int(min(remaining, Int64(fileChunk)))) {
             guard (try? input.fileHandleForWriting.write(contentsOf: chunk)) != nil else { break }
@@ -42,10 +45,12 @@ extension GuestAgent {
         }
         try? input.fileHandleForWriting.close()
         process.waitUntilExit()
+        // The store's failure first: it's why the bytes stopped, if they did.
+        guard process.terminationStatus == 0 else { return Response(error: "can't store '\(name)' in the guest") }
         if remaining > 0 {
             return Response(error: "'\(name)' stopped after \(size - remaining) of \(size) bytes")
         }
-        return process.terminationStatus == 0 ? Response(exit: 0) : Response(error: "can't store '\(name)' in the guest")
+        return Response(exit: 0)
     }
 
     /// Agent side of `get`: sends `name` as framed chunks.
