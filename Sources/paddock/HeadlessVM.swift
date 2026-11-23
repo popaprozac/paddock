@@ -132,6 +132,10 @@ final class HeadlessVM: NSObject {
         }
     }
 
+    /// What serve's input requests go through, one at a time in the order they came, so two
+    /// requests' clicks and keys never mix.
+    let inputs = InOrder()
+
     /// Clicks in the guest through its virtual pointer, at its screen pixels from the top left.
     func click(x: Int, y: Int, button: VMScreen.MouseButton, count: Int) throws {
         try drivenScreen().click(x: x, y: y, button: button, count: count)

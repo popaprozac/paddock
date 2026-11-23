@@ -28,7 +28,9 @@
 
 These commands reach `serve` through `~/.paddock/serve.sock`, a Unix socket only its owner can
 open. Each connection carries one request line of JSON and gets one or more answer lines back;
-`exec` streams one per line of output, then the exit status; a view also sends its own lines,
+`acquire`'s answer names the VM and gives its address, its OS, whether it has a screen and the
+screen's size, which a client on another Mac couldn't read from the VM's files; `exec` streams
+one per line of output, then the exit status; a view also sends its own lines,
 its acknowledgments and input, for as long as it lasts. Only one `serve` can listen at a
 time. On a Mac logged in to a control plane, `acquire`, the commands that take a VM and
 `paddock mcp` use its pool instead; `--local`, or `PADDOCK_LOCAL=1`, keeps them on this Mac. The

@@ -20,7 +20,7 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 | `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
 | `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). `scroll` moves 1 to 1,000 lines, 5 by default. |
 | `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. After `timeout` seconds, 120 by default and at most 3,600, it returns what the command printed so far, and the command goes on running in the VM. |
-| `release` | Hands the VM back to `serve`, which wipes it. |
+| `release` | Hands the VM back to `serve`, which wipes it. A VM that's already gone, as after `serve` restarted, fails to release, but the session lets go of it all the same and can acquire another. |
 
 A Linux VM without a desktop has no screen: `acquire` says so, `run_command` works in it, and the
 screen and input tools refuse it. A desktop Linux VM takes the screen and input tools and
@@ -39,6 +39,8 @@ administrator (see [Windows guests](guest-agent.md#windows-guests)).
 - A session holds one VM at a time. When the client closes stdin, or stops the server with
   SIGINT, SIGTERM or SIGHUP, as a dropped ssh connection does, the server releases the VM it
   holds.
+- A VM's clicks, typing, key presses and scrolls run one call at a time, in the order `serve`
+  gets them, so two calls' keys never mix. Calls sent together can run in either order.
 - Through a control plane, a session keeps one link open for all its tool calls. If the link
   drops, as when the control plane restarts, a call that was under way fails with the reason, and
   the next call opens a new link. paddock doesn't repeat a call on its own, since repeating a

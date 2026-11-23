@@ -78,8 +78,10 @@ actor AgentSession {
             return try await acquire(allow: arguments.strings("allow"))
         case "release":
             let vm = try heldVM().vm
-            _ = try await blocking { try ServeClient.send(ServeRequest(op: "release", vm: vm)) }
+            // Forgotten first: a VM that's gone, as after serve restarted, can't be released, and
+            // the session must still be free to acquire another.
             held = nil
+            _ = try await blocking { try ServeClient.send(ServeRequest(op: "release", vm: vm)) }
             return [Self.text("Handed '\(vm)' back; serve wipes it.")]
         case "screenshot":
             return [try await screenshot()]
@@ -136,19 +138,18 @@ actor AgentSession {
         defer { acquiring = false }
         let response = try await blocking { try ServeClient.send(ServeRequest(op: "acquire", allow: allow)) }
         guard let vm = response.vm else { throw PaddockError("paddock serve handed out no VM") }
-        let config: VMConfig
-        do {
-            config = try PaddockHome.fromEnvironment().bundle(named: vm).readConfig()
-        } catch {
+        // From serve's answer: the VM's files are on whichever Mac the pool put it on.
+        guard let os = response.os, let hasScreen = response.screen, let width = response.width, let height = response.height
+        else {
             _ = try? await blocking { try ServeClient.send(ServeRequest(op: "release", vm: vm)) }
-            throw error
+            throw PaddockError("the Mac serving '\(vm)' runs a paddock too old to say what the VM is: update paddock there")
         }
-        let scale = ScreenScale(guestWidth: config.display.widthInPixels, guestHeight: config.display.heightInPixels)
+        let scale = ScreenScale(guestWidth: width, guestHeight: height)
         held = (vm, scale)
-        let screen = !config.hasScreen ? "It has no screen; work in it with run_command."
+        let screen = !hasScreen ? "It has no screen; work in it with run_command."
             : "Its screen is \(scale.width)x\(scale.height) in screenshot pixels."
         return [Self.text("""
-            Acquired '\(vm)', a fresh \(config.isLinux ? "Linux" : config.isWindows ? "Windows" : "macOS") VM, at \(response.ip ?? "an unknown address"). \
+            Acquired '\(vm)', a fresh \(os == "linux" ? "Linux" : os == "windows" ? "Windows" : "macOS") VM, at \(response.ip ?? "an unknown address"). \
             \(screen) Call release when you are done; it is wiped.
             """)]
     }
