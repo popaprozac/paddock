@@ -23,6 +23,9 @@ public final class StagingArea {
         let fileManager = FileManager.default
         let parent = destination.url.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        // Only this account may read its VMs: a disk holds the image's account password and whatever
+        // an agent did in it. Set every time, which also fixes a folder an earlier paddock left open.
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path)
 
         let lockPath = parent.appendingPathComponent(".\(destination.name).lock").path
         let fd = open(lockPath, O_CREAT | O_RDONLY | O_CLOEXEC, 0o644)

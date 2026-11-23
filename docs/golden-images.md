@@ -177,6 +177,9 @@ between a workload and the host, and every VM is wiped when it is released.
 
 - Give the golden image's account a password used nowhere else, and sign it in to nothing:
   every workload can read what the image holds.
+- VMs are kept in `~/.paddock/vms`, which only your account can open, so another account on the
+  Mac can't copy a disk, the golden image's or a VM's. paddock sets that each time it makes a VM,
+  including on a folder an earlier paddock left open to every account.
 - The grants are made once, in the golden image, by hand or with `paddock grant`, and SIP stays
   on either way. paddock needs no Screen Recording permission, since it reads the screen on the
   host.
