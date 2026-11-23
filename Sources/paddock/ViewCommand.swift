@@ -53,10 +53,13 @@ struct View: ParsableCommand {
             link = try LocalViewLink(request: line, path: PaddockHome.fromEnvironment().socketURL.path)
         }
         let viewer = Viewer(vm: vm, link: link, stats: stats, watchBuffer: watch ? Double(buffer ?? 400) / 1000 : nil)
-        let app = NSApplication.shared
-        app.delegate = viewer
-        app.setActivationPolicy(.regular)
-        app.run()  // never returns: the viewer exits when the view ends
+        // Synchronous commands run on the main thread (see Entry).
+        MainActor.assumeIsolated {
+            let app = NSApplication.shared
+            app.delegate = viewer
+            app.setActivationPolicy(.regular)
+            app.run()  // never returns: the viewer exits when the view ends
+        }
     }
 }
 
@@ -163,7 +166,10 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
             DispatchQueue.main.async { self?.finish(error.map { "paddock: \($0.localizedDescription)" }) }
         })
         // At each screen refresh, the frames due since: all decoded, only the newest shown.
-        Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.display() }
+        // The timer fires on the main run loop it was scheduled on.
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.display() }
+        }
         if stats {
             Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.report() }
         }
@@ -211,6 +217,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
         link.send(ViewMessage.line(up))
     }
 
+    @MainActor
     private func open(_ start: ViewMessage.Start) {
         if let window, let screenView {
             // The guest changed resolution: keep the window's width, take the new shape.
@@ -242,6 +249,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate, @unchecke
         screenView = view
     }
 
+    @MainActor
     private func display() {
         guard let renderer = screenView?.display.sampleBufferRenderer else { return }
         let now = Self.now

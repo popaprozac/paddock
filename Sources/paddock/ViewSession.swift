@@ -1,6 +1,7 @@
 import CoreMedia
 import Foundation
 import IOSurface
+import os
 import PaddockCore
 import VideoToolbox
 
@@ -281,16 +282,20 @@ private final class VideoEncoder {
         guard CVPixelBufferCreateWithIOSurface(nil, surface, nil, &wrapped) == kCVReturnSuccess,
               let buffer = wrapped?.takeRetainedValue() else { return nil }
         let done = DispatchSemaphore(value: 0)
-        var result: (bytes: Data, key: Bool)?
+        // The encoder answers on its own thread, and after a timeout it can still answer.
+        let result = OSAllocatedUnfairLock<(bytes: Data, key: Bool)?>(initialState: nil)
         let time = CMTime(value: CMTimeValue(DispatchTime.now().uptimeNanoseconds / 1000), timescale: 1_000_000)
         let options = keyFrame ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let status = VTCompressionSessionEncodeFrame(session, imageBuffer: buffer, presentationTimeStamp: time, duration: .invalid,
                                                      frameProperties: options, infoFlagsOut: nil) { [hevc] status, _, sample in
-            if status == noErr, let sample { result = Self.annexB(sample, hevc: hevc) }
+            if status == noErr, let sample {
+                let encoded = Self.annexB(sample, hevc: hevc)
+                result.withLock { $0 = encoded }
+            }
             done.signal()
         }
         guard status == noErr, done.wait(timeout: .now() + 1) == .success else { return nil }
-        return result
+        return result.withLock { $0 }
     }
 
     private static func annexB(_ sample: CMSampleBuffer, hevc: Bool) -> (bytes: Data, key: Bool)? {

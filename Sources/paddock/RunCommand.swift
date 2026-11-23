@@ -228,7 +228,7 @@ extension VMWindow: @preconcurrency VZVirtualMachineDelegate {
 /// paddock's. The process exits when the guest stops.
 @MainActor
 final class VMConsole: NSObject {
-    private static let detach: UInt8 = 0x1D  // Ctrl-]
+    nonisolated private static let detach: UInt8 = 0x1D  // Ctrl-], read on the stdin thread
     private static var terminal: termios?  // as it was, put back on exit
 
     private let bundle: VMBundle
