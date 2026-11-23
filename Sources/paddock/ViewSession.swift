@@ -181,7 +181,8 @@ final class ViewSession: @unchecked Sendable {
                 screen.key(code: key.code, down: key.down)
             }
         }
-        if let scroll = up.scroll, abs(scroll.down) <= 100, abs(scroll.right) <= 100 {
+        // A range, not abs(): abs of Int.min traps, which would end serve and every VM in it.
+        if let scroll = up.scroll, (-100...100).contains(scroll.down), (-100...100).contains(scroll.right) {
             let (width, height) = lock.withLock { size }
             let x = min(max(scroll.x, 0), width - 1), y = min(max(scroll.y, 0), height - 1)
             apply(at: timeline.time(for: stamp, arrivedAt: now, keyEdge: false)) { screen in

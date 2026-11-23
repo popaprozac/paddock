@@ -241,13 +241,16 @@ final class WarmPool {
             server?.stop()
             throw PaddockError(reasons.joined(separator: "; "))
         }
+        for slot in slots where slot.emptyReason != nil {
+            Task { await keepFilling(slot) }
+        }
         while true {
             try await Task.sleep(for: .seconds(3600))
         }
     }
 
     /// Boots and saves the slot's clone of `source`, then fills the slot. A slot that can't start
-    /// stays empty with the reason, and the others serve on.
+    /// is empty with the reason, and `run` keeps trying to fill it while the others serve on.
     private func prepare(_ slot: Slot, from source: VMBundle) async {
         do {
             print("Preparing slot \(slot.number) from '\(source.name)': boot a clone once and save its state")
@@ -356,11 +359,15 @@ final class WarmPool {
                 print("  warning: couldn't set the clock of '\(bundle.name)': \(error.localizedDescription)")
             }
         }
-        vm.onFailure = { [weak self] error in
+        if let failure = vm.failure { throw failure }  // it stopped while its clock was set
+        vm.onFailure = { [weak self, weak vm] error in
+            // A VM the slot already threw away is no longer its VM, and must not refill it twice.
+            guard let self, let vm, slot.vm === vm else { return }
             print("Slot \(slot.number): \(error.message); restoring a fresh clone")
-            self?.replaceCurrent(of: slot)
+            self.replaceCurrent(of: slot)
         }
         slot.warmAddress = ip
+        slot.emptyReason = nil
         print("Slot \(slot.number) warm: '\(bundle.name)' at \(ip), \(how) in \(DurationFormat.short(ContinuousClock.now - started))")
         handOut()
     }
@@ -398,6 +405,9 @@ final class WarmPool {
             if !allow.isEmpty && !userspaceNetwork {
                 return responder.finish(ServeResponse(error: "--allow needs 'paddock serve --userspace'; the NAT network has no allowlist").line)
             }
+            // Acquires whose client gave up would otherwise wait here, each holding its
+            // connection open, until a slot frees.
+            waiting.removeAll { $0.responder.clientHungUp }
             if request?.wait == false && !(waiting.isEmpty && freeSlot != nil) {
                 return responder.finish(ServeResponse(error: "no warm VM is free on this Mac", busy: true).line)
             }
@@ -739,8 +749,29 @@ final class WarmPool {
         slot.assigned = false
         Task {
             await discardCurrent(of: slot)
+            await keepFilling(slot)
+        }
+    }
+
+    /// Fills the slot, booting and saving a clone first if it has no saved state. While that
+    /// fails, it tries again after a wait that doubles from 5 s up to 5 minutes, since most
+    /// failures pass, as a full disk, a Mac that slept or a slow boot do. An empty slot waits first.
+    private func keepFilling(_ slot: Slot) async {
+        var wait = Duration.seconds(5)
+        while true {
+            if slot.emptyReason != nil {
+                print("Slot \(slot.number) tries again in \(DurationFormat.short(wait))")
+                try? await Task.sleep(for: wait)
+                wait = min(wait * 2, .seconds(300))
+            }
+            guard !stopping else { return }
             do {
+                if slot.saved == nil {
+                    print("Slot \(slot.number): boot a clone of '\(image)' and save its state")
+                    try await saveBootedClone(of: try home.bundle(named: image), in: slot)
+                }
                 try await refill(slot)
+                return
             } catch {
                 await discardCurrent(of: slot)
                 slot.emptyReason = error.localizedDescription

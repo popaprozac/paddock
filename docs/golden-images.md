@@ -420,9 +420,9 @@ booted to its desktop in 15 to 16 s and saved 0.3 GB of state, and refills resto
 ### Rosetta
 
 With `rosetta: true`, every VM of the image runs x86-64 Linux programs through Rosetta, as macOS
-runs Intel apps. The Mac needs Rosetta installed: if it isn't, `build` stops, and `serve`'s slots
-stay empty, with the command that installs it, which accepts Apple's license for Rosetta. The image keeps
-the setting, since a slot's saved state restores only onto the same devices.
+runs Intel apps. The Mac needs Rosetta installed: if it isn't, `build` and `serve` stop
+with the command that installs it, which accepts Apple's license for Rosetta. The image keeps the
+setting, since a slot's saved state restores only onto the same devices.
 
 - The VM gets Rosetta's share, mounted in the guest at `/media/rosetta` and registered for x86-64
   programs, and `rosettad`, Rosetta's translation cache, with its files in `/var/cache/rosettad`.
