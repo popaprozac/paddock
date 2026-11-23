@@ -298,8 +298,7 @@ final class ControlClient {
             macos: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)", image: image,
             cpus: ProcessInfo.processInfo.activeProcessorCount, memory: ProcessInfo.processInfo.physicalMemory), on: socket)
         try await withThrowingTaskGroup(of: Void.self) { group in
-            // Reading keeps the link's pings answered, takes the control plane's requests and sees
-            // the link close.
+            // Reading takes the control plane's requests and sees the link close.
             group.addTask {
                 while true {
                     let message = try await self.receive(socket)

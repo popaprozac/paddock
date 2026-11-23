@@ -119,5 +119,6 @@ twice as long each time up to 30 s. The control plane closes links politely when
 Mac can tell that it went away from a dropped network. A restart ends the requests passing
 through it, such as a running `exec`; the VMs, and who holds them, carry on. Requests to one Mac
 share its link, so a client that reads its answers slowly holds up that Mac's other requests until
-it catches up. There is one control plane, keeping its state in one file, so it can't run as
+it catches up. A Mac reports what it uses every 2 s; one that sends nothing for 90 s, as when its
+network drops without a goodbye, is offline until it links again. There is one control plane, keeping its state in one file, so it can't run as
 several copies for failover.

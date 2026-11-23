@@ -31,7 +31,8 @@ const (
 	authMessageLimit   = 4 << 10 // until a link authenticates; its auth message is under 200 bytes
 	linkMessageLimit   = 1 << 20
 	authTimeout        = 10 * time.Second
-	pingInterval       = 30 * time.Second
+	pingInterval       = 30 * time.Second // on clients' links
+	hostSilence        = 90 * time.Second // a Mac reports its usage every 2 s, and its slots every 60 s
 	pendingPerAddress  = 16
 	refusalWindow      = time.Minute
 	refusalRecordLimit = 10
@@ -120,6 +121,7 @@ type server struct {
 	authority *authority
 	audit     *auditLog
 	now       func() time.Time
+	silence   time.Duration // how long a Mac may say nothing before its link is closed
 
 	mu          sync.Mutex
 	links       map[string]*link // by host ID, for hosts online now
@@ -132,7 +134,7 @@ type server struct {
 }
 
 func newServer(st *state, authority *authority, audit *auditLog) *server {
-	return &server{state: st, authority: authority, audit: audit, now: time.Now, links: map[string]*link{},
+	return &server{state: st, authority: authority, audit: audit, now: time.Now, silence: hostSilence, links: map[string]*link{},
 		clientLinks: map[string]map[*clientLink]bool{}, reserved: map[string]int{}, pending: map[string]int{}}
 }
 
@@ -305,13 +307,19 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	go s.keepAlive(ctx, conn)
 	defer l.failPending()
 	for {
+		// A deadline, not a ping: a ping's answer is only read here, and this loop waits while a
+		// client is slow to take its answers, so a ping would close the link for every client.
 		var m message
-		if err := wsjson.Read(ctx, conn, &m); err != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), s.silence)
+		err := wsjson.Read(ctx, conn, &m)
+		cancel()
+		if errors.Is(err, context.DeadlineExceeded) {
+			s.unregister(host, l, "nothing from the Mac for "+s.silence.String())
+			return
+		}
+		if err != nil {
 			s.unregister(host, l, closeReason(err))
 			return
 		}

@@ -281,6 +281,22 @@ func TestALinkReadsOnlySmallMessagesUntilItAuthenticates(t *testing.T) {
 	})
 }
 
+// A Mac that says nothing, as one whose network dropped without a goodbye, goes offline.
+func TestAMacThatSaysNothingIsDisconnected(t *testing.T) {
+	c := newTestControl(t)
+	c.srv.silence = 300 * time.Millisecond
+	key, publicKey := newHostKey(t)
+	_, enrolled := c.enroll(t, c.token(t), "studio", publicKey)
+	if _, _, err := c.link(t, enrolled.Host, key); err != nil {
+		t.Fatal(err)
+	}
+	c.waitFor(t, "the quiet Mac to go offline", func(list []hostStatus) bool { return len(list) == 1 && !list[0].Online })
+	audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+	if !strings.Contains(string(audited), `"reason":"nothing from the Mac for 300ms"`) {
+		t.Fatalf("audit log:\n%s", audited)
+	}
+}
+
 func TestOneAddressCantHoldUpAnothersLinks(t *testing.T) {
 	s := newServer(nil, nil, nil)
 	for i := 0; i < pendingPerAddress; i++ {

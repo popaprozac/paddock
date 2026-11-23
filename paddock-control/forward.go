@@ -135,7 +135,6 @@ func (l *link) failPending() {
 		select {
 		case p.answers <- message{Type: "response", Error: "the Mac's link closed before it answered", Done: true}:
 		case <-p.gone:
-		default:
 		}
 		close(p.answers)
 	}
