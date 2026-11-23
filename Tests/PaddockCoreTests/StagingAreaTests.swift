@@ -17,6 +17,18 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: staging.bundle.url.path))
     }
 
+    @Test func onlyTheOwnerCanReadTheVMsFolder() throws {
+        let tmp = try TemporaryDirectory()
+        let target = destination(in: tmp)
+        let vms = target.url.deletingLastPathComponent()
+        // As paddock made it before, readable by everyone.
+        try FileManager.default.createDirectory(at: vms, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        let staging = try StagingArea(for: target)
+        let mode = try FileManager.default.attributesOfItem(atPath: vms.path)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o700)
+        withExtendedLifetime(staging) {}
+    }
+
     @Test func secondStagingForTheSameNameFails() throws {
         let tmp = try TemporaryDirectory()
         let first = try StagingArea(for: destination(in: tmp))

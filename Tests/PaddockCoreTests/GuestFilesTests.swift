@@ -54,6 +54,15 @@ import Testing
         server.stop()
     }
 
+    /// The store stops at once, here because a folder has the name, and the agent's next write
+    /// meets a closed pipe: the agent must live through it and say the file wasn't stored.
+    @Test func putThatCantBeStoredFailsWithoutKillingTheAgent() throws {
+        try FileManager.default.createDirectory(at: files.appendingPathComponent("in.bundle"), withIntermediateDirectories: true)
+        let error = #expect(throws: PaddockError.self) { try put(Data(count: 3_000_000), as: "in.bundle") }
+        #expect(error?.message.contains("can't store 'in.bundle'") == true, "\(error?.message ?? "")")
+        server.stop()
+    }
+
     @Test func getOfAMissingFileFails() throws {
         let back = tmp.url.appendingPathComponent("back")
         let fd = try connection()

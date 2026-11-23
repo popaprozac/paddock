@@ -177,6 +177,9 @@ between a workload and the host, and every VM is wiped when it is released.
 
 - Give the golden image's account a password used nowhere else, and sign it in to nothing:
   every workload can read what the image holds.
+- VMs are kept in `~/.paddock/vms`, which only your account can open, so another account on the
+  Mac can't copy a disk, the golden image's or a VM's. paddock sets that each time it makes a VM,
+  including on a folder an earlier paddock left open to every account.
 - The grants are made once, in the golden image, by hand or with `paddock grant`, and SIP stays
   on either way. paddock needs no Screen Recording permission, since it reads the screen on the
   host.
@@ -292,6 +295,9 @@ steps:
   an external data file, extended L2 entries or zstd fails with the reason: convert it to a raw
   disk first. A `.img` can be either qcow2 or raw; paddock tells them apart by what the file
   holds.
+- paddock copies the image a `disk` path names and never changes it, so the path can be a link,
+  such as `current.raw` pointing at the image you've pinned. A `.tar.xz` whose `disk.raw` is a
+  link rather than a file is refused.
 - Debian's cloud image has no `git`, which `paddock task` needs: install it with a step, as the
   file above does. Without it, `task` stops, saying the guest has no git. Ubuntu's has it.
 - `license` and `grants` are for macOS images, and a Linux file with either fails the check. The

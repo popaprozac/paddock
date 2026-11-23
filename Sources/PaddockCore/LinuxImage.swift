@@ -175,10 +175,16 @@ public enum LinuxImage {
         } else if QCOW2.isImage(at: image) {
             try QCOW2.convert(image, to: disk)
         } else {
-            // A clone on the same APFS volume, a copy elsewhere.
-            try FileManager.default.copyItem(at: image, to: disk)
+            // A clone on the same APFS volume, a copy elsewhere; of the file a link points at, since
+            // a copied link would have the VM write to that file.
+            try FileManager.default.copyItem(at: image.resolvingSymlinksInPath(), to: disk)
         }
-        let size = try FileManager.default.attributesOfItem(atPath: disk.path)[.size] as? UInt64 ?? 0
+        // The item itself, not what it may point at: a tarball's disk.raw can be a link.
+        let attributes = try FileManager.default.attributesOfItem(atPath: disk.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            throw PaddockError("\(image.lastPathComponent)'s disk isn't a regular file")
+        }
+        let size = attributes[.size] as? UInt64 ?? 0
         guard size <= diskSize else {
             throw PaddockError("\(image.lastPathComponent)'s disk is \(ByteFormat.gigabytes(Int64(size))), more than "
                 + "the \(diskSize >> 30) GB vm.disk asks for")
