@@ -16,10 +16,12 @@ import (
 	stdlog "log"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 )
 
 func main() {
@@ -36,7 +38,7 @@ func main() {
 	}
 	log.SetLevel(log.WarnLevel) // gvisor-tap-vsock's own logging
 
-	logf := stdlog.New(os.Stderr, "paddock-net: ", stdlog.LstdFlags).Printf
+	logf := limitedLog(stdlog.New(os.Stderr, "paddock-net: ", stdlog.LstdFlags), rate.NewLimiter(50, 200))
 	current := holding(p)
 	networkSwitch, err := newNetwork(*mac, current, logf)
 	if err != nil {
@@ -56,6 +58,23 @@ func main() {
 	go exitWithParent(cancel)
 	if err := networkSwitch.Accept(ctx, conn, types.VfkitProtocol); err != nil && ctx.Err() == nil {
 		stdlog.Fatalf("paddock-net: %v", err)
+	}
+}
+
+// limitedLog logs as often as limit allows, so a guest that loops on refused names can't fill the
+// disk through serve's log. It counts the lines over the limit, and the next line out says how
+// many there were.
+func limitedLog(logger *stdlog.Logger, limit *rate.Limiter) func(string, ...any) {
+	var dropped atomic.Int64
+	return func(format string, args ...any) {
+		if !limit.Allow() {
+			dropped.Add(1)
+			return
+		}
+		if n := dropped.Swap(0); n > 0 {
+			logger.Printf("dropped %d lines, over %g a second", n, float64(limit.Limit()))
+		}
+		logger.Printf(format, args...)
 	}
 }
 

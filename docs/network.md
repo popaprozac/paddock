@@ -27,7 +27,9 @@ whatever a name resolves to, so the host's own services and EC2's instance metad
 reach. Nothing on the host's networks can open a connection to the guest. Each decision is one
 line on paddock-net's stderr, which is `serve`'s or `bench`'s, such as `now allowing github.com`,
 `allow github.com:443`, `deny example.com:443: not on the list`, `deny "gİthub.com":443: not a
-host name` and `deny dns example.com: not on the list`.
+host name` and `deny dns example.com: not on the list`. It writes at most 50 lines a second, in bursts
+of up to 200, so a guest that loops on refused names can't fill the disk through that log; the
+first line after a gap says how many lines it dropped.
 
 paddock-net doesn't decrypt TLS, so a client can name an allowed host in its ClientHello and then
 ask that server for another site it also serves. Only ports 80 and 443 work, so git needs HTTPS
