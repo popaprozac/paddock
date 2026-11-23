@@ -405,6 +405,9 @@ final class WarmPool {
             if !allow.isEmpty && !userspaceNetwork {
                 return responder.finish(ServeResponse(error: "--allow needs 'paddock serve --userspace'; the NAT network has no allowlist").line)
             }
+            // Acquires whose client gave up would otherwise wait here, each holding its
+            // connection open, until a slot frees.
+            waiting.removeAll { $0.responder.clientHungUp }
             if request?.wait == false && !(waiting.isEmpty && freeSlot != nil) {
                 return responder.finish(ServeResponse(error: "no warm VM is free on this Mac", busy: true).line)
             }
