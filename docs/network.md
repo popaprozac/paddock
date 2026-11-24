@@ -17,6 +17,7 @@ deletes it with its network. `bench --userspace` passes no list.
 | TCP to any other port | Resets it. |
 | NTP to the gateway | Answers with the host's time. `time.apple.com` resolves to the gateway whatever the list says, so macOS sets the guest's clock from it. |
 | Anything else | Drops it: UDP other than DNS, NTP and DHCP to the gateway, so DNS sent to any other server too, and ICMP. |
+| A frame from another MAC address, or too short for an Ethernet header | Drops it, so a guest sending from made-up addresses can't grow paddock-net. |
 
 An entry `example.com` matches that name only; `*.example.com` matches every name under it, but
 not `example.com` itself. Matching ignores the case of ASCII letters and a trailing dot. The guest
