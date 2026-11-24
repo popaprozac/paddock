@@ -70,11 +70,13 @@ stages it in the `guest` folder's `linux` folder with `paddock-guestd.service`, 
 installs both from its cloud-init seed (see [Linux images](golden-images.md#linux-images)): the
 binary at `/usr/local/libexec/paddock-guestd` and the unit in `/etc/systemd/system`, enabled.
 systemd runs the agent as root and starts it again if it exits. It logs to the journal. Its
-`health` answers `{"version":"0.1.1"}`. Where it differs from the macOS agent:
+`health` answers `{"version":"0.1.2"}`. Where it differs from the macOS agent:
 
 - `run` uses a login bash (`bash -l`) as the account with uid 1000, in its home folder, with
   stdin closed, and with `"as":"root"` as root in `/root`. A command that a signal ends exits with
-  128 plus the signal's number, as a shell reports it.
+  128 plus the signal's number, as a shell reports it. Each command runs in a process group of its
+  own, so one that signals its group, as `trap 'kill 0' EXIT` does, ends only itself; an agent
+  before 0.1.2 was ended with it, which cut off every command running through it.
 - `state` answers `{"output":"network"}` once an interface other than loopback has an IPv4
   address and the guest an IPv4 DNS server, from systemd-resolved's list of servers when it runs,
   else from `/etc/resolv.conf`. There is no session helper.

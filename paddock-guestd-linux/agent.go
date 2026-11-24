@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	version = "0.1.1"
+	version = "0.1.2"
 	port    = 52525
 	// Output lines longer than this are split, so every answer line stays well under the 64 KB
 	// the host's reader accepts even after JSON escaping.
@@ -219,11 +219,14 @@ func (o *answerer) write(b []byte) {
 	}
 }
 
-// command starts `args` as `as`, in its home folder, with stdin closed.
+// command starts `args` as `as`, in its home folder, with stdin closed, in a process group of
+// its own: a command that signals its group, as `trap 'kill 0' EXIT` does, would otherwise end
+// the agent too.
 func (a *agent) command(args []string, as *account) *exec.Cmd {
 	cmd := exec.Command(args[0], args[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if as != nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: as.uid, Gid: as.gid, Groups: as.groups}}
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: as.uid, Gid: as.gid, Groups: as.groups}
 		cmd.Dir = as.home
 		path := "/usr/local/bin:/usr/bin:/bin"
 		if as.uid == 0 {

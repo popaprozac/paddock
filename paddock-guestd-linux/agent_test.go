@@ -66,7 +66,7 @@ func lines(answer []byte) []string {
 
 func TestHealthAnswersTheVersion(t *testing.T) {
 	got := lines(ask(t, testAgent(t), `{"op":"health"}`, nil, false))
-	if want := []string{`{"version":"0.1.1"}`}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+	if want := []string{`{"version":"0.1.2"}`}; strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
@@ -99,6 +99,17 @@ func TestRunStreamsCombinedOutputThenTheExitStatus(t *testing.T) {
 	want := []string{`{"output":"one"}`, `{"output":"two"}`, `{"output":""}`, `{"output":"tail"}`, `{"exit":3}`}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A command that signals its own process group, as `trap 'kill 0' EXIT` does, can't reach the
+// agent's.
+func TestRunPutsTheCommandInAProcessGroupOfItsOwn(t *testing.T) {
+	got := lines(ask(t, testAgent(t), `{"op":"run","command":"echo $$; ps -o pgid= -p $$"}`, nil, false))
+	var shell, group response
+	if len(got) != 3 || json.Unmarshal([]byte(got[0]), &shell) != nil || json.Unmarshal([]byte(got[1]), &group) != nil ||
+		shell.Output == nil || group.Output == nil || strings.TrimSpace(*group.Output) != *shell.Output {
+		t.Fatalf("got %q, want the shell's process ID as its group's", got)
 	}
 }
 
