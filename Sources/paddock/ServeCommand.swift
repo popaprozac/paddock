@@ -459,6 +459,10 @@ final class WarmPool {
                 try vm.allow(allow)
             } catch {
                 responder.finish(ServeResponse(error: error.localizedDescription).line)
+                // A list paddock-net didn't answer for in time can still land, so the next client
+                // gets a fresh VM. One it refused left the VM clean, but a fresh one costs only a
+                // restore.
+                replaceCurrent(of: slot)
                 return handOut()
             }
         }
