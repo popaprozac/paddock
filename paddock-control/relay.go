@@ -392,8 +392,8 @@ func (s *server) ownedRequest(client string, request message) (serveRequest, *ha
 
 // relayTask runs a task in a VM the client acquired: the client's bundle goes to the VM's host in
 // pieces as they come, and the host's answers, with the bundle of new commits as data, come back.
-func (s *server) relayTask(ctx context.Context, client string, l *clientLink, request message, uploads <-chan message) {
-	defer l.dropUpload(request.ID)
+func (s *server) relayTask(ctx context.Context, client string, l *clientLink, request message, uploads *upload) {
+	defer l.dropUpload(request.ID, uploads)
 	fail := func(err error) {
 		_ = l.write(ctx, message{Type: "response", ID: request.ID, Error: err.Error(), Done: true})
 	}
@@ -414,7 +414,7 @@ func (s *server) relayTask(ctx context.Context, client string, l *clientLink, re
 		total := 0
 		for {
 			select {
-			case piece, open := <-uploads:
+			case piece, open := <-uploads.pieces:
 				if !open { // closed after the last piece
 					uploaded <- nil
 					return
@@ -446,8 +446,8 @@ func (s *server) relayTask(ctx context.Context, client string, l *clientLink, re
 // relayStream runs a request whose client keeps sending while the host answers, such as a view of
 // a VM: the client's uploads go to the host as they come, the host's answers come back as they
 // come, and a client that leaves has the request cancelled on the Mac, which stops it.
-func (s *server) relayStream(ctx context.Context, client string, l *clientLink, request message, uploads <-chan message) {
-	defer l.dropUpload(request.ID)
+func (s *server) relayStream(ctx context.Context, client string, l *clientLink, request message, uploads *upload) {
+	defer l.dropUpload(request.ID, uploads)
 	fail := func(err error) {
 		_ = l.write(ctx, message{Type: "response", ID: request.ID, Error: err.Error(), Done: true})
 	}
@@ -468,7 +468,7 @@ func (s *server) relayStream(ctx context.Context, client string, l *clientLink, 
 	go func() {
 		for {
 			select {
-			case piece, open := <-uploads:
+			case piece, open := <-uploads.pieces:
 				if !open { // closed after the client's last piece
 					return
 				}
