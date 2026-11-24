@@ -287,6 +287,16 @@ final class HeadlessVM: NSObject {
         return false
     }
 
+    /// Asks paddock-session to make Finder the app in front if the one there isn't an app people use,
+    /// and returns its answer, or nil from a helper before 0.2.3, which can't, or on a failure.
+    func bringFinderForward() async -> String? {
+        try? await withAgent(port: SessionHelper.port, name: "paddock-session") { fd in
+            var lines: [String] = []
+            _ = try GuestAgent.askStreaming(GuestAgent.Request(op: "front"), over: fd, timeout: 5) { lines.append($0) }
+            return lines.joined(separator: " ")
+        }
+    }
+
     /// Asks the listener on `port` for its version every 100 ms until it answers or `timeout` passes.
     private func version(at port: UInt32, within timeout: Duration) async throws -> String? {
         let deadline = ContinuousClock.now + timeout

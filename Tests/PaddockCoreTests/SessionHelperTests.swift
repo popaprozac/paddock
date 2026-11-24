@@ -18,4 +18,10 @@ import Testing
     @Test func holdsTheDesktopBackWithoutAWindowList() {
         #expect(SessionHelper.state(onScreen: nil).isEmpty)
     }
+
+    @Test func readsTheAppFrontReplacedWithFinder() {
+        #expect(SessionHelper.replacedApp(in: SessionHelper.broughtFinderForward + "Accessibility") == "Accessibility")
+        #expect(SessionHelper.replacedApp(in: "Finder") == nil)
+        #expect(SessionHelper.replacedApp(in: "TextEdit") == nil)
+    }
 }

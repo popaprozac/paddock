@@ -19,6 +19,20 @@ let prompt = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
 let trusted = AXIsProcessTrusted() || AXIsProcessTrustedWithOptions(prompt)
 print("paddock-session \(SessionHelper.version): Accessibility \(trusted ? "allowed" : "not allowed yet")")
 
+/// The app in front, after making Finder the app in front if the one there isn't an app people
+/// use, such as AccessibilityUIServer (see SessionHelper.broughtFinderForward). Through the
+/// accessibility API, as System Events does, so no window opens.
+func bringFinderForwardIfNeeded() -> String {
+    let front = NSWorkspace.shared.frontmostApplication
+    let name = front?.localizedName ?? "nothing"
+    guard front?.activationPolicy != .regular, AXIsProcessTrusted(),
+          let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
+    else { return name }
+    let result = AXUIElementSetAttributeValue(AXUIElementCreateApplication(finder.processIdentifier),
+                                              kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    return result == .success ? SessionHelper.broughtFinderForward + name : name
+}
+
 do {
     let fd = try GuestAgent.listen(port: SessionHelper.port)
     let server = LineServer(listening: fd, queue: .main, accepts: GuestAgent.onlyFromHost("paddock-session")) { line, responder in
@@ -29,6 +43,9 @@ do {
         case "state":
             let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]
             responder.send(lines: SessionHelper.state(onScreen: windows).map { GuestAgent.Response(output: $0).line })
+            responder.finish(GuestAgent.Response(exit: 0).line)
+        case "front":
+            responder.send(lines: [GuestAgent.Response(output: bringFinderForwardIfNeeded()).line])
             responder.finish(GuestAgent.Response(exit: 0).line)
         case "axtree":
             guard AXIsProcessTrusted() else {

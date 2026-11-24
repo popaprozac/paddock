@@ -742,6 +742,11 @@ final class WarmPool {
                 throw PaddockError("loginwindow in '\(vm.bundle.name)' still covered the screen after "
                     + "\(DurationFormat.short(Self.sessionTimeout)); turn off the screen lock in the golden image")
             }
+            // Before the save, so every VM restored from it starts with Finder, not an app with no
+            // window, taking the keyboard. macOS has made its choice by the time the desktop is up.
+            if let replaced = await vm.bringFinderForward().flatMap(SessionHelper.replacedApp) {
+                print("  '\(vm.bundle.name)': macOS left \(replaced) in front, which has no window; brought Finder forward")
+            }
         }
         if !vm.config.isMac, vm.config.hasScreen {
             guard try await vm.desktopReady(within: Self.sessionTimeout) else {
