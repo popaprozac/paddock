@@ -765,3 +765,26 @@ func TestARequestTooBigForTheMacIsRefusedAndTheMacStaysOnline(t *testing.T) {
 		t.Fatalf("the next exec: %+v", got)
 	}
 }
+
+// A removed Mac's VMs are no longer anyone's: their clients would otherwise be told forever that
+// the Mac isn't online.
+func TestRemovingAMacForgetsItsHandOuts(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	if c.srv.state.handout("golden-slot1-abc") == nil {
+		t.Fatal("not handed out")
+	}
+	if response := c.srv.admin(adminRequest{Op: "remove-host", Host: host.id}, nil); response.Removed != host.id {
+		t.Fatalf("remove: %+v", response)
+	}
+	if h := c.srv.state.handout("golden-slot1-abc"); h != nil {
+		t.Fatalf("still handed out: %+v", h)
+	}
+	log, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+	if !strings.Contains(string(log), "its Mac was removed") {
+		t.Fatalf("no release in the audit log:\n%s", log)
+	}
+}
