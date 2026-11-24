@@ -24,6 +24,9 @@ const (
 	nameTimeout = 10 * time.Second // for the guest to send the name it wants
 	maxPeek     = 64 << 10         // bytes read looking for that name
 	dialTimeout = 30 * time.Second
+	// Each connection holds a host socket and two goroutines for as long as both ends keep it
+	// open, so a guest opening connections and leaving them idle could use up the host's.
+	maxConnections = 1024
 )
 
 // forwarder carries the guest's TCP connections to ports 80 and 443 out through the host's
@@ -34,6 +37,7 @@ type forwarder struct {
 	policy *atomic.Pointer[policy]
 	dial   func(ctx context.Context, network, address string) (net.Conn, error)
 	logf   func(format string, args ...any)
+	open   atomic.Int32 // connections being served
 }
 
 // handle is the netstack's TCP forwarder handler; it runs on its own goroutine.
@@ -57,6 +61,11 @@ func (f *forwarder) handle(r *tcp.ForwarderRequest) {
 }
 
 func (f *forwarder) serve(guest net.Conn, address string, port uint16) {
+	defer f.open.Add(-1)
+	if f.open.Add(1) > maxConnections {
+		f.logf("deny %s:%d: %d connections are open already", address, port, maxConnections)
+		return
+	}
 	_ = guest.SetReadDeadline(time.Now().Add(nameTimeout))
 	read := serverName
 	if port == 80 {

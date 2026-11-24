@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,8 +28,12 @@ func put(name string, size int64, in io.Reader) response {
 	if err != nil {
 		return failed(fmt.Sprintf("can't store '%s': %v", name, err))
 	}
-	copied, _ := io.CopyN(f, in, size)
+	copied, err := io.CopyN(f, in, size)
 	closed := f.Close()
+	// The file's write failing, as on a full disk, is the guest's, not a short upload.
+	if failure := (*fs.PathError)(nil); errors.As(err, &failure) && failure.Op == "write" {
+		return failed(fmt.Sprintf("can't store '%s' in the guest: %v", name, failure.Err))
+	}
 	if copied < size {
 		return failed(fmt.Sprintf("'%s' stopped after %d of %d bytes", name, copied, size))
 	}

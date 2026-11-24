@@ -21,12 +21,12 @@ func (a *agent) put(name string, size int64, in io.Reader) response {
 	}
 	copied, _ := io.CopyN(stdin, in, size)
 	stdin.Close()
-	err = cmd.Wait()
+	// A store that failed, as on a full disk, stops taking bytes too, so it goes first.
+	if cmd.Wait() != nil {
+		return failed(fmt.Sprintf("can't store '%s' in the guest", name))
+	}
 	if copied < size {
 		return failed(fmt.Sprintf("'%s' stopped after %d of %d bytes", name, copied, size))
-	}
-	if err != nil {
-		return failed(fmt.Sprintf("can't store '%s' in the guest", name))
 	}
 	return exited(0)
 }

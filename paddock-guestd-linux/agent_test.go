@@ -66,7 +66,7 @@ func lines(answer []byte) []string {
 
 func TestHealthAnswersTheVersion(t *testing.T) {
 	got := lines(ask(t, testAgent(t), `{"op":"health"}`, nil, false))
-	if want := []string{`{"version":"0.1.1"}`}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+	if want := []string{`{"version":"0.1.2"}`}; strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
@@ -99,6 +99,17 @@ func TestRunStreamsCombinedOutputThenTheExitStatus(t *testing.T) {
 	want := []string{`{"output":"one"}`, `{"output":"two"}`, `{"output":""}`, `{"output":"tail"}`, `{"exit":3}`}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A command that signals its own process group, as `trap 'kill 0' EXIT` does, can't reach the
+// agent's.
+func TestRunPutsTheCommandInAProcessGroupOfItsOwn(t *testing.T) {
+	got := lines(ask(t, testAgent(t), `{"op":"run","command":"echo $$; ps -o pgid= -p $$"}`, nil, false))
+	var shell, group response
+	if len(got) != 3 || json.Unmarshal([]byte(got[0]), &shell) != nil || json.Unmarshal([]byte(got[1]), &group) != nil ||
+		shell.Output == nil || group.Output == nil || strings.TrimSpace(*group.Output) != *shell.Output {
+		t.Fatalf("got %q, want the shell's process ID as its group's", got)
 	}
 }
 
@@ -159,6 +170,18 @@ func TestPutThenGetGivesBackTheSameBytes(t *testing.T) {
 func TestPutSaysHowFarAShortUploadGot(t *testing.T) {
 	got := string(ask(t, testAgent(t), `{"op":"put","name":"a","size":10}`, []byte("abcd"), false))
 	if want := "{\"error\":\"'a' stopped after 4 of 10 bytes\"}\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A store that fails stops taking bytes, which is not the client's upload falling short.
+func TestPutSaysWhenTheGuestCantStoreTheFile(t *testing.T) {
+	a := testAgent(t)
+	if err := os.WriteFile(a.files, nil, 0o600); err != nil { // a file where the folder goes
+		t.Fatal(err)
+	}
+	got := string(ask(t, a, `{"op":"put","name":"a","size":1048576}`, make([]byte, 1<<20), false))
+	if want := "{\"error\":\"can't store 'a' in the guest\"}\n"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }

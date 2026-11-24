@@ -11,6 +11,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -63,6 +64,24 @@ func newNetwork(mac string, p *atomic.Pointer[policy], logf func(string, ...any)
 		return nil, fmt.Errorf("DHCP: %w", err)
 	}
 	return networkSwitch, nil
+}
+
+// guestFrames passes the switch only frames with a whole Ethernet header, sent from the guest's
+// own MAC address. gvisor-tap-vsock's switch panics on a shorter frame, and learns every source
+// address it sees until the VM goes, so a guest sending from made-up addresses would grow
+// paddock-net without end.
+type guestFrames struct {
+	net.Conn
+	mac net.HardwareAddr
+}
+
+func (g guestFrames) Read(p []byte) (int, error) {
+	for {
+		n, err := g.Conn.Read(p)
+		if err != nil || n >= header.EthernetMinimumSize && header.Ethernet(p).SourceAddress() == tcpip.LinkAddress(g.mac) {
+			return n, err
+		}
+	}
 }
 
 // newStack makes the gateway: an IPv4 stack that takes packets for any address, so the TCP

@@ -18,13 +18,15 @@ import (
 )
 
 const (
-	version    = "0.5.0"
+	version    = "0.5.1"
 	port       = 52525
 	maxRequest = 64 * 1024
 	// The host's vsock address. viosock sets the peer's CID, so only the host's connections come
 	// from this one.
 	hostCID = 2
 )
+
+func fromHost(cid uint32) bool { return cid == hostCID }
 
 // idle is how long a client may send nothing before the agent gives up on it, as the other agents do.
 var idle = 5 * time.Second
@@ -81,7 +83,7 @@ func listenAndServe() error {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if cid != hostCID {
+		if !fromHost(cid) {
 			log.Printf("paddock-guestd: refused a connection from vsock CID %d", cid)
 			c.Close()
 			continue

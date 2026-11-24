@@ -28,7 +28,8 @@ import (
 func main() {
 	mac := flag.String("mac", "", "the guest's MAC address, which DHCP gives "+guestIP)
 	flag.Parse()
-	if _, err := net.ParseMAC(*mac); err != nil {
+	guestMAC, err := net.ParseMAC(*mac)
+	if err != nil {
 		stdlog.Fatalf("paddock-net: -mac: %v", err)
 	}
 	log.SetLevel(log.WarnLevel) // gvisor-tap-vsock's own logging
@@ -52,7 +53,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go exitWithParent(cancel)
-	if err := networkSwitch.Accept(ctx, conn, types.VfkitProtocol); err != nil && ctx.Err() == nil {
+	if err := networkSwitch.Accept(ctx, guestFrames{conn, guestMAC}, types.VfkitProtocol); err != nil && ctx.Err() == nil {
 		stdlog.Fatalf("paddock-net: %v", err)
 	}
 }

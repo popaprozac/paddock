@@ -70,11 +70,15 @@ stages it in the `guest` folder's `linux` folder with `paddock-guestd.service`, 
 installs both from its cloud-init seed (see [Linux images](golden-images.md#linux-images)): the
 binary at `/usr/local/libexec/paddock-guestd` and the unit in `/etc/systemd/system`, enabled.
 systemd runs the agent as root and starts it again if it exits. It logs to the journal. Its
-`health` answers `{"version":"0.1.1"}`. Where it differs from the macOS agent:
+`health` answers `{"version":"0.1.2"}`. Where it differs from the macOS agent:
 
 - `run` uses a login bash (`bash -l`) as the account with uid 1000, in its home folder, with
   stdin closed, and with `"as":"root"` as root in `/root`. A command that a signal ends exits with
-  128 plus the signal's number, as a shell reports it.
+  128 plus the signal's number, as a shell reports it. Each command runs in a process group of its
+  own, so one that signals its group, as `trap 'kill 0' EXIT` does, ends only itself; an agent
+  before 0.1.2 was ended with it, which cut off every command running through it.
+- A `put` the guest can't store fails saying so, as on macOS; an agent before 0.1.2 said instead
+  that the upload stopped short.
 - `state` answers `{"output":"network"}` once an interface other than loopback has an IPv4
   address and the guest an IPv4 DNS server, from systemd-resolved's list of servers when it runs,
   else from `/etc/resolv.conf`. There is no session helper.
@@ -104,7 +108,8 @@ systemd runs the agent as root and starts it again if it exits. It logs to the j
   its description and identifier when it has them, its frame as x, y, width and height in screen
   pixels from the top left, which it leaves out for an element off screen, whether it is enabled
   and focused, and its children, with macOS's limits. A call an app takes over 0.5 s to answer is
-  left out. Under Wayland, apps put every frame at 0, 0 with the right size, since they don't know
+  left out, and `axtree` fails if the whole tree takes over 30 s; an agent before 0.1.2 waited as
+  long as the desktop's bus did. Under Wayland, apps put every frame at 0, 0 with the right size, since they don't know
   where their windows are.
 - It doesn't copy per-host preferences, which are macOS's.
 
@@ -118,7 +123,7 @@ installs it at `C:\Program Files\paddock\paddock-guestd.exe` as the Windows serv
 `paddock-guestd` (see [Windows images](golden-images.md#windows-images)). The service runs it as
 SYSTEM from boot, and the service manager starts it again a second after it dies or stops with an
 error, as it does when vsock isn't up yet early in a boot. Its log goes nowhere yet. Its `health`
-answers `{"version":"0.5.0"}`; an agent before 0.5.0 ran from a scheduled task that never started
+answers `{"version":"0.5.1"}`; an agent before 0.5.0 ran from a scheduled task that never started
 it again. Where it differs from the Linux agent:
 
 - `run` uses `cmd.exe /d /s /c` as the account signed in at the console, with its environment, in
@@ -135,7 +140,8 @@ it again. Where it differs from the Linux agent:
   reaches only what the account could reach. Files take the profile's permissions: the account,
   SYSTEM and administrators. A name is one plain name that Windows keeps as given: no separators,
   colons, wildcards, control characters or leading dot, no trailing dot or space, which Windows
-  drops, and no device name, such as `NUL`, `CON` or `COM1`, with or without an extension.
+  drops, and no device name, such as `NUL`, `CON` or `COM1`, with or without an extension. An
+  agent before 0.5.1 said a file the guest couldn't store stopped short.
 - `state` answers `{"output":"network"}` once an adapter that is up, other than loopback, has an
   IPv4 address and an IPv4 DNS server, and its traffic gets through: its IPv4 gateway answers a
   ping within 0.5 s, or the adapter received something meanwhile, as on a network whose gateway
