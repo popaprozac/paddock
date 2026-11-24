@@ -124,6 +124,19 @@ import Virtualization
         #expect(!BundleName.isSlotBundle("golden-slot1-mytest", of: "golden"))
         #expect(!BundleName.isSlotBundle("golden-slot1-d07d90", of: "golden"))
         #expect(!BundleName.isSlotBundle("golden-slot1-D07D90-saved", of: "golden"))
+    }
+
+    /// The names serve gives a slot's bundles are ones a later serve knows to delete, and valid
+    /// bundle names, even for a source name as long as one can be.
+    @Test func slotBundleNamesAreOnesServeKnows() throws {
+        for source in ["golden", String(repeating: "s", count: 64)] {
+            let stem = BundleName.slotStem(12, of: source)
+            for saved in [true, false] {
+                let name = BundleName.slotBundle(of: stem, saved: saved)
+                #expect(BundleName.isSlotBundle(name, of: source))
+                try BundleName.validate(name)
+            }
+        }
         #expect(!BundleName.isSlotBundle("golden-slot0-d07d90-saved", of: "golden"))
         #expect(!BundleName.isSlotBundle("golden-slot01-d07d90-saved", of: "golden"))
         #expect(!BundleName.isSlotBundle("golden-slot1-d07d90-a903d8-copy", of: "golden"))
