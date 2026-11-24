@@ -361,8 +361,9 @@ final class WarmPool {
         }
         if let failure = vm.failure { throw failure }  // it stopped while its clock was set
         vm.onFailure = { [weak self, weak vm] error in
-            // A VM the slot already threw away is no longer its VM, and must not refill it twice.
-            guard let self, let vm, slot.vm === vm else { return }
+            // A VM the slot already threw away is no longer its VM, and must not refill it twice;
+            // nor must one it is throwing away, which stays its VM until it has stopped.
+            guard let self, let vm, slot.vm === vm, slot.warmAddress != nil else { return }
             print("Slot \(slot.number): \(error.message); restoring a fresh clone")
             self.replaceCurrent(of: slot)
         }
