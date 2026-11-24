@@ -176,11 +176,12 @@ public final class Responder: @unchecked Sendable {
 public final class LineConnection: @unchecked Sendable {
     private let fd: Int32
     private let writeLock = NSLock()
-    private var pending = Data()  // the reader's alone
+    private var reader: LineReader  // the reading thread's alone
     public static let maxLine = 4 << 20
 
     public init(path: String) throws {
         fd = try UnixSocket.connect(path)
+        reader = LineReader(fd: fd)
     }
 
     /// Sends one line; false once the connection is gone.
@@ -191,14 +192,7 @@ public final class LineConnection: @unchecked Sendable {
 
     /// The next line, or nil once the server closes the connection (or sends a line over `maxLine`).
     public func readLine() -> String? {
-        while true {
-            if let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
-                defer { pending.removeSubrange(pending.startIndex...newline) }
-                return String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
-            }
-            guard pending.count <= Self.maxLine, let chunk = UnixSocket.read(upTo: 256 * 1024, from: fd) else { return nil }
-            pending.append(chunk)
-        }
+        reader.readLine(limit: Self.maxLine)
     }
 
     /// Ends the connection both ways: the server reads end of file, and a waiting `readLine` returns nil.

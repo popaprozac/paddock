@@ -33,8 +33,7 @@ func TestControlReplacesTheListOrKeepsItOnABadOne(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	path := filepath.Join(dir, "net.sock")
-	p, _ := parsePolicy("")
-	current := holding(p)
+	current := holding(&policy{})
 	if err := serveControl(path, current, t.Logf); err != nil {
 		t.Fatal(err)
 	}

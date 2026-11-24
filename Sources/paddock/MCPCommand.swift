@@ -188,21 +188,14 @@ actor AgentSession {
     private func run(_ command: String, timeout: Int) async throws -> String {
         let vm = try heldVM().vm
         let output = CommandOutput()
-        let status: Int32?
+        let status: Int32
         do {
-            status = try await blocking(seconds: timeout) { () -> Int32? in
-                var status: Int32?
-                try ServeClient.stream(ServeRequest(op: "exec", vm: vm, command: command)) { response in
-                    if let line = response.output { output.append(line) }
-                    status = response.exit ?? status
-                    return status == nil
-                }
-                return status
+            status = try await blocking(seconds: timeout) {
+                try ServeClient.run(ServeRequest(op: "exec", vm: vm, command: command)) { output.append($0) }.status
             }
         } catch is TimedOut {
             return output.text + "[still running after \(timeout) s, so paddock stopped waiting; it may go on running in the VM]"
         }
-        guard let status else { throw PaddockError("paddock serve closed the connection before the command finished") }
         return output.text + "[exit status \(status)]"
     }
 

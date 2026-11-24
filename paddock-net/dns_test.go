@@ -10,7 +10,7 @@ import (
 
 func testDNS(t *testing.T) (*dnsHandler, *[]string) {
 	t.Helper()
-	p, err := parsePolicy("github.com,*.example.org")
+	p, err := newPolicy([]string{"github.com", "*.example.org"})
 	if err != nil {
 		t.Fatal(err)
 	}

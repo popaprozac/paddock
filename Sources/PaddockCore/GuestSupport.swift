@@ -1,8 +1,6 @@
 /// Which macOS versions paddock sets up in a guest, and how. paddock's guest helpers run on
 /// macOS 14 and later, which anyone can set up by hand; `build` sets up 15 and later by itself.
 public enum GuestSupport {
-    /// The oldest macOS the guest agent and session helper run on.
-    public static let minimumGuest = 14
     /// The first macOS whose guests take Virtualization's guest provisioning.
     public static let provisioning = 27
     /// The oldest macOS `build` sets up offline from Recovery, as it does every release below

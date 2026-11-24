@@ -27,7 +27,7 @@ extension HeadlessVM {
     func saveScreen(as file: String) async {
         guard let image = try? await screenshot() else { return }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(file).png")
-        if (try? FrameImage.writePNG(image, to: url)) != nil {
+        if (try? FrameImage.pngData(image).write(to: url)) != nil {
             print("  the guest's screen when it failed: \(url.path)")
         }
     }

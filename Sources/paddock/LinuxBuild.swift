@@ -102,9 +102,7 @@ enum LinuxBuild {
             print("  set up; shutting down")
             _ = try await vm.runInGuest("\(LinuxSeed.disableCloudInit); sync; (sleep 2; systemctl poweroff) </dev/null >/dev/null 2>&1 &",
                                         asRoot: true) { _ in }
-            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
-                throw PaddockError("'\(bundle.name)' didn't shut down within 120 s of its setup")
-            }
+            try await vm.waitForShutdown(after: "its setup")
         } catch {
             await vm.stop()
             throw error
@@ -144,9 +142,7 @@ enum LinuxBuild {
                 accessibility = try await vm.runInGuest(LinuxSeed.accessibilityBusCheck, asRoot: true) { _ in } == 0
             }
             _ = try await vm.runInGuest("sync; (sleep 2; systemctl poweroff) </dev/null >/dev/null 2>&1 &", asRoot: true) { _ in }
-            guard try await vm.waitUntilStopped(within: .seconds(120)) else {
-                throw PaddockError("'\(bundle.name)' didn't shut down within 120 s of its desktop check")
-            }
+            try await vm.waitForShutdown(after: "its desktop check")
         } catch {
             await vm.stop()
             throw error

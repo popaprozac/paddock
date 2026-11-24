@@ -92,6 +92,14 @@ final class HeadlessVM: NSObject {
         return machine.state == .stopped
     }
 
+    /// Waits up to 120 s for the guest to shut itself down at the end of a build stage, and throws
+    /// if it is still running, naming the stage as "its setup" or "its steps".
+    func waitForShutdown(after stage: String) async throws {
+        guard try await waitUntilStopped(within: .seconds(120)) else {
+            throw PaddockError("'\(bundle.name)' didn't shut down within 120 s of \(stage)")
+        }
+    }
+
     /// Loads the bundle's saved state. The VM is paused afterwards; `resume()` runs it.
     func restore() async throws {
         let url = bundle.savedStateURL

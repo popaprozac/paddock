@@ -57,11 +57,11 @@ func main() {
 	case "run":
 		err = run(os.Args[2:])
 	case "join-token":
-		err = joinToken(os.Args[2:])
+		err = token(hostKind, os.Args[2:])
 	case "hosts":
 		err = hosts(os.Args[2:])
 	case "login-token":
-		err = loginToken(os.Args[2:])
+		err = token(clientKind, os.Args[2:])
 	case "clients":
 		err = clients(os.Args[2:])
 	case "remove-host":
@@ -215,14 +215,6 @@ func urlsFor(r reach, port string) []string {
 		return ipv6
 	}
 	return urls
-}
-
-func joinToken(args []string) error {
-	return token(hostKind, args)
-}
-
-func loginToken(args []string) error {
-	return token(clientKind, args)
 }
 
 // token makes a one-use token of kind k and says what to do with it.
