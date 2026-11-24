@@ -200,10 +200,10 @@ import Testing
     /// A pipe made without an input sends the handler nothing and doesn't look hung up, as an
     /// acquire waiting for a warm VM relies on.
     @Test func aPlainPipeDoesntLookHungUp() throws {
-        let (responder, _) = try ResponderPipe.make()
-        Thread.sleep(forTimeInterval: 0.1)  // the input end is dropped on its own queue
+        let (responder, lines) = try ResponderPipe.make()
         #expect(!responder.clientHungUp)
         responder.finish()
+        withExtendedLifetime(lines) {}  // dropping the stream lets go of the handler
     }
 
     /// A line connection sends and reads for as long as it's open, with lines longer than

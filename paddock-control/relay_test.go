@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,27 @@ type fakeHost struct {
 	cancelled []string      // the tasks the control plane told it to drop, by request ID
 }
 
+// serveFields is the line called name in testdata/serve-lines.json, which paddock's Swift tests
+// decode with serve's own types, so the fake host answers with the field names serve uses.
+func serveFields(t *testing.T, name string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile("testdata/serve-lines.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines map[string]map[string]any
+	if err := json.Unmarshal(data, &lines); err != nil || lines[name] == nil {
+		t.Fatalf("testdata/serve-lines.json has no line %q: %v", name, err)
+	}
+	return lines[name]
+}
+
+func serveLine(t *testing.T, name string) string {
+	t.Helper()
+	line, _ := json.Marshal(serveFields(t, name))
+	return string(line)
+}
+
 // startFakeHost enrolls and links a host serving image with warm warm slots, and answers
 // acquire, exec, screenshot and release until the test ends.
 func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeHost {
@@ -39,6 +61,7 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 	}
 	h := &fakeHost{id: enrolled.Host, conn: conn}
 	t.Cleanup(func() { conn.CloseNow() })
+	busyLine, refusedLine, acquired := serveLine(t, "busy"), serveLine(t, "refused"), serveFields(t, "acquired")
 	ctx := context.Background()
 	wsjson.Write(ctx, conn, message{Type: "hello", Image: image})
 	h.report(warm)
@@ -70,14 +93,17 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 				}
 				h.mu.Unlock()
 				if busy {
-					reply(`{"error":"no warm VM is free on this Mac","busy":true}`, true)
+					reply(busyLine, true)
 					continue
 				}
 				go func() {
 					if hold != nil {
 						<-hold
 					}
-					reply(`{"vm":"`+vm+`","ip":"192.168.64.2"}`, true)
+					fields := maps.Clone(acquired)
+					fields["vm"] = vm
+					line, _ := json.Marshal(fields)
+					reply(string(line), true)
 				}()
 			case "exec":
 				reply(`{"output":"hello"}`, false)
@@ -142,7 +168,7 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 					}
 				}
 			default:
-				reply(`{"error":"unexpected"}`, true)
+				reply(refusedLine, true)
 			}
 		}
 	}()
@@ -233,12 +259,17 @@ func TestAcquireGoesToAWarmHostAndTheVMIsTheClientsAlone(t *testing.T) {
 	alice, aliceConn := c.newClient(t)
 	_, bobConn := c.newClient(t)
 
-	got := ask(t, aliceConn, message{ID: "1", Op: "acquire", Serve: `{"op":"acquire","allow":["github.com"]}`})
+	got := ask(t, aliceConn, message{ID: "1", Op: "acquire", Serve: serveLine(t, "acquire")})
 	last := got[len(got)-1]
 	if last.Error != "" || !strings.Contains(last.Line, `"vm":"golden-slot1-abc"`) || !strings.Contains(last.Line, `"host":"mac-golden"`) {
 		t.Fatalf("acquire answers %+v", got)
 	}
-	if !host.sawRequest("acquire") || !strings.Contains(strings.Join(host.all(), " "), "github.com") {
+	var forwarded struct {
+		Op    string   `json:"op"`
+		Allow []string `json:"allow"`
+	}
+	if json.Unmarshal([]byte(host.all()[0]), &forwarded); forwarded.Op != "acquire" ||
+		strings.Join(forwarded.Allow, " ") != "github.com *.example.org" {
 		t.Fatalf("the host got %v", host.all())
 	}
 	if h := c.srv.state.handout("golden-slot1-abc"); h == nil || h.Client != alice || h.Host != host.id {

@@ -27,8 +27,7 @@ final class HeadlessVM: NSObject {
     init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false, sharing: URL? = nil, seed: URL? = nil) throws {
         lock = try BundleLock(bundle: bundle)
         network = userspaceNetwork
-            ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress,
-                                   controlPath: bundle.url.appendingPathComponent("net.sock").path)
+            ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress)
             : nil
         machine = VZVirtualMachine(configuration: try VMConfiguration.make(
             bundle: bundle, config: config, sharing: sharing, network: network?.attachment, seed: seed))
@@ -311,7 +310,7 @@ final class HeadlessVM: NSObject {
             if let failure { throw failure }
             if let state = await state() {
                 if state.contains("network") { return true }
-            } else if (try? await runInGuest(check, output: { _ in })) == 0 {
+            } else if withoutState.contains(GuestAgent.port), (try? await runInGuest(check, output: { _ in })) == 0 {
                 return true  // an agent before 0.4.0, checked through a command
             }
             try await Task.sleep(for: .milliseconds(100))
@@ -323,14 +322,14 @@ final class HeadlessVM: NSObject {
     private var withoutState: Set<UInt32> = []
 
     /// What the agent, or the listener on `port`, says holds in the guest, or nil if it can't
-    /// say: it is unreachable, or older than the `state` request. An agent that old costs a sudo
-    /// and a login shell per check instead.
+    /// say: it is unreachable, takes over 5 s to answer, or is older than the `state` request. An
+    /// agent that old costs a sudo and a login shell per check instead.
     private func state(at port: UInt32 = GuestAgent.port, name: String = "the guest agent") async -> Set<String>? {
         guard !withoutState.contains(port) else { return nil }
         do {
             let lines = try await withAgent(port: port, name: name) { fd in
                 var lines: [String] = []
-                _ = try GuestAgent.askStreaming(GuestAgent.Request(op: "state"), over: fd) { lines.append($0) }
+                _ = try GuestAgent.askStreaming(GuestAgent.Request(op: "state"), over: fd, timeout: 5) { lines.append($0) }
                 return lines
             }
             return Set(lines)

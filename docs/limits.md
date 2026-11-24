@@ -38,6 +38,10 @@
   and IP address. Each starts with its clock behind by the time since `serve` saved
   the slot's state, until macOS corrects it once the guest's network is back: from Apple's time
   servers on NAT, and from paddock-net on the userspace network.
+- Nothing takes back a VM whose holder went away without releasing it, as when a CI job is killed
+  between `paddock acquire` and `paddock release`, or `paddock mcp` gets SIGKILL. Its slot stays
+  handed out until `serve` restarts. `paddock top` shows which VMs are held and by whom, and
+  `paddock release --local <vm>` on the VM's Mac frees one.
 - Clones always have macOS's screen lock on, whatever the golden image says: macOS keeps that
   setting with the machine's identity, which every clone changes, and turning it off takes the
   user's password. With no screen saver and no sleep nothing sets it off, but anything that

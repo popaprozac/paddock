@@ -61,6 +61,22 @@ public enum BundleName {
         }
     }
 
+    /// A fresh 6-hex-digit id, to tell bundles of one source apart.
+    public static func shortID() -> String {
+        UUID().uuidString.prefix(6).lowercased()
+    }
+
+    /// The start of slot `number`'s bundle names for `source`, with a fresh id.
+    public static func slotStem(_ number: Int, of source: String) -> String {
+        "\(source.prefix(40))-slot\(number)-\(shortID())"
+    }
+
+    /// The bundle name for the saved state of the slot whose names start with `stem`, or with
+    /// `saved` false, for one of its clones.
+    public static func slotBundle(of stem: String, saved: Bool) -> String {
+        "\(stem)-\(saved ? "saved" : shortID())"
+    }
+
     /// Whether `name` is one serve gives its slots' bundles for `source`: "<source>-slot<n>-<id>"
     /// and then "-saved" or "-<id>", each id 6 lowercase hex digits, so what a killed serve left
     /// can be told from a VM someone named.

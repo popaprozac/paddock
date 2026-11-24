@@ -166,6 +166,19 @@ import Testing
         #expect(status == 4)
     }
 
+    /// A listener that takes the request and never answers, as a wedged agent would, ends the
+    /// wait at the timeout, so a readiness check can't hang on it.
+    @Test func streamingStopsAtItsTimeout() throws {
+        var fds: [Int32] = [0, 0]
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        defer { close(fds[0]); close(fds[1]) }
+        let started = ContinuousClock.now
+        #expect(throws: PaddockError.self) {
+            try GuestAgent.askStreaming(GuestAgent.Request(op: "state"), over: fds[0], timeout: 1) { _ in }
+        }
+        #expect(ContinuousClock.now - started < .seconds(3))
+    }
+
     @Test func askToRunFailsWhenTheAgentStopsEarly() {
         #expect(throws: PaddockError.self) {
             var fds: [Int32] = [0, 0]

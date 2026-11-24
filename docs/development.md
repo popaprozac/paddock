@@ -79,11 +79,9 @@ scripts/smoke.sh --macos golden --windows windows
   you name. `--macos <image>` adds a macOS image from the paddock home, cloned in, since a macOS
   build needs a password. `--windows <image>` adds a Windows image the same way, since paddock
   can't make one yet; it needs git in the image, for the task.
-- It runs in a paddock home of its own, a folder in `/tmp` with your paddock home's cache linked
-  in, so your images and a `serve` you run are left alone. It isn't in `$TMPDIR`, where the path
-  of a VM's network control socket would be too long. The logs and screenshots go in a folder in
-  `$TMPDIR`. macOS's limit of two macOS VMs at
-  once still counts both.
+- It runs in a paddock home of its own, a folder in `$TMPDIR` with your paddock home's cache
+  linked in, so your images and a `serve` you run are left alone. The logs and screenshots go in
+  another folder there. macOS's limit of two macOS VMs at once still counts both.
 - The desktop builds download their packages each time: about 100 MB for Xfce, and 1 to 1.5 GB
   for GNOME. A run of all four templates and a macOS image took about 10 minutes on a Mac Studio.
 - The Debian check needs this Mac to reach example.com.

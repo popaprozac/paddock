@@ -293,9 +293,11 @@ public enum GuestAgent {
     }
 
     /// Sends `request` over `fd`, passes each `output` line of the answer to `output` and returns
-    /// the `exit` status that ends it. Waits as long as the answer takes.
-    public static func askStreaming(_ request: Request, over fd: Int32, output: (String) -> Void) throws -> Int32 {
-        UnixSocket.configure(fd, readTimeout: nil)
+    /// the `exit` status that ends it. Waits as long as the answer takes, or, with `timeout`, up
+    /// to that many seconds for each line.
+    public static func askStreaming(_ request: Request, over fd: Int32, timeout seconds: Int? = nil,
+                                    output: (String) -> Void) throws -> Int32 {
+        UnixSocket.configure(fd, readTimeout: seconds)
         UnixSocket.writeLine(request.line, to: fd)
         var reader = LineReader(fd: fd)
         while let answer = reader.readLine() {

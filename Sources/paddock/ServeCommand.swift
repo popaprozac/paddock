@@ -84,7 +84,7 @@ final class Slot {
 
     init(number: Int, source: String) {
         self.number = number
-        name = "\(source.prefix(40))-slot\(number)-\(WarmPool.shortID())"
+        name = BundleName.slotStem(number, of: source)
     }
 
     /// What the slot reports: its state, and its VM's name while it has one.
@@ -297,7 +297,7 @@ final class WarmPool {
     /// saves its state.
     private func saveBootedClone(of source: VMBundle, in slot: Slot) async throws {
         let started = ContinuousClock.now
-        let bundle = try home.bundle(named: "\(slot.name)-saved")
+        let bundle = try home.bundle(named: BundleName.slotBundle(of: slot.name, saved: true))
         slot.current = bundle
         let config = try VMClone.clone(source, to: bundle)
         let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
@@ -361,8 +361,9 @@ final class WarmPool {
         }
         if let failure = vm.failure { throw failure }  // it stopped while its clock was set
         vm.onFailure = { [weak self, weak vm] error in
-            // A VM the slot already threw away is no longer its VM, and must not refill it twice.
-            guard let self, let vm, slot.vm === vm else { return }
+            // A VM the slot already threw away is no longer its VM, and must not refill it twice;
+            // nor must one it is throwing away, which stays its VM until it has stopped.
+            guard let self, let vm, slot.vm === vm, slot.warmAddress != nil else { return }
             print("Slot \(slot.number): \(error.message); restoring a fresh clone")
             self.replaceCurrent(of: slot)
         }
@@ -375,7 +376,7 @@ final class WarmPool {
     /// Clones `source` into the slot and starts the clone: from the saved state it keeps when
     /// `restoring`, otherwise with a cold boot under a fresh identity.
     private func startClone(of source: VMBundle, in slot: Slot, restoring: Bool) async throws -> HeadlessVM {
-        let bundle = try home.bundle(named: "\(slot.name)-\(Self.shortID())")
+        let bundle = try home.bundle(named: BundleName.slotBundle(of: slot.name, saved: false))
         slot.current = bundle
         let config = try VMClone.clone(source, to: bundle, keepingSavedState: restoring)
         let vm = try HeadlessVM(bundle: bundle, config: config, userspaceNetwork: userspaceNetwork)
@@ -458,6 +459,10 @@ final class WarmPool {
                 try vm.allow(allow)
             } catch {
                 responder.finish(ServeResponse(error: error.localizedDescription).line)
+                // A list paddock-net didn't answer for in time can still land, so the next client
+                // gets a fresh VM. One it refused left the VM clean, but a fresh one costs only a
+                // restore.
+                replaceCurrent(of: slot)
                 return handOut()
             }
         }
@@ -830,9 +835,5 @@ final class WarmPool {
             }
             Darwin.exit(0)
         }
-    }
-
-    static func shortID() -> String {
-        UUID().uuidString.prefix(6).lowercased()
     }
 }
