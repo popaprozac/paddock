@@ -289,25 +289,27 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "not an enrolled host")
 		return
 	}
-	enrolled := s.state.member(hostKind, host)
-	if enrolled == nil { // removed since it authenticated
-		conn.Close(websocket.StatusPolicyViolation, "this host was removed from the control plane")
+	// Welcome before any request can be forwarded: serve reads anything else first as a refusal.
+	if err := wsjson.Write(r.Context(), conn, message{Type: "welcome", Host: host}); err != nil {
 		return
 	}
 	l := &link{conn: conn, remote: r.RemoteAddr, connected: s.now(), lastSeen: s.now()}
+	defer l.failPending() // registered, it may be sent requests, which must end with it
 	if previous := s.register(host, l); previous != nil {
 		// Close waits for the other end's answer, so not on this link's way in.
 		go previous.conn.Close(websocket.StatusGoingAway, "replaced by a newer link from the same host")
 	}
+	// After registering: a removal before then found no link to close.
+	enrolled := s.state.member(hostKind, host)
+	if enrolled == nil {
+		s.unregister(host, l, "removed from the control plane")
+		conn.Close(websocket.StatusPolicyViolation, "this host was removed from the control plane")
+		return
+	}
 	s.markSeen(hostKind, host)
 	s.audit.record(auditEvent{Event: "link-opened", Host: host, Name: enrolled.Name, Remote: r.RemoteAddr})
 	log.Printf("%s (%s) connected from %s", enrolled.Name, host, r.RemoteAddr)
-	if err := wsjson.Write(r.Context(), conn, message{Type: "welcome", Host: host}); err != nil {
-		s.unregister(host, l, "write failed")
-		return
-	}
 
-	defer l.failPending()
 	for {
 		// A deadline, not a ping: a ping's answer is only read here, and this loop waits while a
 		// client is slow to take its answers, so a ping would close the link for every client.

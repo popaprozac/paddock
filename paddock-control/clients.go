@@ -48,15 +48,16 @@ func (s *server) clientLink(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "not an enrolled client")
 		return
 	}
+	l := &clientLink{conn: conn, remote: r.RemoteAddr, connected: s.now(), lastSeen: s.now()}
+	s.registerClient(client, l)
+	defer s.unregisterClient(client, l)
+	// After registering: a removal before then found no link to close.
 	member := s.state.member(clientKind, client)
-	if member == nil { // removed since it authenticated
+	if member == nil {
 		conn.Close(websocket.StatusPolicyViolation, "this client was removed from the control plane")
 		return
 	}
-	l := &clientLink{conn: conn, remote: r.RemoteAddr, connected: s.now(), lastSeen: s.now()}
-	s.registerClient(client, l)
 	s.markSeen(clientKind, client)
-	defer s.unregisterClient(client, l)
 	s.audit.record(auditEvent{Event: "client-link-opened", Client: client, Name: member.Name, Remote: r.RemoteAddr})
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
