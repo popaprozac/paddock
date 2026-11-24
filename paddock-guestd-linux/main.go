@@ -15,6 +15,8 @@ import (
 // come from this one.
 const hostCID = 2
 
+func fromHost(cid uint32) bool { return cid == hostCID }
+
 func main() {
 	log.SetFlags(0)
 	// How the axtree request reads the desktop: this binary again, as the workload account.
@@ -43,7 +45,7 @@ func main() {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if cid != hostCID {
+		if !fromHost(cid) {
 			log.Printf("paddock-guestd: refused a connection from vsock CID %d", cid)
 			c.Close()
 			continue

@@ -26,6 +26,8 @@ const (
 	hostCID = 2
 )
 
+func fromHost(cid uint32) bool { return cid == hostCID }
+
 // idle is how long a client may send nothing before the agent gives up on it, as the other agents do.
 var idle = 5 * time.Second
 
@@ -81,7 +83,7 @@ func listenAndServe() error {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if cid != hostCID {
+		if !fromHost(cid) {
 			log.Printf("paddock-guestd: refused a connection from vsock CID %d", cid)
 			c.Close()
 			continue
