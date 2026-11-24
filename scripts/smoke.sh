@@ -52,11 +52,7 @@ else
   }
 fi
 
-# The home is short and outside $TMPDIR: there, the path of a VM's paddock-net control socket, in its
-# bundle, would pass the 103 bytes a socket path can have, and its slot couldn't start.
-# shortcut: a long PADDOCK_HOME still hits that limit; paddock-net taking its control socket
-# without a path would lift it.
-home=$(mktemp -d /tmp/paddock-smoke.XXXXXX)
+home=$(mktemp -d -t paddock-smoke-home)
 mkdir -p "$home/vms" "$user_home/cache"
 ln -s "$user_home/cache" "$home/cache"
 export PADDOCK_HOME=$home PADDOCK_LOCAL=1

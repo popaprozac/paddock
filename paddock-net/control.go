@@ -3,49 +3,40 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"io"
 	"net"
-	"os"
 	"strings"
 	"sync/atomic"
-	"syscall"
-	"time"
 )
 
-// serveControl listens at path, a Unix socket only this user can open, for new lists from
-// paddock. Each connection carries one line of JSON, {"allow":["github.com","*.example.org"]},
-// and gets {} back once the list is in force, or {"error":"..."} with the old list kept.
-// Connections already open stay open; the new list applies to what the guest does next.
-func serveControl(path string, current *atomic.Pointer[policy], logf func(string, ...any)) error {
-	_ = os.Remove(path) // left by a paddock-net that was killed
-	old := syscall.Umask(0o177)
-	listener, err := net.Listen("unix", path)
-	syscall.Umask(old)
-	if err != nil {
-		return err
-	}
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go handleControl(conn, current, logf)
+// serveControl reads new lists from paddock on conn until paddock closes it. Each is one line of
+// JSON, {"allow":["github.com","*.example.org"]}, and gets {} back once it is in force, or
+// {"error":"..."} with the old list kept. Connections the guest already has open stay open; the
+// new list applies to what it does next.
+func serveControl(conn net.Conn, current *atomic.Pointer[policy], logf func(string, ...any)) {
+	defer conn.Close()
+	lines := bufio.NewReaderSize(conn, 64<<10)
+	for {
+		// A line over 64 KB ends it too: the rest of it would be read as the next list. paddock
+		// sends none that long.
+		line, err := lines.ReadSlice('\n')
+		if err != nil {
+			return
 		}
-	}()
-	return nil
+		if _, err := conn.Write(append(takeList(line, current, logf), '\n')); err != nil {
+			return
+		}
+	}
 }
 
-func handleControl(conn net.Conn, current *atomic.Pointer[policy], logf func(string, ...any)) {
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+// takeList puts the list in line in force and answers {}, or keeps the old one and answers
+// {"error":"..."}.
+func takeList(line []byte, current *atomic.Pointer[policy], logf func(string, ...any)) []byte {
 	var answer struct {
 		Error string `json:"error,omitempty"`
 	}
 	var request struct {
 		Allow []string `json:"allow"`
 	}
-	line, _ := bufio.NewReader(io.LimitReader(conn, 64<<10)).ReadBytes('\n')
 	if err := json.Unmarshal(line, &request); err != nil {
 		answer.Error = "unreadable request: " + err.Error()
 	} else if p, err := newPolicy(request.Allow); err != nil {
@@ -59,5 +50,5 @@ func handleControl(conn net.Conn, current *atomic.Pointer[policy], logf func(str
 		logf("now allowing %s", list)
 	}
 	reply, _ := json.Marshal(answer)
-	_, _ = conn.Write(append(reply, '\n'))
+	return reply
 }

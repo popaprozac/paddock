@@ -27,8 +27,7 @@ final class HeadlessVM: NSObject {
     init(bundle: VMBundle, config: VMConfig, userspaceNetwork: Bool = false, sharing: URL? = nil, seed: URL? = nil) throws {
         lock = try BundleLock(bundle: bundle)
         network = userspaceNetwork
-            ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress,
-                                   controlPath: bundle.url.appendingPathComponent("net.sock").path)
+            ? try UserspaceNetwork(helper: Self.helperURL, macAddress: config.macAddress)
             : nil
         machine = VZVirtualMachine(configuration: try VMConfiguration.make(
             bundle: bundle, config: config, sharing: sharing, network: network?.attachment, seed: seed))

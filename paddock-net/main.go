@@ -6,8 +6,9 @@
 // refuses the rest, and TCP to ports 80 and 443 is carried out through the host's own sockets to
 // the name the guest asks for, if it is on the list. Everything else the guest sends goes
 // nowhere. Nothing on the host's networks can open a connection to the guest. The list starts
-// empty, and paddock replaces it over the -control socket while the VM runs. It logs each
-// decision to stderr and exits when the paddock process that started it does.
+// empty, and paddock replaces it while the VM runs over stdout, a stream socket whose other end
+// only paddock holds. It logs each decision to stderr and exits when the paddock process that
+// started it does.
 package main
 
 import (
@@ -26,7 +27,6 @@ import (
 
 func main() {
 	mac := flag.String("mac", "", "the guest's MAC address, which DHCP gives "+guestIP)
-	control := flag.String("control", "", "a Unix socket path to listen on for new lists from paddock")
 	flag.Parse()
 	if _, err := net.ParseMAC(*mac); err != nil {
 		stdlog.Fatalf("paddock-net: -mac: %v", err)
@@ -39,11 +39,12 @@ func main() {
 	if err != nil {
 		stdlog.Fatalf("paddock-net: %v", err)
 	}
-	if *control != "" {
-		if err := serveControl(*control, current, logf); err != nil {
-			stdlog.Fatalf("paddock-net: -control: %v", err)
-		}
+	control, err := net.FileConn(os.Stdout)
+	if err != nil {
+		stdlog.Fatalf("paddock-net: stdout must be paddock's control socket: %v", err)
 	}
+	os.Stdout = os.Stderr // nothing else may write into the control socket
+	go serveControl(control, current, logf)
 	conn, err := net.FileConn(os.NewFile(0, "vm"))
 	if err != nil {
 		stdlog.Fatalf("paddock-net: stdin must be the VM's datagram socket: %v", err)

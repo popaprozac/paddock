@@ -5,8 +5,8 @@ NAT. It gives the guest 192.168.127.2 by DHCP, on a lease that never expires, wi
 192.168.127.1 as its router and DNS server, and lets the guest reach only the names on its list.
 A warm VM's list is empty.
 `paddock acquire --allow github.com,*.githubusercontent.com` puts its list in force before
-`serve` hands the VM out, through `net.sock`, a control socket paddock-net creates in the VM's
-bundle that only you can open; a VM acquired without `--allow` reaches nothing. Releasing the VM
+`serve` hands the VM out, over paddock-net's stdout, a socket only `serve` holds the other end of;
+a VM acquired without `--allow` reaches nothing. Releasing the VM
 deletes it with its network. `bench --userspace` passes no list.
 
 | What the guest sends | What paddock-net does |

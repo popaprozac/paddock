@@ -131,7 +131,6 @@ Restored clones share one identity, so only one can run at a time.
                "rosetta": true for a Linux VM with Rosetta,
                and "desktop": true for one with a desktop
   state.vzvmsave  optional saved memory and device state of a paused VM
-  net.sock     paddock-net's control socket, while the VM runs on the userspace network
   console.log  a Linux guest's console, written afresh each time it starts
 ```
 
