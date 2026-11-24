@@ -2,8 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fake is an accessible object in memory, as AT-SPI would describe it.
@@ -116,6 +120,34 @@ func TestFocusedAppIsTheOneWithTheActiveWindow(t *testing.T) {
 	if got := focusedApp([]element{panel}); got != nil {
 		t.Fatalf("got %v with no active window", got)
 	}
+}
+
+// A bus that takes the connection and never answers fails the request once treeTimeout is up.
+func TestTreeGivesUpOnABusThatNeverAnswers(t *testing.T) {
+	defer func(was time.Duration) { treeTimeout = was }(treeTimeout)
+	treeTimeout = 200 * time.Millisecond
+	dir, err := os.MkdirTemp("", "ax") // short: a socket's path holds at most 103 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	listener, err := net.Listen("unix", filepath.Join(dir, "bus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	held := make(chan net.Conn, 1)
+	go func() {
+		if c, err := listener.Accept(); err == nil {
+			held <- c
+		}
+	}()
+	start := time.Now()
+	_, err = treeOn("unix:path=" + filepath.Join(dir, "bus"))
+	if err == nil || !strings.Contains(err.Error(), "took over 200ms") || time.Since(start) > 2*time.Second {
+		t.Fatalf("got %v after %v, want the time it took over", err, time.Since(start))
+	}
+	(<-held).Close()
 }
 
 func TestUnknownRoleIsSaidSo(t *testing.T) {

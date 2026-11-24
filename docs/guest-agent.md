@@ -108,7 +108,8 @@ systemd runs the agent as root and starts it again if it exits. It logs to the j
   its description and identifier when it has them, its frame as x, y, width and height in screen
   pixels from the top left, which it leaves out for an element off screen, whether it is enabled
   and focused, and its children, with macOS's limits. A call an app takes over 0.5 s to answer is
-  left out. Under Wayland, apps put every frame at 0, 0 with the right size, since they don't know
+  left out, and `axtree` fails if the whole tree takes over 30 s; an agent before 0.1.2 waited as
+  long as the desktop's bus did. Under Wayland, apps put every frame at 0, 0 with the right size, since they don't know
   where their windows are.
 - It doesn't copy per-host preferences, which are macOS's.
 

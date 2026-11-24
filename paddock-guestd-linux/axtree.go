@@ -35,6 +35,11 @@ const (
 	axMaxText  = 500
 )
 
+// treeTimeout is how long reading a tree may take in all, from reaching the bus to its last
+// call: a bus that never answers, or an app that answers each call just inside callTimeout,
+// would otherwise hold the request as long as it liked.
+var treeTimeout = 30 * time.Second
+
 // AT-SPI's state bits (atspi-constants.h), in the two words GetState returns.
 const (
 	stateActive  = 1
@@ -140,18 +145,37 @@ func focusedTree() (axNode, error) {
 	if len(buses) == 0 {
 		return axNode{}, errors.New("the desktop has no AT-SPI bus: install at-spi2-core in the golden image")
 	}
-	conn, err := dbus.Connect("unix:path=" + buses[0])
+	return treeOn("unix:path=" + buses[0])
+}
+
+// treeOn reads the tree from the AT-SPI bus at `address`, within treeTimeout.
+func treeOn(address string) (axNode, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), treeTimeout)
+	defer cancel()
+	tooLong := fmt.Errorf("the desktop took over %v to describe the app in front", treeTimeout)
+	// The connection closes when ctx ends, which ends whatever it is waiting for.
+	conn, err := dbus.Connect(address, dbus.WithContext(ctx))
+	if err != nil && ctx.Err() != nil {
+		return axNode{}, tooLong
+	}
 	if err != nil {
 		return axNode{}, fmt.Errorf("can't reach the desktop's AT-SPI bus: %w", err)
 	}
 	defer conn.Close()
 	desktop := atspiElement{conn: conn, dest: "org.a11y.atspi.Registry", path: "/org/a11y/atspi/accessible/root"}
 	app := focusedApp(desktop.children())
+	if ctx.Err() != nil {
+		return axNode{}, tooLong
+	}
 	if app == nil {
 		return axNode{}, errors.New("no app on the desktop has an active window")
 	}
 	budget := axMaxNodes
-	return describe(app, 0, &budget), nil
+	tree := describe(app, 0, &budget)
+	if ctx.Err() != nil {
+		return axNode{}, tooLong
+	}
+	return tree, nil
 }
 
 // atspiElement is one accessible object on the AT-SPI bus. A call that fails or takes longer than
