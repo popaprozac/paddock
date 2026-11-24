@@ -112,8 +112,8 @@ check() {
     sleep 0.5
   done
   step=acquire
-  acquired=$(limit 900 "$paddock" acquire $acquire_flags 2>"$dir/acquire.err") || return 1
-  vm=$(sed -nE "s/^Assigned '([^']+)'.*/\1/p" <<<"$acquired")
+  acquired=$(limit 900 "$paddock" acquire --json $acquire_flags 2>"$dir/acquire.err") || return 1
+  vm=$(plutil -extract vm raw -o - - <<<"$acquired")
   [[ -n $vm ]] || return 1
   boot=$(sed -nE 's/^  slot 1 booted at .* in (.*), saved .*/\1/p' "$dir/serve.log" | head -1)
   warm=$(sed -nE "s/^Slot 1 warm: '[^']*' at [^,]*, (.*)/\1/p" "$dir/serve.log" | head -1)
