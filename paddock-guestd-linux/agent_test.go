@@ -174,6 +174,18 @@ func TestPutSaysHowFarAShortUploadGot(t *testing.T) {
 	}
 }
 
+// A store that fails stops taking bytes, which is not the client's upload falling short.
+func TestPutSaysWhenTheGuestCantStoreTheFile(t *testing.T) {
+	a := testAgent(t)
+	if err := os.WriteFile(a.files, nil, 0o600); err != nil { // a file where the folder goes
+		t.Fatal(err)
+	}
+	got := string(ask(t, a, `{"op":"put","name":"a","size":1048576}`, make([]byte, 1<<20), false))
+	if want := "{\"error\":\"can't store 'a' in the guest\"}\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestPutGivesUpOnAClientThatStopsSending(t *testing.T) {
 	defer func(was time.Duration) { idle = was }(idle)
 	idle = 100 * time.Millisecond

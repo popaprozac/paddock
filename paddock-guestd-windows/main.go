@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	version    = "0.5.0"
+	version    = "0.5.1"
 	port       = 52525
 	maxRequest = 64 * 1024
 	// The host's vsock address. viosock sets the peer's CID, so only the host's connections come
