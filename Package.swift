@@ -31,5 +31,6 @@ let package = Package(
         .executableTarget(name: "paddock-guestd", dependencies: ["PaddockCore"]),
         .executableTarget(name: "paddock-session", dependencies: ["PaddockCore"]),
         .testTarget(name: "PaddockCoreTests", dependencies: ["PaddockCore", .product(name: "Yams", package: "Yams")]),
+        .testTarget(name: "PaddockTests", dependencies: ["paddock"]),
     ]
 )
