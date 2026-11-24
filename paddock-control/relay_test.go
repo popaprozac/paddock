@@ -59,6 +59,7 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 	if err != nil {
 		t.Fatal(err)
 	}
+	conn.SetReadLimit(1 << 20) // serve's, in ControlClient.swift
 	h := &fakeHost{id: enrolled.Host, conn: conn}
 	t.Cleanup(func() { conn.CloseNow() })
 	busyLine, refusedLine, acquired := serveLine(t, "busy"), serveLine(t, "refused"), serveFields(t, "acquired")
@@ -219,19 +220,25 @@ func (c *testControl) newClient(t *testing.T) (string, *websocket.Conn) {
 // ask sends a request on a client link and returns its answers up to the one marked done.
 func ask(t *testing.T, conn *websocket.Conn, request message) []message {
 	t.Helper()
+	request.Type = "request"
+	data, _ := marshal(request) // as paddock's Swift client encodes it: no HTML escaping
+	return askEncoded(t, conn, request.ID, data)
+}
+
+func askEncoded(t *testing.T, conn *websocket.Conn, id string, request []byte) []message {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	request.Type = "request"
-	if err := wsjson.Write(ctx, conn, request); err != nil {
+	if err := conn.Write(ctx, websocket.MessageText, request); err != nil {
 		t.Fatal(err)
 	}
 	var answers []message
 	for {
 		var m message
 		if err := wsjson.Read(ctx, conn, &m); err != nil {
-			t.Fatalf("waiting for %s: %v; so far %+v", request.ID, err, answers)
+			t.Fatalf("waiting for %s: %v; so far %+v", id, err, answers)
 		}
-		if m.ID != request.ID {
+		if m.ID != id {
 			continue
 		}
 		answers = append(answers, m)
@@ -721,5 +728,40 @@ func TestAReleaseTheMacDidntGetIsSentAgainWhenItReports(t *testing.T) {
 	audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
 	if !strings.Contains(string(audited), `"event":"released","host":"`+enrolled.Host+`","client":"client-gone","vm":"`+vm+`","reason":"client removed"`) {
 		t.Fatalf("audit log:\n%s", audited)
+	}
+}
+
+// A command full of '<' reaches the Mac: HTML-escaped, it grew past what serve reads in one
+// message, and the Mac's link closed with every request on it.
+func TestACommandFullOfAngleBracketsReachesTheMac(t *testing.T) {
+	c := newTestControl(t)
+	c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	exec, _ := marshal(map[string]string{"op": "exec", "vm": "golden-slot1-abc", "command": strings.Repeat("<", 200_000)})
+	if got := ask(t, conn, message{ID: "2", Op: "exec", Serve: string(exec)}); got[len(got)-1].Line != `{"exit":0}` {
+		t.Fatalf("exec answers %+v", got)
+	}
+}
+
+// A request over what serve reads in one message is refused as that request's error; the Mac's
+// link stays open for the rest.
+func TestARequestTooBigForTheMacIsRefusedAndTheMacStaysOnline(t *testing.T) {
+	c := newTestControl(t)
+	c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	// U+2028 is three bytes as it comes, sent as is, and six once escaped on its way to the Mac,
+	// as JSON encoders do: 900 KB from the client is 2 MB for the Mac.
+	exec := `{"op":"exec","vm":"golden-slot1-abc","command":"` + strings.Repeat("\u2028", 300_000) + `"}`
+	request := `{"type":"request","id":"2","op":"exec","serve":"` + strings.ReplaceAll(exec, `"`, `\"`) + `"}`
+	if got := askEncoded(t, conn, "2", []byte(request)); !strings.Contains(got[len(got)-1].Error, "too big: it's over 1 MiB") {
+		t.Fatalf("too big an exec: %+v", got[len(got)-1].Error)
+	}
+	small := `{"op":"exec","vm":"golden-slot1-abc","command":"uname"}`
+	if got := ask(t, conn, message{ID: "3", Op: "exec", Serve: small}); got[len(got)-1].Line != `{"exit":0}` {
+		t.Fatalf("the next exec: %+v", got)
 	}
 }

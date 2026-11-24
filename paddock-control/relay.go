@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -191,8 +193,28 @@ func (r serveRequest) str(key string) string {
 }
 
 func (r serveRequest) line() string {
-	data, _ := json.Marshal(r)
+	data, _ := marshal(r)
 	return string(data)
+}
+
+// marshal is json.Marshal without HTML escaping, which made each '<', '>' or '&' six bytes, and
+// seven once the line was quoted in a message: a command full of them outgrew the Mac's limit.
+func marshal(v any) ([]byte, error) {
+	var b bytes.Buffer
+	encoder := json.NewEncoder(&b)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
+// sendFailed is why a request for vm didn't reach the VM's Mac.
+func sendFailed(vm string, err error) error {
+	if errors.Is(err, errTooBig) {
+		return fmt.Errorf("the request is too big: %w", err)
+	}
+	return fmt.Errorf("the Mac running '%s' isn't reachable: %v", vm, err)
 }
 
 // relayAcquire places an acquire on a host with a warm slot of the image, waiting its turn if
@@ -331,7 +353,7 @@ func (s *server) relayVM(ctx context.Context, client string, l *clientLink, requ
 	s.audit.record(auditEvent{Event: "request", Client: client, Host: h.Host, VM: vm, Op: op})
 	answers, cancel, err := s.forward(ctx, h.Host, asked.line())
 	if err != nil {
-		fail(fmt.Errorf("the Mac running '%s' isn't reachable: %v", vm, err))
+		fail(sendFailed(vm, err))
 		return
 	}
 	defer cancel()
@@ -405,7 +427,7 @@ func (s *server) relayTask(ctx context.Context, client string, l *clientLink, re
 	s.audit.record(auditEvent{Event: "request", Client: client, Host: h.Host, VM: h.VM, Op: "task"})
 	f, err := s.send(ctx, h.Host, asked.line())
 	if err != nil {
-		fail(fmt.Errorf("the Mac running '%s' isn't reachable: %v", h.VM, err))
+		fail(sendFailed(h.VM, err))
 		return
 	}
 	defer f.cancel()
@@ -459,7 +481,7 @@ func (s *server) relayStream(ctx context.Context, client string, l *clientLink, 
 	s.audit.record(auditEvent{Event: "request", Client: client, Host: h.Host, VM: h.VM, Op: request.Op})
 	f, err := s.send(ctx, h.Host, asked.line())
 	if err != nil {
-		fail(fmt.Errorf("the Mac running '%s' isn't reachable: %v", h.VM, err))
+		fail(sendFailed(h.VM, err))
 		return
 	}
 	defer f.cancel()
