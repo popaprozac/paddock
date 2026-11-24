@@ -376,29 +376,29 @@ enum UnixSocket {
 /// A Responder whose answers come out the other end of a socket pair: for a request that didn't
 /// arrive on a socket, such as one from the control plane, handed to a handler written for one.
 public enum ResponderPipe {
-    /// A responder to give the handler, and the lines it sends, ending once it finishes.
+    /// A responder to give the handler, and the lines it sends, ending once it finishes. A line is
+    /// read only when the stream is asked for the next one, so a handler sending faster than the
+    /// lines are taken, as exec's output does to a slow link to the control plane, waits once
+    /// 1 MiB is waiting, instead of serve holding everything it sends. Handlers on serve's main
+    /// actor send far less, so only one sending from a thread of its own ever waits.
     public static func make() throws -> (Responder, AsyncStream<String>) {
-        let (responder, lines, input) = try makeDuplex()
-        input.drop()
-        return (responder, lines)
+        let (handlerEnd, readerEnd) = try socketPair()
+        var size: Int32 = 1 << 20
+        setsockopt(handlerEnd, SOL_SOCKET, SO_SNDBUF, &size, socklen_t(MemoryLayout<Int32>.size))
+        let reader = PipeReader(fd: readerEnd)
+        return (Responder(fd: handlerEnd), AsyncStream(unfolding: { await reader.next() }))
     }
 
     /// As `make`, plus a way to send the handler bytes it reads with `Responder.receive`, as a
     /// client on a socket sends after its request line: for requests whose client keeps sending
     /// while they answer, such as a view's input.
     public static func makeDuplex() throws -> (Responder, AsyncStream<String>, Input) {
-        var ends: [Int32] = [0, 0]
-        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &ends) == 0 else {
-            throw PaddockError("can't make a socket pair: \(String(cString: strerror(errno)))")
-        }
-        UnixSocket.configure(ends[0], readTimeout: nil)
-        UnixSocket.configure(ends[1], readTimeout: nil)
-        let reader = ends[1]
+        let (handlerEnd, reader) = try socketPair()
         // Its own descriptor, so the reader closing its one when the handler finishes can't hand a
         // later write to whatever else gets that number.
         let writer = dup(reader)
         guard writer >= 0 else {
-            close(ends[0])
+            close(handlerEnd)
             close(reader)
             throw PaddockError("can't make a socket pair: \(String(cString: strerror(errno)))")
         }
@@ -418,7 +418,7 @@ public enum ResponderPipe {
             close(reader)
             continuation.finish()
         }
-        return (Responder(fd: ends[0]), lines, Input(fd: writer))
+        return (Responder(fd: handlerEnd), lines, Input(fd: writer))
     }
 
     /// The client's end of a duplex pipe. Sends never block the caller: they're written in order on
@@ -449,15 +449,49 @@ public enum ResponderPipe {
                 close(fd)
             }
         }
+    }
 
-        /// Gives up this end without ending the handler's input, for a request whose client sends
-        /// nothing more: `clientHungUp` stays false, as it did before pipes had an input.
-        func drop() {
-            queue.async { [self] in
-                guard !closed else { return }
-                closed = true
-                close(fd)
+    /// A connected pair whose closed peer can't kill the process with SIGPIPE.
+    private static func socketPair() throws -> (Int32, Int32) {
+        var ends: [Int32] = [0, 0]
+        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &ends) == 0 else {
+            throw PaddockError("can't make a socket pair: \(String(cString: strerror(errno)))")
+        }
+        UnixSocket.configure(ends[0], readTimeout: nil)
+        UnixSocket.configure(ends[1], readTimeout: nil)
+        return (ends[0], ends[1])
+    }
+
+    /// Reads a plain pipe's lines one at a time, as they're asked for, on a queue of its own so
+    /// the blocking read never holds the asking task's thread.
+    private final class PipeReader: @unchecked Sendable {
+        private let queue = DispatchQueue(label: "paddock.responder-pipe.reader")
+        private var reader: LineReader  // only on queue
+        private var closed = false  // only on queue
+
+        init(fd: Int32) {
+            reader = LineReader(fd: fd)
+        }
+
+        /// The next line, or nil once the handler has finished.
+        func next() async -> String? {
+            await withCheckedContinuation { continuation in
+                queue.async { [self] in
+                    guard !closed else { return continuation.resume(returning: nil) }
+                    // No limit: serve's answers can be longer than an agent's.
+                    let line = reader.readLine(limit: .max)
+                    if line == nil {
+                        closed = true
+                        close(reader.fd)
+                    }
+                    continuation.resume(returning: line)
+                }
             }
+        }
+
+        /// A stream dropped before its end lets go of the handler, whose sends then fail.
+        deinit {
+            if !closed { close(reader.fd) }
         }
     }
 }

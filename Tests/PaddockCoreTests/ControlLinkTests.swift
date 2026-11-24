@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import Testing
 @testable import PaddockCore
 
@@ -166,5 +167,25 @@ import Testing
         var got: [String] = []
         for await line in lines { got.append(line) }
         #expect(got == ["only"])
+    }
+
+    /// A handler sending faster than its lines are taken waits once about 1 MiB is waiting, as
+    /// a pool exec of `yes` to a slow client must, instead of the pipe holding all of it.
+    @Test func makesAHandlerWaitForItsReader() async throws {
+        let (responder, lines) = try ResponderPipe.make()
+        let sent = OSAllocatedUnfairLock(initialState: 0)
+        let line = String(repeating: "y", count: 1023)  // 1 KiB with its newline
+        Thread.detachNewThread {
+            for _ in 0..<10_000 {
+                responder.send(line)
+                sent.withLock { $0 += 1 }
+            }
+            responder.finish()
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(sent.withLock { $0 } < 1_100)
+        var count = 0
+        for await _ in lines { count += 1 }
+        #expect(count == 10_000)
     }
 }
