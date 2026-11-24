@@ -322,18 +322,18 @@ func (s *server) markHost(host string, change func(*link)) {
 }
 
 // markAssigned marks the slot that held vm, or failing that the first warm one, as handed out;
-// the caller holds l.mu.
+// the caller holds l.mu. A report sent after the hand-out names vm's slot assigned already, and
+// another warm slot is still free.
 func (l *link) markAssigned(vm string) {
 	first := -1
 	for i, slot := range l.slots {
-		if slot.State != "warm" {
-			continue
-		}
 		if slot.VM == vm {
-			l.slots[i].State = "assigned"
+			if slot.State == "warm" {
+				l.slots[i].State = "assigned"
+			}
 			return
 		}
-		if first < 0 {
+		if first < 0 && slot.State == "warm" {
 			first = i
 		}
 	}

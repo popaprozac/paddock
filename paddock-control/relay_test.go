@@ -811,3 +811,17 @@ func TestAVMHandedOutAlreadyIsntHandedOutAgain(t *testing.T) {
 		t.Fatalf("the hand-out changed: %+v", h)
 	}
 }
+
+// The Mac's report may say the VM is handed out before its acquire's answer comes back; its other
+// warm slot stays free.
+func TestAHandOutTheMacReportedAlreadyLeavesTheOtherSlotsWarm(t *testing.T) {
+	l := &link{slots: []slot{{Number: 1, VM: "x", State: "assigned"}, {Number: 2, VM: "y", State: "warm"}}}
+	l.markAssigned("x")
+	if l.slots[1].State != "warm" {
+		t.Fatalf("slots %+v", l.slots)
+	}
+	l.markAssigned("y")
+	if l.slots[1].State != "assigned" {
+		t.Fatalf("slots %+v", l.slots)
+	}
+}
