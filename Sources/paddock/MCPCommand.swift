@@ -75,7 +75,8 @@ actor AgentSession {
     private func perform(_ tool: String, _ arguments: Arguments) async throws -> [Tool.Content] {
         switch tool {
         case "acquire":
-            return try await acquire(allow: arguments.strings("allow"))
+            let image = try arguments.string("image", default: "")
+            return try await acquire(allow: arguments.strings("allow"), image: image.isEmpty ? nil : image)
         case "release":
             let vm = try heldVM().vm
             // Forgotten first: a VM that's gone, as after serve restarted, can't be released, and
@@ -129,14 +130,14 @@ actor AgentSession {
         }
     }
 
-    private func acquire(allow: [String]?) async throws -> [Tool.Content] {
+    private func acquire(allow: [String]?, image: String?) async throws -> [Tool.Content] {
         if let vm = held?.vm {
             throw PaddockError("this session already holds '\(vm)'; release it first")
         }
         guard !acquiring else { throw PaddockError("acquire is already waiting for a VM") }
         acquiring = true
         defer { acquiring = false }
-        let response = try await blocking { try ServeClient.send(ServeRequest(op: "acquire", allow: allow)) }
+        let response = try await blocking { try ServeClient.send(ServeRequest(op: "acquire", allow: allow), image: image) }
         guard let vm = response.vm else { throw PaddockError("paddock serve handed out no VM") }
         // From serve's answer: the VM's files are on whichever Mac the pool put it on.
         guard let os = response.os, let hasScreen = response.screen, let width = response.width, let height = response.height
@@ -222,12 +223,17 @@ actor AgentSession {
 
     static let tools: [Tool] = [
         Tool(name: "acquire", description: """
-            Take a fresh VM, macOS or Linux. Call this first; a session holds one VM at a time. With a \
-            paddock serve on its userspace network, the VM reaches only the host names in allow, \
-            and nothing without it.
+            Take a fresh VM: macOS, Linux or Windows. Call this first; a session holds one VM at a \
+            time. In a pool that serves several golden images, image picks one. With a paddock \
+            serve on its userspace network, the VM reaches only the host names in allow, and \
+            nothing without it.
             """,
-             inputSchema: schema(["allow": ["type": "array", "items": ["type": "string"],
-                                            "description": "Host names the VM may reach, such as github.com or *.example.com."]])),
+             inputSchema: schema([
+                 "image": ["type": "string",
+                           "description": "In a pool of several images, the golden image to clone, such as golden or ubuntu-desktop."],
+                 "allow": ["type": "array", "items": ["type": "string"],
+                           "description": "Host names the VM may reach, such as github.com or *.example.com."],
+             ])),
         Tool(name: "screenshot", description: "See the VM's screen, as a PNG whose pixels are the coordinates click and scroll take.",
              inputSchema: schema([:]), annotations: .init(readOnlyHint: true)),
         Tool(name: "accessibility_tree", description: """
@@ -255,7 +261,7 @@ actor AgentSession {
             cmd+s, cmd+shift+z, return or escape. Modifiers are cmd, ctrl, opt and shift; keys are \
             characters, plus for +, or return, tab, space, delete, forwarddelete, escape, left, \
             right, up, down, home, end, pageup, pagedown and f1 to f12. In a Linux VM, cmd is the \
-            Super key, so shortcuts there use ctrl, as ctrl+s.
+            Super key, and in a Windows VM the Windows key, so shortcuts there use ctrl, as ctrl+s.
             """,
              inputSchema: schema(["keys": ["type": "array", "items": ["type": "string"]]], required: ["keys"])),
         Tool(name: "scroll", description: "Scroll the content at a point of the screenshot.",
@@ -266,8 +272,9 @@ actor AgentSession {
                  "lines": ["type": "integer", "description": "About how many lines, 1 to 1,000; defaults to 5."],
              ], required: ["x", "y", "direction"])),
         Tool(name: "run_command", description: """
-            Run a shell command in the VM, in a login shell as its user in their home folder, \
-            and get its output and exit status. Long output is cut to its end. A command still \
+            Run a shell command in the VM as its user, in their home folder: in a login shell on \
+            macOS and Linux, in cmd.exe as an administrator on Windows. Get its output and exit \
+            status. Long output is cut to its end. A command still \
             running after timeout seconds returns what it printed so far and goes on running.
             """,
              inputSchema: schema([
