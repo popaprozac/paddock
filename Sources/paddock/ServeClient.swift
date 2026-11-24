@@ -102,7 +102,8 @@ struct Acquire: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Take the warm VM from paddock serve, waiting while the slot fills.",
         discussion: """
-            Prints the VM's name and address. Hand it back with 'paddock release <vm>'. With \
+            Prints the VM's name and address, or with --json serve's whole answer, for scripts. \
+            Hand it back with 'paddock release <vm>'. With \
             'serve --userspace', the VM reaches only the names given with --allow, and nothing \
             without it. Logged in to a control plane, it takes a warm VM from any Mac in the pool \
             serving the image, waiting its turn if none is free; --local takes this Mac's.
@@ -114,12 +115,19 @@ struct Acquire: ParsableCommand {
     @Option(help: "In the pool: the golden image the VM is a clone of, when the pool serves more than one.")
     var image: String?
 
+    @Flag(help: "Print serve's answer as one line of JSON: vm, ip, os, screen, width and height, and from the pool host.")
+    var json = false
+
     @OptionGroup var target: Target
 
     func run() throws {
         let names = allow?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let started = ContinuousClock.now
         let response = try ServeClient.send(ServeRequest(op: "acquire", allow: names), image: image, local: target.local)
+        if json {
+            print(response.line)
+            return
+        }
         let waited = ContinuousClock.now - started
         // A VM in the pool has its address on its own Mac's private network, no use from here.
         let place = response.host.map { "on \($0)" } ?? "at \(response.ip ?? "?")"

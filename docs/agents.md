@@ -15,7 +15,7 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 
 | Tool | What it does |
 | --- | --- |
-| `acquire` | Takes a warm VM from `serve`, or from the pool on a Mac logged in to a control plane, waiting while the slots fill. `allow` lists the names it may reach on the userspace network. |
+| `acquire` | Takes a warm VM from `serve`, or from the pool on a Mac logged in to a control plane, waiting while the slots fill. `image` picks the golden image in a pool that serves more than one, as `paddock acquire --image` does. `allow` lists the names it may reach on the userspace network. |
 | `screenshot` | The VM's screen as a PNG. |
 | `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
 | `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). `scroll` moves 1 to 1,000 lines, 5 by default. |
