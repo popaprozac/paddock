@@ -788,3 +788,26 @@ func TestRemovingAMacForgetsItsHandOuts(t *testing.T) {
 		t.Fatalf("no release in the audit log:\n%s", log)
 	}
 }
+
+// A Mac that hands out a VM someone already holds, which serve never does, is refused: taking its
+// word would give the other client's VM to this one.
+func TestAVMHandedOutAlreadyIsntHandedOutAgain(t *testing.T) {
+	c := newTestControl(t)
+	first := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	alice, aliceConn := c.newClient(t)
+	ask(t, aliceConn, message{ID: "1", Op: "acquire"})
+	if h := c.srv.state.handout("golden-slot1-abc"); h == nil || h.Host != first.id {
+		t.Fatalf("hand-out %+v", h)
+	}
+	c.startFakeHost(t, "golden", 1) // names its first VM as the other did
+	c.waitFor(t, "a second Mac", func(list []hostStatus) bool { return len(list) == 2 && list[0].Online && list[1].Online })
+	_, bobConn := c.newClient(t)
+	got := ask(t, bobConn, message{ID: "2", Op: "acquire"})
+	if !strings.Contains(got[len(got)-1].Error, "'golden-slot1-abc', which is handed out already") {
+		t.Fatalf("acquire answers %+v", got)
+	}
+	if h := c.srv.state.handout("golden-slot1-abc"); h == nil || h.Client != alice || h.Host != first.id {
+		t.Fatalf("the hand-out changed: %+v", h)
+	}
+}

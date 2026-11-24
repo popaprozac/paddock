@@ -106,9 +106,9 @@ apart.
   last linked (one enrolled before the control plane kept that counts as never linked until it
   links again), the hashes of unused tokens and which client holds each VM, until the VM's Mac
   stops reporting it; `audit.log`, a JSON line for each token made, Mac or client enrolled, refused
-  or removed, link opened, refused or closed, VM handed out or released, and request, with its
-  client, VM and operation, with no secrets in it; and `admin.sock`. It records at most 10 refused
-  enrollments and links a minute, so a caller trying again and again can't fill the disk.
+  or removed, link opened, refused or closed, VM handed out, released or refused, and request,
+  with its client, VM and operation, with no secrets in it; and `admin.sock`. It records at most 10
+  refused enrollments and links a minute, so a caller trying again and again can't fill the disk.
 - **Everyone logged in sees the pool.** Every client sees every Mac, its slots, what each Mac and
   VM uses, and which client holds each VM, in `paddock hosts` and `paddock top`. The numbers are
   measured on each Mac, never asked of a guest.

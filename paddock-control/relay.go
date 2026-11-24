@@ -257,7 +257,11 @@ func (s *server) relayAcquire(ctx context.Context, client string, l *clientLink,
 		}
 	}
 	vm := got.str("vm")
-	if err := s.state.addHandout(handout{VM: vm, Host: host, Client: client, Image: image, Since: s.now()}); err != nil {
+	if err := s.state.addHandout(handout{VM: vm, Host: host, Client: client, Image: image, Since: s.now()}); errors.Is(err, errHandedOut) {
+		s.audit.record(auditEvent{Event: "acquire-refused", Client: client, Host: host, VM: vm, Reason: "the Mac handed out a VM that " + err.Error()})
+		fail(fmt.Errorf("the Mac handed out '%s', which %v", vm, err))
+		return
+	} else if err != nil {
 		log.Printf("can't save a hand-out: %v", err)
 	}
 	s.audit.record(auditEvent{Event: "handed-out", Client: client, Host: host, VM: vm, Image: image})
