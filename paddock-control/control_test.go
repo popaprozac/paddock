@@ -499,3 +499,45 @@ func TestCloseReasonsReadPlainly(t *testing.T) {
 		t.Errorf("EOF: %q", got)
 	}
 }
+
+// reachedAt is a connection that reached the control plane at an address.
+type reachedAt struct {
+	net.Conn
+	address net.Addr
+}
+
+func (c reachedAt) LocalAddr() net.Addr { return c.address }
+
+// A name or address the machine gains, as a new DHCP lease, is covered within a minute: a Mac
+// trusts the control plane only for the name or address in its URL.
+func TestTheCertificateIsRemadeForANameOrAddressItDoesntCover(t *testing.T) {
+	authority, err := loadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	certs := &certificates{authority: authority}
+	first, err := certs.get(&tls.ClientHelloInfo{ServerName: "localhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	certs.extra = []string{"studio.tail1234.ts.net", "100.64.0.9"}
+	newName := &tls.ClientHelloInfo{ServerName: "studio.tail1234.ts.net"}
+	if again, _ := certs.get(newName); again != first {
+		t.Fatal("remade within a minute of the last one")
+	}
+	certs.made = certs.made.Add(-2 * time.Minute)
+	byName, err := certs.get(newName)
+	if err != nil || byName == first || byName.Leaf.VerifyHostname("studio.tail1234.ts.net") != nil {
+		t.Fatalf("not remade for a new name: %v", err)
+	}
+	certs.extra = append(certs.extra, "100.64.0.10")
+	certs.made = certs.made.Add(-2 * time.Minute)
+	byAddress, _ := certs.get(&tls.ClientHelloInfo{Conn: reachedAt{address: &net.TCPAddr{IP: net.ParseIP("100.64.0.10"), Port: 7443}}})
+	if byAddress == byName || byAddress.Leaf.VerifyHostname("100.64.0.10") != nil {
+		t.Fatal("not remade for a new address")
+	}
+	certs.made = certs.made.Add(-2 * time.Minute)
+	if again, _ := certs.get(newName); again != byAddress {
+		t.Fatal("remade though it covers the name asked for")
+	}
+}

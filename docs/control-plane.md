@@ -66,8 +66,9 @@ apart.
 
 - **Encrypted, to one CA.** TLS 1.3 only. On first run the control plane makes its own CA in its
   state folder; the server certificate is remade every hour, signed by that CA, for this
-  machine's names and addresses and every `-name`, so a new DHCP or Tailscale address doesn't
-  break anything. A join or login token carries the SHA-256 of the CA's public key: a joining Mac
+  machine's names and addresses and every `-name`, and within a minute when a Mac or client asks
+  for a name or address it doesn't cover, so a new DHCP or Tailscale address works without a
+  restart. A join or login token carries the SHA-256 of the CA's public key: a joining Mac
   or a logging-in client trusts that CA and no other, and only for the host in its URL. A
   certificate that doesn't check out stops the link, with the `-name` to add if the control plane
   didn't know that name.
