@@ -114,9 +114,16 @@ type handout struct {
 	Releasing string `json:"releasing,omitempty"`
 }
 
+// errHandedOut is a VM handed out already: serve names every clone anew, so only a Mac that isn't
+// running paddock's serve hands out one, and taking its word would take the VM from its holder.
+var errHandedOut = errors.New("is handed out already")
+
 func (s *state) addHandout(h handout) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.data.Handouts[h.VM] != nil {
+		return errHandedOut
+	}
 	s.data.Handouts[h.VM] = &h
 	return s.save()
 }

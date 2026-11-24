@@ -105,6 +105,12 @@ func (s *server) admin(request adminRequest, urls func() []string) adminResponse
 		s.disconnect(host.ID)
 		s.audit.record(auditEvent{Event: "host-removed", Host: host.ID, Name: host.Name})
 		log.Printf("removed %s (%s)", host.Name, host.ID)
+		// Its VMs can't be reached or released any more: their clients would be refused for good.
+		for _, h := range s.state.handoutsWhere(func(h handout) bool { return h.Host == host.ID }) {
+			if removed, _ := s.state.removeHandout(h.VM); removed {
+				s.audit.record(auditEvent{Event: "released", Client: h.Client, Host: host.ID, VM: h.VM, Reason: "its Mac was removed"})
+			}
+		}
 		return adminResponse{Removed: host.ID}
 	case "remove-client":
 		client, err := s.state.remove(clientKind, request.Host)

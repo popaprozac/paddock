@@ -25,7 +25,7 @@ paddock acquire                             # a warm VM from any Mac in the pool
 | `paddock-control run [-listen addr] [-name name] [-state folder]` | Runs the control plane on HTTPS, port 7443 on every address by default, and prints the URLs hosts can use. `-listen` picks one address and port; `-name` adds a name or address the machine is reached by that it can't find itself, such as a MagicDNS name or a load balancer's, and repeats. |
 | `paddock-control join-token [-ttl 1h]` | Makes a token one Mac can join with, for an hour by default and 24 hours at most, and prints the `serve` command to run on that Mac. |
 | `paddock-control hosts [-json]` | Lists every Mac that joined: online or not, its image, its slots (warm, assigned, preparing or empty), macOS and paddock versions; with `-json`, also its address, cores, memory and free disk, what it and each VM use now, and the client holding each VM. It marks a Mac stale when it's offline and never linked, or hasn't linked for over 7 days, as a re-provisioned or retired Mac leaves behind, and prints the `remove-host` command; it removes nothing itself. |
-| `paddock-control remove-host <ID or name>` | Removes a Mac: its link closes at once, and it can't link again unless it joins with a new token. |
+| `paddock-control remove-host <ID or name>` | Removes a Mac: its link closes at once, the VMs it handed out are no longer anyone's, and it can't link again unless it joins with a new token. |
 | `paddock-control login-token [-ttl 1h]` | Makes a token one person's CLI or one agent can log in with, for an hour by default and 24 hours at most, and prints the `paddock login` command to run. |
 | `paddock-control clients [-json]` | Lists every CLI or agent that logged in: its open links, when it was last seen and when it logged in. It marks a client stale when it has no links and never linked, as after a login that failed, or hasn't linked for over 7 days, and prints the `remove-client` command; it removes nothing itself. |
 | `paddock-control remove-client <ID or name>` | Removes a client: its links close at once, the VMs it holds are released, and it can't connect again unless it logs in with a new token. |
@@ -66,8 +66,9 @@ apart.
 
 - **Encrypted, to one CA.** TLS 1.3 only. On first run the control plane makes its own CA in its
   state folder; the server certificate is remade every hour, signed by that CA, for this
-  machine's names and addresses and every `-name`, so a new DHCP or Tailscale address doesn't
-  break anything. A join or login token carries the SHA-256 of the CA's public key: a joining Mac
+  machine's names and addresses and every `-name`, and within a minute when a Mac or client asks
+  for a name or address it doesn't cover, so a new DHCP or Tailscale address works without a
+  restart. A join or login token carries the SHA-256 of the CA's public key: a joining Mac
   or a logging-in client trusts that CA and no other, and only for the host in its URL. A
   certificate that doesn't check out stops the link, with the `-name` to add if the control plane
   didn't know that name.
@@ -93,8 +94,9 @@ apart.
   its own temporary files for screenshots and bundles.
 - **A VM is its acquirer's.** The control plane keeps which client holds each VM, in its state, so
   a restart keeps it. Only that client can use or release the VM; anyone else's request for it is
-  refused. A hand-out ends when its client releases the VM or is removed or logs out, or when the
-  VM's Mac reports its slots without it, as after its `serve` stops or restarts. The control plane
+  refused. A hand-out ends when its client releases the VM or is removed or logs out, when the
+  VM's Mac is removed, or when the Mac reports its slots without it, as after its `serve` stops or
+  restarts. The control plane
   keeps a release its Mac didn't answer, as one sent while the Mac was offline, and sends it again
   when the Mac next reports the VM.
 - **Removal is immediate.** `remove-host` deletes the Mac's key and closes its link; its next link
@@ -104,9 +106,9 @@ apart.
   last linked (one enrolled before the control plane kept that counts as never linked until it
   links again), the hashes of unused tokens and which client holds each VM, until the VM's Mac
   stops reporting it; `audit.log`, a JSON line for each token made, Mac or client enrolled, refused
-  or removed, link opened, refused or closed, VM handed out or released, and request, with its
-  client, VM and operation, with no secrets in it; and `admin.sock`. It records at most 10 refused
-  enrollments and links a minute, so a caller trying again and again can't fill the disk.
+  or removed, link opened, refused or closed, VM handed out, released or refused, and request,
+  with its client, VM and operation, with no secrets in it; and `admin.sock`. It records at most 10
+  refused enrollments and links a minute, so a caller trying again and again can't fill the disk.
 - **Everyone logged in sees the pool.** Every client sees every Mac, its slots, what each Mac and
   VM uses, and which client holds each VM, in `paddock hosts` and `paddock top`. The numbers are
   measured on each Mac, never asked of a guest.

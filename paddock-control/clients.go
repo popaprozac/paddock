@@ -19,7 +19,13 @@ type clientLink struct {
 	connected time.Time
 	mu        sync.Mutex
 	lastSeen  time.Time
-	uploads   map[string]chan message // data the client sends after a request, by the request's ID
+	uploads   map[string]*upload // data the client sends after a request, by the request's ID
+}
+
+// upload is the data a client sends after one request, in pieces.
+type upload struct {
+	pieces chan message
+	gone   chan struct{} // closed once the request stops reading pieces
 }
 
 // clientLink takes a client's WebSocket, has it prove it holds its enrolled key, then answers its
@@ -42,15 +48,16 @@ func (s *server) clientLink(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "not an enrolled client")
 		return
 	}
+	l := &clientLink{conn: conn, remote: r.RemoteAddr, connected: s.now(), lastSeen: s.now()}
+	s.registerClient(client, l)
+	defer s.unregisterClient(client, l)
+	// After registering: a removal before then found no link to close.
 	member := s.state.member(clientKind, client)
-	if member == nil { // removed since it authenticated
+	if member == nil {
 		conn.Close(websocket.StatusPolicyViolation, "this client was removed from the control plane")
 		return
 	}
-	l := &clientLink{conn: conn, remote: r.RemoteAddr, connected: s.now(), lastSeen: s.now()}
-	s.registerClient(client, l)
 	s.markSeen(clientKind, client)
-	defer s.unregisterClient(client, l)
 	s.audit.record(auditEvent{Event: "client-link-opened", Client: client, Name: member.Name, Remote: r.RemoteAddr})
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -123,40 +130,47 @@ func (s *server) answer(ctx context.Context, client string, l *clientLink, reque
 }
 
 // expectUpload makes room for the data the client sends after request id.
-func (l *clientLink) expectUpload(id string) <-chan message {
-	uploads := make(chan message, 16)
+func (l *clientLink) expectUpload(id string) *upload {
+	u := &upload{pieces: make(chan message, 16), gone: make(chan struct{})}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.uploads == nil {
-		l.uploads = map[string]chan message{}
+		l.uploads = map[string]*upload{}
 	}
-	l.uploads[id] = uploads
-	return uploads
+	l.uploads[id] = u
+	return u
 }
 
 // passUpload hands a piece of a client's data to the request it's for; data nobody expects, or
-// no longer does, is dropped.
+// no longer does, is dropped. It never waits on a request that stopped reading, as one whose
+// upload failed: this link's reads would stop with it.
 func (l *clientLink) passUpload(m message) {
 	l.mu.Lock()
-	uploads := l.uploads[m.ID]
-	if uploads != nil && m.Done {
+	u := l.uploads[m.ID]
+	if u != nil && m.Done {
 		delete(l.uploads, m.ID)
 	}
 	l.mu.Unlock()
-	if uploads == nil {
+	if u == nil {
 		return
 	}
-	uploads <- m
-	if m.Done {
-		close(uploads)
+	select {
+	case u.pieces <- m:
+		if m.Done {
+			close(u.pieces)
+		}
+	case <-u.gone:
 	}
 }
 
-// dropUpload stops expecting data for request id.
-func (l *clientLink) dropUpload(id string) {
+// dropUpload stops expecting data for request id; its request reads no more of u's pieces.
+func (l *clientLink) dropUpload(id string, u *upload) {
+	close(u.gone)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.uploads, id)
+	if l.uploads[id] == u {
+		delete(l.uploads, id)
+	}
 }
 
 // write sends m. Answers to several requests on one link can be sent at once: the WebSocket

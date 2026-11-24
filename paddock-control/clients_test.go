@@ -222,3 +222,30 @@ func TestRemovingAClientClosesAllItsLinks(t *testing.T) {
 		}
 	}
 }
+
+// A task whose upload failed stops reading its pieces; the client's further pieces must not hold
+// up the link's reads, or the link would never close.
+func TestAPieceForAnUploadThatStoppedDoesntHoldUpTheLink(t *testing.T) {
+	l := &clientLink{}
+	u := l.expectUpload("t")
+	for range cap(u.pieces) {
+		l.passUpload(message{ID: "t", Data: []byte("piece")})
+	}
+	passed := make(chan struct{})
+	go func() {
+		l.passUpload(message{ID: "t", Data: []byte("one too many")})
+		close(passed)
+	}()
+	select {
+	case <-passed:
+		t.Fatal("a piece went into an upload whose pieces were all still unread")
+	case <-time.After(50 * time.Millisecond): // waiting for the request to read, as it should
+	}
+	l.dropUpload("t", u)
+	select {
+	case <-passed:
+	case <-time.After(time.Second):
+		t.Fatal("a piece for an upload nobody reads held up the link")
+	}
+	l.passUpload(message{ID: "t", Data: []byte("after")}) // no longer expected: dropped
+}

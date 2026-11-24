@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coder/websocket/wsjson"
+	"github.com/coder/websocket"
 )
 
 // answersBuffer is how many of a request's answers wait for whoever forwarded it before the
@@ -55,12 +55,23 @@ func (f *forwarded) upload(ctx context.Context, data []byte, done bool) error {
 // hostWriteTimeout bounds one write down a host's link.
 const hostWriteTimeout = 30 * time.Second
 
+// errTooBig is a message over what serve reads in one, the same limit as the control plane's:
+// sending it would close the Mac's link, and fail every request on it.
+var errTooBig = fmt.Errorf("it's over %d MiB, the most a Mac reads in one message", linkMessageLimit>>20)
+
 // write sends a message down the host's link. A write whose context ends partway closes the whole
 // connection, so these never take a client's context, which ends when that client goes away.
 func (l *link) write(m message) error {
+	data, err := marshal(m)
+	if err != nil {
+		return err
+	}
+	if len(data) > linkMessageLimit {
+		return errTooBig
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), hostWriteTimeout)
 	defer cancel()
-	return wsjson.Write(ctx, l.conn, m)
+	return l.conn.Write(ctx, websocket.MessageText, data)
 }
 
 func (s *server) send(ctx context.Context, host, serveLine string) (*forwarded, error) {

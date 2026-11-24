@@ -185,7 +185,8 @@ func currentReach(extra []string) reach {
 }
 
 // certificates serves the TLS certificate, made again every hour with the names and addresses the
-// machine has then, so a new DHCP or Tailscale address is covered without a restart.
+// machine has then, and sooner for a Mac or client asking for a name or address it doesn't cover,
+// so a new DHCP or Tailscale address is covered within a minute, without a restart.
 type certificates struct {
 	authority *authority
 	extra     []string
@@ -194,10 +195,13 @@ type certificates struct {
 	made      time.Time
 }
 
-func (c *certificates) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (c *certificates) get(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.current == nil || time.Since(c.made) > time.Hour {
+	age := time.Since(c.made)
+	// At most once a minute, so a caller asking for a name this machine doesn't have can't make
+	// it sign certificates without end.
+	if c.current == nil || age > time.Hour || age > time.Minute && !covers(c.current.Leaf, hello) {
 		cert, err := c.authority.serverCertificate(currentReach(c.extra))
 		if err != nil {
 			return nil, err
@@ -205,6 +209,16 @@ func (c *certificates) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 		c.current, c.made = cert, time.Now()
 	}
 	return c.current, nil
+}
+
+// covers says whether cert is good for the name the caller asked for, or, connecting by address,
+// the address it reached.
+func covers(cert *x509.Certificate, hello *tls.ClientHelloInfo) bool {
+	asked := hello.ServerName
+	if asked == "" && hello.Conn != nil {
+		asked, _, _ = net.SplitHostPort(hello.Conn.LocalAddr().String())
+	}
+	return asked == "" || cert.VerifyHostname(asked) == nil
 }
 
 func randomSerial() *big.Int {
