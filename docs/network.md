@@ -25,7 +25,9 @@ reaches a name only if it's spelled as a host name, in letters, digits, hyphens 
 server name or `Host` with any other character, such as `gİthub.com`, is refused, and logged in
 quotes. Connections from the host never go to a loopback or link-local address,
 whatever a name resolves to, so the host's own services and EC2's instance metadata stay out of
-reach. Nothing on the host's networks can open a connection to the guest. Each decision is one
+reach. Nothing on the host's networks can open a connection to the guest. paddock-net carries at
+most 1,024 of the guest's connections at once and closes any past that, so a guest that opens
+connections and leaves them idle can't use up the host's sockets. Each decision is one
 line on paddock-net's stderr, which is `serve`'s or `bench`'s, such as `now allowing github.com`,
 `allow github.com:443`, `deny example.com:443: not on the list`, `deny "gİthub.com":443: not a
 host name` and `deny dns example.com: not on the list`. It writes at most 50 lines a second, in bursts

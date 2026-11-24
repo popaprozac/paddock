@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -145,6 +146,57 @@ func TestForwarderChecksAndConnectsToTheSameName(t *testing.T) {
 			t.Errorf("%q: dialed %q, got %q, logged %q; want a refusal on one line", name, dialed, got, logged)
 		}
 	}
+}
+
+// A guest that opens connections and leaves them idle gets no more once maxConnections are open,
+// and the slots come back as they close.
+func TestForwarderServesAtMostMaxConnectionsAtOnce(t *testing.T) {
+	var mu sync.Mutex
+	var refused []string
+	f := &forwarder{policy: holding(&policy{}), logf: func(format string, args ...any) {
+		if line := fmt.Sprintf(format, args...); strings.Contains(line, "open already") {
+			mu.Lock()
+			refused = append(refused, line)
+			mu.Unlock()
+		}
+	}}
+	waitFor := func(open int32) {
+		t.Helper()
+		for start := time.Now(); f.open.Load() != open; time.Sleep(time.Millisecond) {
+			if time.Since(start) > 5*time.Second {
+				t.Fatalf("%d connections open, want %d", f.open.Load(), open)
+			}
+		}
+	}
+	var idle []net.Conn
+	for range maxConnections {
+		guest, ours := net.Pipe()
+		idle = append(idle, guest)
+		go f.serve(ours, "203.0.113.9", 443)
+	}
+	waitFor(maxConnections)
+
+	guest, ours := net.Pipe()
+	defer guest.Close()
+	done := make(chan struct{})
+	go func() {
+		f.serve(ours, "203.0.113.9", 443)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("served a connection over the limit")
+	}
+	mu.Lock()
+	if len(refused) != 1 || refused[0] != "deny 203.0.113.9:443: 1024 connections are open already" {
+		t.Errorf("logged %q, want one refusal", refused)
+	}
+	mu.Unlock()
+	for _, c := range idle {
+		c.Close()
+	}
+	waitFor(0)
 }
 
 func TestHostDialerRefusesTheHostsOwnAddresses(t *testing.T) {
