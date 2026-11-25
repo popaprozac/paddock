@@ -36,8 +36,8 @@ its acknowledgments and input, for as long as it lasts. Only one `serve` can lis
 time. On a Mac logged in to a control plane, `acquire`, the commands that take a VM and
 `paddock mcp` use its pool instead; `--local`, or `PADDOCK_LOCAL=1`, keeps them on this Mac. The
 control plane's own commands, with `paddock login`, `logout` and `hosts`, are in
-[A pool of Macs](control-plane.md#commands), as are `paddock join` and `leave`, which link a
-running `serve` to a pool and take it out again.
+[A pool of Macs](control-plane.md#commands), as are `paddock join`, `leave` and `offer`, which
+change a running `serve`: joining or leaving a pool, and handing out VMs or not.
 
 VMs live in `~/.paddock/vms` and restore images in `~/.paddock/cache/ipsw`. Set
 `PADDOCK_HOME` to use another directory. A VM that is running is locked, so it can't be cloned

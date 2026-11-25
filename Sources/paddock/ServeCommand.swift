@@ -135,7 +135,11 @@ final class WarmPool {
 
     private let userspaceNetwork: Bool
     private var control: ControlIdentity?
+    /// Whether this Mac hands out VMs: `paddock offer off` stops new hand-outs and keeps slots
+    /// empty, with their saved state, until `offer on`.
+    private var offering = true
     private var leaving = false  // between paddock leave and the link closing
+    private static let notOffering = "this Mac isn't offering VMs: paddock offer on"
 
     private let image: String
     private let sampler = UsageSampler()
@@ -375,6 +379,12 @@ final class WarmPool {
             print("Slot \(slot.number): \(error.message); restoring a fresh clone")
             self.replaceCurrent(of: slot)
         }
+        // paddock offer off came while it filled: the saved state stays, for offer on.
+        guard offering else {
+            await discardCurrent(of: slot)
+            slot.emptyReason = Self.notOffering
+            return
+        }
         slot.warmAddress = ip
         slot.emptyReason = nil
         print("Slot \(slot.number) warm: '\(bundle.name)' at \(ip), \(how) in \(DurationFormat.short(ContinuousClock.now - started))")
@@ -406,6 +416,10 @@ final class WarmPool {
         let request = try? JSONDecoder().decode(ServeRequest.self, from: Data(line.utf8))
         switch request?.op {
         case "acquire":
+            // busy, so the control plane offers the acquire to another Mac.
+            guard offering else {
+                return responder.finish(ServeResponse(error: Self.notOffering, busy: true).line)
+            }
             if request?.pool == true && leaving {
                 return responder.finish(ServeResponse(error: "this Mac is leaving the pool", busy: true).line)
             }
@@ -453,6 +467,8 @@ final class WarmPool {
             join(request, responder)
         case "leave":
             leave(force: request?.force == true, responder)
+        case "offer":
+            offer(request?.offering, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -677,7 +693,8 @@ final class WarmPool {
             return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
         }
         responder.finish(ServeResponse(vm: current.name).line)
-        print("Slot \(slot.number) released: '\(current.name)'; wiping it and restoring a fresh clone")
+        print("Slot \(slot.number) released: '\(current.name)'; wiping it"
+            + (offering ? " and restoring a fresh clone" : ", and the slot stays empty while this Mac doesn't offer VMs"))
         replaceCurrent(of: slot)
     }
 
@@ -842,6 +859,10 @@ final class WarmPool {
                 wait = min(wait * 2, .seconds(300))
             }
             guard !stopping else { return }
+            guard offering else {
+                slot.emptyReason = Self.notOffering
+                return
+            }
             do {
                 if slot.saved == nil {
                     print("Slot \(slot.number): boot a clone of '\(image)' and save its state")
@@ -922,6 +943,35 @@ final class WarmPool {
             print("Left the pool at \(control.url.absoluteString); serve goes on here alone")
             responder.finish(ServeResponse(output: "This Mac left the pool at \(control.url.absoluteString)"
                 + (held.isEmpty ? "" : ", and wiped the \(held.count) VM\(held.count == 1 ? "" : "s") it held here")).line)
+        }
+    }
+
+    /// Starts or stops handing out VMs. Off, warm VMs nobody holds stop, keeping the slots' saved
+    /// state, and VMs in use run until they're released; on, the empty slots fill again.
+    private func offer(_ on: Bool?, _ responder: Responder) {
+        guard let on else {
+            return responder.finish(ServeResponse(error: "offer needs on or off").line)
+        }
+        defer {
+            responder.finish(ServeResponse(output: on ? "This Mac offers VMs"
+                : "This Mac doesn't offer VMs now; VMs in use run until they're released").line)
+        }
+        guard on != offering else { return }
+        offering = on
+        if on {
+            print("Offering VMs again: filling the empty slots")
+            for slot in slots where slot.emptyReason == Self.notOffering {
+                slot.emptyReason = nil
+                Task { await keepFilling(slot) }
+            }
+            return
+        }
+        print("Not offering VMs: no new hand-outs, and VMs in use run until they're released")
+        answerWaiting(with: Self.notOffering)
+        // keepFilling leaves these empty while offering is off; a slot still filling sees it once
+        // it's done, and stops its VM then.
+        for slot in slots where slot.warmAddress != nil && !slot.assigned {
+            replaceCurrent(of: slot)
         }
     }
 

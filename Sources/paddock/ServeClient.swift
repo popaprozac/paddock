@@ -19,6 +19,7 @@ struct ServeRequest: Codable {
     var url: String?   // join: the control plane to link this Mac to
     var token: String?  // join: a join token, the first time this Mac joins that control plane
     var force: Bool?   // leave: hand back the VMs the pool holds here, rather than refuse
+    var offering: Bool?  // offer: whether this Mac hands out VMs
     var pool: Bool?    // acquire: set by this Mac's link to the control plane, so leave knows the pool's VMs
 }
 

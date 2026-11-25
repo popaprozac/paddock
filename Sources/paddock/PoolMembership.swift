@@ -39,3 +39,23 @@ struct Leave: ParsableCommand {
         print(try ServeClient.send(ServeRequest(op: "leave", force: force), local: true).output ?? "")
     }
 }
+
+struct Offer: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Start or stop this Mac's serve handing out VMs, here and to its pool.",
+        discussion: """
+            off: no new hand-outs; warm VMs nobody holds stop, and VMs in use run until they're \
+            released. The slots keep their saved state, so on fills them again in seconds.
+            """)
+
+    enum State: String, ExpressibleByArgument {
+        case on, off
+    }
+
+    @Argument(help: "on or off.")
+    var state: State
+
+    func run() throws {
+        print(try ServeClient.send(ServeRequest(op: "offer", offering: state == .on), local: true).output ?? "")
+    }
+}
