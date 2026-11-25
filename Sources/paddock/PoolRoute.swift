@@ -22,25 +22,29 @@ enum PoolRoute {
     }
 
     /// Passes each of serve's answers to `onResponse` until the request is done or `onResponse`
-    /// returns false; an error answer throws. A task's bundle goes up from this Mac; a screenshot,
-    /// or a task's new commits, come back as data and are saved at the request's result path.
+    /// returns false; an error answer throws. A task's bundle, or a put's file, goes up from this
+    /// Mac; a screenshot, a get's file or a task's new commits come back as data and are saved at
+    /// the request's result path.
     static func stream(_ request: ServeRequest, image: String?, as identity: ControlIdentity,
                        onResponse: (ServeResponse) throws -> Bool) throws {
-        let upload = request.op == "task" ? request.bundle.map { URL(fileURLWithPath: $0) } : nil
+        let upload = (request.op == "task" ? request.bundle : request.op == "put" ? request.file : nil)
+            .map { URL(fileURLWithPath: $0) }
         if let upload {
             let size = (try? upload.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             guard size <= ControlLink.maxTransfer else {
-                throw PaddockError("the bundle is over \(ControlLink.maxTransfer >> 30) GB, the most a task takes through the pool")
+                throw PaddockError("\(upload.lastPathComponent) is over \(ControlLink.maxTransfer >> 30) GB, the most the pool carries")
             }
         }
         // Paths name files on this Mac; the pool's Macs pick their own.
         var forward = request
         forward.result = nil
         forward.bundle = nil
+        forward.file = nil
         let line = String(decoding: try JSONEncoder().encode(forward), as: UTF8.self)
-        let saveTo = ["screenshot", "task"].contains(request.op) ? request.result : nil
-        // A screenshot always has its file; a task only when it made new commits.
-        let required = request.op == "screenshot"
+        let saveTo = ["screenshot", "task", "get"].contains(request.op) ? request.result : nil
+        // A screenshot and a get always have their file, if only an empty one; a task only when it
+        // made new commits.
+        let required = request.op == "screenshot" || request.op == "get"
         let answers = Answers()
         let work = Task.detached {
             do {

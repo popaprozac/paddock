@@ -14,7 +14,7 @@ import (
 
 // relayedOperations is what a client may ask of a VM it acquired, through the pool: serve's VM
 // operations, task's bundles carried as data both ways, and a view's input and frames.
-var relayedOperations = map[string]bool{"release": true, "exec": true, "axtree": true, "input": true, "screenshot": true, "task": true, "view": true}
+var relayedOperations = map[string]bool{"release": true, "exec": true, "axtree": true, "input": true, "screenshot": true, "task": true, "put": true, "get": true, "view": true}
 
 // maxTransfer is the most one request may send to a host, such as a task's bundle, so one can't
 // fill a Mac's disk.
@@ -413,11 +413,13 @@ func (s *server) ownedRequest(client string, request message) (serveRequest, *ha
 	}
 	delete(asked, "bundle")
 	delete(asked, "result")
+	delete(asked, "file")
 	return asked, h, nil
 }
 
-// relayTask runs a task in a VM the client acquired: the client's bundle goes to the VM's host in
-// pieces as they come, and the host's answers, with the bundle of new commits as data, come back.
+// relayTask runs a task, or a put, in a VM the client acquired: the client's bundle or file goes to
+// the VM's host in pieces as they come, and the host's answers, with any bundle of new commits as
+// data, come back.
 func (s *server) relayTask(ctx context.Context, client string, l *clientLink, request message, uploads *upload) {
 	defer l.dropUpload(request.ID, uploads)
 	fail := func(err error) {
@@ -428,7 +430,7 @@ func (s *server) relayTask(ctx context.Context, client string, l *clientLink, re
 		fail(err)
 		return
 	}
-	s.audit.record(auditEvent{Event: "request", Client: client, Host: h.Host, VM: h.VM, Op: "task"})
+	s.audit.record(auditEvent{Event: "request", Client: client, Host: h.Host, VM: h.VM, Op: request.Op})
 	f, err := s.send(ctx, h.Host, asked.line())
 	if err != nil {
 		fail(sendFailed(h.VM, err))
@@ -447,7 +449,7 @@ func (s *server) relayTask(ctx context.Context, client string, l *clientLink, re
 				}
 				total += len(piece.Data)
 				if total > maxTransfer {
-					uploaded <- fmt.Errorf("the bundle is over %d GB, the most a task takes", maxTransfer>>30)
+					uploaded <- fmt.Errorf("the upload is over %d GB, the most the pool carries", maxTransfer>>30)
 					return
 				}
 				if err := f.upload(ctx, piece.Data, piece.Done); err != nil {

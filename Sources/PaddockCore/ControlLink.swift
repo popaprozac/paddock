@@ -61,7 +61,7 @@ public enum ControlLink {
     /// What a Mac takes from the control plane over its link: serve's VM operations, naming no file
     /// on the Mac. A request from the link that named one could reach any file serve's user can,
     /// so the files a screenshot or a task needs are ones the Mac picks itself.
-    public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input", "screenshot", "task", "view"]
+    public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input", "screenshot", "task", "put", "get", "view"]
 
     /// Operations whose client keeps sending while they answer, such as a view's input: its
     /// uploads go to the running handler, and its answers go out at once.
@@ -80,7 +80,7 @@ public enum ControlLink {
         guard remoteOperations.contains(op) else {
             throw PaddockError("this Mac doesn't take '\(op)' from the control plane")
         }
-        guard request["bundle"] == nil, request["result"] == nil else {
+        guard request["bundle"] == nil, request["result"] == nil, request["file"] == nil else {
             throw PaddockError("a request from the control plane can't name a file on this Mac")
         }
         return line

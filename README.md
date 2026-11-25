@@ -83,6 +83,7 @@ In another terminal:
 ```bash
 paddock acquire                      # prints Assigned '<vm>' at <ip>; <vm> is a name such as golden-slot1-5e2dc9-844a19
 paddock exec <vm> -- sw_vers
+paddock cp results.txt <vm>:         # into the VM's home folder; <vm>:path/file copies one back out
 paddock screenshot <vm>
 paddock release <vm>                 # wipes it; a fresh one is ready in about 6 s
 paddock top                          # watch the Mac and each VM, live; Ctrl-C quits

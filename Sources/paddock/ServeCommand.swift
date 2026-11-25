@@ -420,6 +420,10 @@ final class WarmPool {
             exec(request?.command, in: request?.vm, responder)
         case "task":
             task(request, responder)
+        case "put":
+            put(request, responder)
+        case "get":
+            get(request, responder)
         case "screenshot":
             screenshot(request, responder)
         case "axtree":
@@ -511,6 +515,44 @@ final class WarmPool {
                     command, bundle: URL(fileURLWithPath: bundle), result: URL(fileURLWithPath: result)
                 ) { responder.send(ServeResponse(output: $0).line) }
                 responder.finish(ServeResponse(exit: outcome.status, result: outcome.changed ? result : nil).line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
+    }
+
+    /// Copies a file on this Mac into a VM this serve handed out (see HeadlessVM.copyIn).
+    private func put(_ request: ServeRequest?, _ responder: Responder) {
+        guard let request, let (slot, vm, current) = handedOut(request.vm) else {
+            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
+        }
+        guard let file = request.file, file.hasPrefix("/"), let name = request.name else {
+            return responder.finish(ServeResponse(error: "put needs an absolute file path and the file's name").line)
+        }
+        print("Slot \(slot.number): copying a file into '\(current.name)'")
+        Task {
+            do {
+                try await vm.copyIn(URL(fileURLWithPath: file), to: request.path ?? "", name: name)
+                responder.finish(ServeResponse(exit: 0).line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
+    }
+
+    /// Copies a file out of a VM this serve handed out, to `result` on this Mac.
+    private func get(_ request: ServeRequest?, _ responder: Responder) {
+        guard let request, let (slot, vm, current) = handedOut(request.vm) else {
+            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
+        }
+        guard let path = request.path, !path.isEmpty, let result = request.result, result.hasPrefix("/") else {
+            return responder.finish(ServeResponse(error: "get needs a path in the VM and an absolute result path").line)
+        }
+        print("Slot \(slot.number): copying a file out of '\(current.name)'")
+        Task {
+            do {
+                try await vm.copyOut(path, to: URL(fileURLWithPath: result))
+                responder.finish(ServeResponse(result: result).line)
             } catch {
                 responder.finish(ServeResponse(error: error.localizedDescription).line)
             }

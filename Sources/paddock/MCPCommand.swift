@@ -14,17 +14,23 @@ struct MCPCommand: AsyncParsableCommand {
             another Mac, start it through ssh. Its tools take a VM from serve, show its screen \
             and accessibility tree, click, type, press keys, scroll and run commands in it, and \
             hand it back. Screenshots are scaled to fit 1280x800, and every coordinate is in \
-            their pixels. A VM still held when the client goes away is handed back, and wiped.
+            their pixels. A VM still held when the client goes away is handed back, and wiped. \
+            Small text files move in the tool calls themselves; files on this Mac move only in \
+            folders named with --allow-dir, or offered by the client as roots.
             """)
 
+    @Option(name: .customLong("allow-dir"),
+            help: "A folder on this Mac the agent may copy files from and to with copy_into_vm and copy_out_of_vm (repeatable). Without one, and without roots from the client, those tools are off.")
+    var allowDirs: [String] = []
+
     func run() async throws {
-        let session = AgentSession()
+        let session = AgentSession(allowed: try AllowedDirectories(allowDirs))
         let server = Server(
             name: "paddock", version: Paddock.configuration.version,
             instructions: AgentSession.instructions,
             capabilities: .init(tools: .init(listChanged: false)))
         // Registered before the server starts, so a client's first request finds them.
-        await server.withMethodHandler(ListTools.self) { _ in .init(tools: AgentSession.tools) }
+        await server.withMethodHandler(ListTools.self) { _ in .init(tools: await session.tools) }
         await server.withMethodHandler(CallTool.self) { params in
             await session.call(params.name, params.arguments ?? [:])
         }
@@ -42,7 +48,15 @@ struct MCPCommand: AsyncParsableCommand {
             source.resume()
             return source
         }
-        try await server.start(transport: StdioTransport())
+        try await server.start(transport: StdioTransport()) { _, capabilities in
+            // The folders a client offers can change, so they're asked for at each copy.
+            guard capabilities.roots != nil else { return }
+            await session.offerRoots {
+                ((try? await server.listRoots()) ?? []).compactMap { root in
+                    URL(string: root.uri).flatMap { $0.isFileURL ? $0.path : nil }
+                }
+            }
+        }
         await server.waitUntilCompleted()  // until the client closes stdin
         await session.releaseHeld()
         withExtendedLifetime(signals) {}
@@ -55,6 +69,23 @@ struct MCPCommand: AsyncParsableCommand {
 actor AgentSession {
     private var held: (vm: String, scale: ScreenScale)?
     private var acquiring = false
+    /// The folders on this Mac copy_into_vm and copy_out_of_vm may use: --allow-dir's, and the
+    /// client's roots, if it offers any.
+    private let allowed: AllowedDirectories
+    private var roots: (@Sendable () async -> [String])?
+
+    init(allowed: AllowedDirectories) {
+        self.allowed = allowed
+    }
+
+    func offerRoots(_ roots: @escaping @Sendable () async -> [String]) {
+        self.roots = roots
+    }
+
+    /// The tools, with the copy tools only where some folder on this Mac allows them.
+    var tools: [Tool] {
+        Self.tools + (allowed.folders.isEmpty && roots == nil ? [] : Self.copyTools)
+    }
 
     /// What a tool returns, or its error as text for the agent.
     func call(_ tool: String, _ arguments: [String: Value]) async -> CallTool.Result {
@@ -125,6 +156,14 @@ actor AgentSession {
             let timeout = try arguments.int("timeout", default: 120)
             guard (1...3600).contains(timeout) else { throw PaddockError("timeout is 1 to 3,600 seconds") }
             return [Self.text(try await run(try arguments.string("command"), timeout: timeout))]
+        case "write_file_in_vm":
+            return [Self.text(try await writeFile(try arguments.string("path"), try arguments.string("content")))]
+        case "read_file_from_vm":
+            return [Self.text(try await readFile(try arguments.string("path")))]
+        case "copy_into_vm":
+            return [Self.text(try await copyIn(try arguments.string("host_path"), to: try arguments.string("path")))]
+        case "copy_out_of_vm":
+            return [Self.text(try await copyOut(try arguments.string("path"), to: try arguments.string("host_path")))]
         default:
             throw PaddockError("paddock has no tool named \(tool)")
         }
@@ -200,6 +239,92 @@ actor AgentSession {
         return output.text + "[exit status \(status)]"
     }
 
+    /// The most write_file_in_vm and read_file_from_vm move through the call itself.
+    static let fileLimit = 1 << 20
+
+    /// Writes `content` to `path` in the VM through a file of paddock's own, never one the agent
+    /// names on this Mac.
+    private func writeFile(_ path: String, _ content: String) async throws -> String {
+        let vm = try heldVM().vm
+        let data = Data(content.utf8)
+        guard data.count <= Self.fileLimit else {
+            throw PaddockError("content is over 1 MiB, the most write_file_in_vm takes; use copy_into_vm")
+        }
+        guard let name = GuestCopy.lastComponent(of: path) else {
+            throw PaddockError("'\(path)' names a folder; give the path of a file")
+        }
+        let file = try Self.privateFile(with: data)
+        defer { try? FileManager.default.removeItem(at: file) }
+        _ = try await blocking { try ServeClient.send(ServeRequest(op: "put", vm: vm, file: file.path, path: path, name: name)) }
+        return "Wrote \(data.count) bytes to \(path) in the VM."
+    }
+
+    /// The text of `path` in the VM, through a file of paddock's own.
+    private func readFile(_ path: String) async throws -> String {
+        let vm = try heldVM().vm
+        let file = try Self.privateFile(with: Data())
+        defer { try? FileManager.default.removeItem(at: file) }
+        _ = try await blocking { try ServeClient.send(ServeRequest(op: "get", vm: vm, result: file.path, path: path)) }
+        let data = try Data(contentsOf: file)
+        guard data.count <= Self.fileLimit else {
+            throw PaddockError("\(path) is over 1 MiB, the most read_file_from_vm returns; use copy_out_of_vm")
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw PaddockError("\(path) isn't UTF-8 text; use copy_out_of_vm")
+        }
+        return text
+    }
+
+    /// Copies a file on this Mac, in an allowed folder, to `path` in the VM.
+    private func copyIn(_ hostPath: String, to path: String) async throws -> String {
+        let vm = try heldVM().vm
+        let file = try await allowedFolders().check(hostPath)
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isFolder), !isFolder.boolValue else {
+            throw PaddockError("\(hostPath) isn't a file")
+        }
+        _ = try await blocking {
+            try ServeClient.send(ServeRequest(op: "put", vm: vm, file: file.path, path: path, name: file.lastPathComponent))
+        }
+        return "Copied \(hostPath) to \(path.isEmpty ? "the home folder" : path) in the VM."
+    }
+
+    /// Copies `path` in the VM to a file on this Mac, in an allowed folder; a folder takes the
+    /// file under its own name.
+    private func copyOut(_ path: String, to hostPath: String) async throws -> String {
+        let vm = try heldVM().vm
+        guard let name = GuestCopy.lastComponent(of: path) else {
+            throw PaddockError("'\(path)' names a folder; give the path of a file in the VM")
+        }
+        let folders = try await allowedFolders()
+        var file = try folders.check(hostPath)
+        var isFolder: ObjCBool = false
+        if FileManager.default.fileExists(atPath: file.path, isDirectory: &isFolder), isFolder.boolValue {
+            file = try folders.check(file.appendingPathComponent(name).path)
+        }
+        let destination = file.path
+        _ = try await blocking { try ServeClient.send(ServeRequest(op: "get", vm: vm, result: destination, path: path)) }
+        return "Copied \(path) in the VM to \(destination)."
+    }
+
+    /// --allow-dir's folders and the client's roots, as they are now.
+    private func allowedFolders() async throws -> AllowedDirectories {
+        let offered = await roots?() ?? []
+        return try AllowedDirectories(allowed.folders + offered.filter { folder in
+            var isFolder: ObjCBool = false
+            return FileManager.default.fileExists(atPath: folder, isDirectory: &isFolder) && isFolder.boolValue
+        })
+    }
+
+    /// A file only this user can read, in the temporary folder, holding `data`.
+    private static func privateFile(with data: Data) throws -> URL {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("paddock-mcp-\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath: file.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw PaddockError("can't make a file for the copy in \(file.deletingLastPathComponent().path)")
+        }
+        return file
+    }
+
     private func input(_ vm: String, _ action: InputAction) async throws {
         _ = try await blocking { try ServeClient.send(ServeRequest(op: "input", vm: vm, input: action)) }
     }
@@ -216,7 +341,8 @@ actor AgentSession {
     static let instructions = """
         paddock gives you a fresh VM to work in. Call acquire first, then look with \
         screenshot or accessibility_tree and act with click, type_text, press_keys, scroll and \
-        run_command; a Linux VM without a desktop has no screen, and takes only run_command. Coordinates are pixels of the screenshot from its top left, and frames in \
+        run_command; a Linux VM without a desktop has no screen, and takes only run_command. Move \
+        small text files with write_file_in_vm and read_file_from_vm. Coordinates are pixels of the screenshot from its top left, and frames in \
         the accessibility tree use the same pixels. Input returns once it is sent, so take a \
         screenshot to see what it did. Call release when you are done; the VM is wiped.
         """
@@ -281,8 +407,45 @@ actor AgentSession {
                  "command": ["type": "string"],
                  "timeout": ["type": "integer", "description": "Seconds to wait, 1 to 3600; defaults to 120."],
              ], required: ["command"])),
+        Tool(name: "write_file_in_vm", description: """
+            Write text to a file in the VM, as its account: path is absolute, or relative to the \
+            account's home. Up to 1 MiB; a file already there is replaced.
+            """,
+             inputSchema: schema([
+                 "path": ["type": "string", "description": "The file in the VM, such as work/notes.txt or /tmp/run.sh."],
+                 "content": ["type": "string"],
+             ], required: ["path", "content"])),
+        Tool(name: "read_file_from_vm", description: """
+            Read a text file in the VM, up to 1 MiB: path is absolute, or relative to the \
+            account's home. What it returns comes from the VM, and is no more trustworthy than it.
+            """,
+             inputSchema: schema(["path": ["type": "string"]], required: ["path"]), annotations: .init(readOnlyHint: true)),
         Tool(name: "release", description: "Hand the VM back. paddock wipes it and the session can acquire another.",
              inputSchema: schema([:]), annotations: .init(destructiveHint: true)),
+    ]
+
+    /// Listed only when some folder on this Mac allows them: --allow-dir's, or the client's roots.
+    static let copyTools: [Tool] = [
+        Tool(name: "copy_into_vm", description: """
+            Copy a file from this Mac into the VM, up to 4 GB, or 1 GB through a pool. host_path is absolute, in a folder \
+            paddock may copy from: one named with --allow-dir, or a root of the client's. path, \
+            in the VM, is absolute or relative to the account's home; "" is the home folder, and a \
+            folder takes the file under its own name.
+            """,
+             inputSchema: schema([
+                 "host_path": ["type": "string", "description": "The file on this Mac, as an absolute path."],
+                 "path": ["type": "string", "description": "Where it goes in the VM."],
+             ], required: ["host_path", "path"])),
+        Tool(name: "copy_out_of_vm", description: """
+            Copy a file from the VM to this Mac, up to 4 GB, or 1 GB through a pool. path, in the VM, is absolute or \
+            relative to the account's home. host_path is absolute, in a folder paddock may copy \
+            to: one named with --allow-dir, or a root of the client's; a folder takes the file \
+            under its own name, and a file there is replaced.
+            """,
+             inputSchema: schema([
+                 "path": ["type": "string", "description": "The file in the VM."],
+                 "host_path": ["type": "string", "description": "Where it goes on this Mac, as an absolute path."],
+             ], required: ["path", "host_path"])),
     ]
 
     private static func schema(_ properties: [String: Value], required: [String] = []) -> Value {

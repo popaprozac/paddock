@@ -89,9 +89,10 @@ apart.
   admin socket, which only the control plane's user can open. Until a link has signed, its messages
   can be 4 KB at most, and one address can have 16 links waiting to sign.
 - **The VMs, never the Mac.** Down a Mac's link the control plane sends only `serve`'s VM requests
-  (acquire, release, exec, axtree, input, screenshot and task), which `serve` checks as it checks
-  its own socket's: only VMs it handed out. The Mac refuses a request that names a file, and picks
-  its own temporary files for screenshots and bundles.
+  (acquire, release, exec, axtree, input, screenshot, task, put and get), which `serve` checks as
+  it checks its own socket's: only VMs it handed out. The Mac refuses a request that names a file,
+  and picks its own temporary files for screenshots, bundles and copied files; a copy carries the
+  file's bytes, never a path on either Mac.
 - **A VM is its acquirer's.** The control plane keeps which client holds each VM, in its state, so
   a restart keeps it. Only that client can use or release the VM; anyone else's request for it is
   refused. A hand-out ends when its client releases the VM or is removed or logs out, when the
