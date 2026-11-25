@@ -89,3 +89,6 @@
 - A Windows VM keeps its image's time zone, which isn't synced from the Mac.
 - Not tested with Windows: the userspace network, `run --share`, which needs WinFsp and
   virtio-win's virtiofs service in the guest, and horizontal scrolling.
+- `paddock cp` copies files, not folders. Through the pool a file is at most
+  1 GB, and the Mac it's copied to holds a file coming out of a VM in memory until all of it is
+  there.

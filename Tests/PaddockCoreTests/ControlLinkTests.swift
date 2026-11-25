@@ -135,12 +135,15 @@ import Testing
     @Test func takesOnlyVMOperationsThatNameNoFileFromTheLink() throws {
         for line in [#"{"op":"acquire","allow":["github.com"]}"#, #"{"op":"exec","vm":"v","command":"ls"}"#,
                      #"{"op":"release","vm":"v"}"#, #"{"op":"axtree","vm":"v"}"#, #"{"op":"input","vm":"v"}"#,
-                     #"{"op":"screenshot","vm":"v"}"#, #"{"op":"task","vm":"v","command":"make"}"#] {
+                     #"{"op":"screenshot","vm":"v"}"#, #"{"op":"task","vm":"v","command":"make"}"#,
+                     #"{"op":"put","vm":"v","path":"work/app.zip","name":"app.zip"}"#, #"{"op":"get","vm":"v","path":"log.txt"}"#] {
             #expect(try ControlLink.checkRemote(line) == line)
         }
         for line in [#"{"op":"task","vm":"v","bundle":"/etc/passwd","result":"/tmp/x"}"#,
                      #"{"op":"screenshot","vm":"v","result":"/Users/zach/.ssh/authorized_keys"}"#,
-                     #"{"op":"exec","vm":"v","command":"ls","result":"/tmp/x"}"#, #"{"vm":"v"}"#, "not json"] {
+                     #"{"op":"exec","vm":"v","command":"ls","result":"/tmp/x"}"#, #"{"vm":"v"}"#, "not json",
+                     #"{"op":"put","vm":"v","file":"/Users/zach/.ssh/id_ed25519","path":"x","name":"x"}"#,
+                     #"{"op":"get","vm":"v","path":"x","result":"/Users/zach/.zshrc"}"#] {
             #expect(throws: PaddockError.self) { try ControlLink.checkRemote(line) }
         }
     }

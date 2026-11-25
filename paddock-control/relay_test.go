@@ -115,8 +115,12 @@ func (c *testControl) startFakeHost(t *testing.T, image string, warm int) *fakeH
 				reply(`{}`, true)
 			case "release":
 				reply(`{"vm":"`+request["vm"].(string)+`"}`, true)
-			case "task":
-				// The bundle arrives as uploads after the request; the result goes back as data.
+			case "get":
+				wsjson.Write(ctx, conn, message{Type: "response", ID: m.ID, Data: []byte("LOG")})
+				reply(`{}`, true)
+			case "task", "put":
+				// The bundle or file arrives as uploads after the request; a task's result goes
+				// back as data.
 				var bundle []byte
 				cancelled := false
 				for {
@@ -823,5 +827,44 @@ func TestAHandOutTheMacReportedAlreadyLeavesTheOtherSlotsWarm(t *testing.T) {
 	l.markAssigned("y")
 	if l.slots[1].State != "assigned" {
 		t.Fatalf("slots %+v", l.slots)
+	}
+}
+
+// A put's file goes up as a task's bundle does, and a get's comes back as a screenshot does; the
+// client's paths on its own Mac never reach the host.
+func TestAPutsFileGoesUpAndAGetsComesBack(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	ctx, cancel := contextWithTimeout()
+	defer cancel()
+	put := `{"op":"put","vm":"golden-slot1-abc","file":"/Users/someone/.ssh/id_ed25519","path":"work/a.txt","name":"a.txt"}`
+	wsjson.Write(ctx, conn, message{Type: "request", ID: "2", Op: "put", Serve: put})
+	wsjson.Write(ctx, conn, message{Type: "upload", ID: "2", Data: []byte("FI")})
+	wsjson.Write(ctx, conn, message{Type: "upload", ID: "2", Data: []byte("LE"), Done: true})
+	var answers []message
+	for {
+		var m message
+		if err := wsjson.Read(ctx, conn, &m); err != nil {
+			t.Fatalf("put answers: %v; so far %+v", err, answers)
+		}
+		answers = append(answers, m)
+		if m.Done {
+			break
+		}
+	}
+	if answers[0].Line != `{"output":"got FILE"}` || answers[len(answers)-1].Line != `{"exit":0}` {
+		t.Fatalf("put answers %+v", answers)
+	}
+	get := `{"op":"get","vm":"golden-slot1-abc","path":"log.txt","result":"/Users/someone/.zshrc"}`
+	if got := ask(t, conn, message{ID: "3", Op: "get", Serve: get}); len(got) != 2 || string(got[0].Data) != "LOG" {
+		t.Fatalf("get answers %+v", got)
+	}
+	for _, line := range host.all() {
+		if strings.Contains(line, "/Users/someone") || strings.Contains(line, `"file"`) {
+			t.Fatalf("a client's path reached the host: %s", line)
+		}
 	}
 }

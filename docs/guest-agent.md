@@ -29,7 +29,8 @@ to 4 GiB; the account itself reads and writes them, never the root agent, and st
 readable only by it. A `put` the guest can't store, as on a full disk, fails saying so, and the
 agent goes on; one before 0.6.1 was killed by it, and launchd restarted it, which cut off every
 command running through it. The host refuses a `get` larger than it asked for and deletes a
-partial file.
+partial file. `paddock cp` stages files there under a name of its own, and moves them to or from
+the path asked for with the guest's own shell, as the account.
 
 When it starts, before the user logs in, the agent copies the user's per-host preferences into
 place for the Mac it runs on. macOS keeps some settings, such as when the screen saver starts,

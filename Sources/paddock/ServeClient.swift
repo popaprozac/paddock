@@ -4,7 +4,7 @@ import PaddockCore
 
 /// A request to `paddock serve`, sent as one line of JSON over its socket.
 struct ServeRequest: Codable {
-    var op: String  // "acquire", "release", "exec", "task", "screenshot", "axtree", "input", "status", "show" or "hide"
+    var op: String  // "acquire", "release", "exec", "task", "put", "get", "screenshot", "axtree", "input", "status", "show" or "hide"
     var vm: String?
     var command: String?
     var bundle: String?  // task: absolute path of the git bundle to work on
@@ -13,6 +13,9 @@ struct ServeRequest: Codable {
     var input: InputAction?  // input: what to send to the VM's pointer or keyboard
     var wait: Bool?  // acquire: false answers busy at once when no warm VM is free, instead of waiting
     var watch: Bool?  // view: frames only, with no input taken, so agents keep driving the VM
+    var file: String?  // put: absolute path of the file on this Mac to copy into the VM
+    var path: String?  // put and get: the path in the VM, absolute or from the account's home; "" is the home folder
+    var name: String?  // put: the file's own name, for a path that is a folder in the VM
 }
 
 /// One piece of input for a VM, sent with the "input" request. Coordinates are the guest's screen

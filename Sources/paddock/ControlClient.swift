@@ -273,9 +273,13 @@ final class ControlClient {
                 let file = Self.temporaryFile("paddock-screen", "png")
                 fields["result"] = file.path
                 try run(fields, id: id, on: socket, sendBack: file, required: true, cleanup: [file])
-            case "task":
-                // The bundle comes next, in pieces; the task runs once it's all here.
-                let bundle = Self.temporaryFile("paddock-task-in", "bundle")
+            case "get":
+                let file = Self.temporaryFile("paddock-get", "file")
+                fields["result"] = file.path
+                try run(fields, id: id, on: socket, sendBack: file, required: true, cleanup: [file])
+            case "task", "put":
+                // The bundle or file comes next, in pieces; the request runs once it's all here.
+                let bundle = Self.temporaryFile("paddock-\(fields["op"] as? String ?? "upload")-in", "file")
                 guard FileManager.default.createFile(atPath: bundle.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
                     throw PaddockError("can't make a file for the task's bundle")
                 }
@@ -306,7 +310,7 @@ final class ControlClient {
             if let data = message.data {
                 upload.size += data.count
                 guard upload.size <= ControlLink.maxTransfer else {
-                    throw PaddockError("the bundle is over \(ControlLink.maxTransfer >> 30) GB, the most a task takes")
+                    throw PaddockError("the upload is over \(ControlLink.maxTransfer >> 30) GB, the most the pool carries")
                 }
                 try upload.handle.write(contentsOf: data)
             }
@@ -314,8 +318,12 @@ final class ControlClient {
             guard message.done == true else { return }
             uploads[id] = nil
             try upload.handle.close()
-            let result = Self.temporaryFile("paddock-task-out", "bundle")
             var fields = upload.request
+            guard fields["op"] as? String == "task" else {
+                fields["file"] = upload.bundle.path
+                return try run(fields, id: id, on: socket, sendBack: nil, required: false, cleanup: [upload.bundle])
+            }
+            let result = Self.temporaryFile("paddock-task-out", "bundle")
             fields["bundle"] = upload.bundle.path
             fields["result"] = result.path
             try run(fields, id: id, on: socket, sendBack: result, required: false, cleanup: [upload.bundle, result])
@@ -406,6 +414,11 @@ final class ControlClient {
         // serve's main actor.
         guard let handle = try? FileHandle(forReadingFrom: file) else {
             return required ? ServeResponse(error: "serve didn't save the file").line : ending
+        }
+        // The client holds what comes back in memory, as it does what it sends up.
+        if let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > ControlLink.maxTransfer {
+            try? handle.close()
+            return ServeResponse(error: "the file is over \(ControlLink.maxTransfer >> 30) GB, the most the pool carries").line
         }
         defer { try? handle.close() }
         do {

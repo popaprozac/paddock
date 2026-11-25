@@ -98,8 +98,8 @@ func (s *server) answer(ctx context.Context, client string, l *clientLink, reque
 	case "acquire":
 		go s.relayAcquire(ctx, client, l, request)
 		return
-	case "task":
-		// Expected before the next message is read, which may already be the bundle's first piece.
+	case "task", "put":
+		// Expected before the next message is read, which may already be the upload's first piece.
 		uploads := l.expectUpload(request.ID)
 		go s.relayTask(ctx, client, l, request, uploads)
 		return
