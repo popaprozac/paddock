@@ -143,7 +143,9 @@ import Testing
                      #"{"op":"screenshot","vm":"v","result":"/Users/zach/.ssh/authorized_keys"}"#,
                      #"{"op":"exec","vm":"v","command":"ls","result":"/tmp/x"}"#, #"{"vm":"v"}"#, "not json",
                      #"{"op":"put","vm":"v","file":"/Users/zach/.ssh/id_ed25519","path":"x","name":"x"}"#,
-                     #"{"op":"get","vm":"v","path":"x","result":"/Users/zach/.zshrc"}"#] {
+                     #"{"op":"get","vm":"v","path":"x","result":"/Users/zach/.zshrc"}"#,
+                     #"{"op":"join","url":"https://elsewhere.example:7443","token":"pj1.x.y"}"#,
+                     #"{"op":"leave","force":true}"#] {
             #expect(throws: PaddockError.self) { try ControlLink.checkRemote(line) }
         }
     }

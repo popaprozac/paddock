@@ -16,6 +16,10 @@ struct ServeRequest: Codable {
     var file: String?  // put: absolute path of the file on this Mac to copy into the VM
     var path: String?  // put and get: the path in the VM, absolute or from the account's home; "" is the home folder
     var name: String?  // put: the file's own name, for a path that is a folder in the VM
+    var url: String?   // join: the control plane to link this Mac to
+    var token: String?  // join: a join token, the first time this Mac joins that control plane
+    var force: Bool?   // leave: hand back the VMs the pool holds here, rather than refuse
+    var pool: Bool?    // acquire: set by this Mac's link to the control plane, so leave knows the pool's VMs
 }
 
 /// One piece of input for a VM, sent with the "input" request. Coordinates are the guest's screen

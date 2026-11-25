@@ -78,6 +78,7 @@ final class Slot {
     var vm: HeadlessVM?
     var warmAddress: String? { didSet { noteState() } }  // set once the current VM's agent answers
     var assigned = false { didSet { noteState() } }      // the current VM has been handed out
+    var heldByPool = false  // handed out through the control plane, not on this Mac
     var emptyReason: String? { didSet { noteState() } }  // why the slot holds no VM, after a refill failed
     private(set) var stateSince = ContinuousClock.now
     private var lastState = "preparing"
@@ -117,7 +118,7 @@ final class WarmPool {
 
     private let home = PaddockHome.fromEnvironment()
     private let slots: [Slot]
-    private var waiting: [(responder: Responder, allow: [String])] = []  // acquires that came in before a VM was warm
+    private var waiting: [(responder: Responder, allow: [String], pool: Bool)] = []  // acquires that came in before a VM was warm
     private var server: LineServer?
     private var interrupts: [any DispatchSourceSignal] = []
     private var awake: (any NSObjectProtocol)?
@@ -133,7 +134,8 @@ final class WarmPool {
     }
 
     private let userspaceNetwork: Bool
-    private let control: ControlIdentity?
+    private var control: ControlIdentity?
+    private var leaving = false  // between paddock leave and the link closing
 
     private let image: String
     private let sampler = UsageSampler()
@@ -224,12 +226,7 @@ final class WarmPool {
         deleteLeftoverSlots(of: name)
         sampleUsage()
         if let control {
-            controlClient = ControlClient(identity: control, image: name,
-                                          slots: { [weak self] in self?.slotReports() ?? [] },
-                                          diskFree: { [weak self] in self?.freeDisk() },
-                                          status: { [weak self] in self?.status() },
-                                          onRequest: { [weak self] line, responder in self?.handle(line, responder) })
-            controlClient?.start()
+            link(to: control)
         }
         await withTaskGroup(of: Void.self) { group in
             for slot in slots {
@@ -247,6 +244,17 @@ final class WarmPool {
         while true {
             try await Task.sleep(for: .seconds(3600))
         }
+    }
+
+    /// Links this Mac to the control plane `identity` belongs to, and keeps it linked.
+    private func link(to identity: ControlIdentity) {
+        control = identity
+        controlClient = ControlClient(identity: identity, image: image,
+                                      slots: { [weak self] in self?.slotReports() ?? [] },
+                                      diskFree: { [weak self] in self?.freeDisk() },
+                                      status: { [weak self] in self?.status() },
+                                      onRequest: { [weak self] line, responder in self?.handle(line, responder) })
+        controlClient?.start()
     }
 
     /// Boots and saves the slot's clone of `source`, then fills the slot. A slot that can't start
@@ -398,6 +406,9 @@ final class WarmPool {
         let request = try? JSONDecoder().decode(ServeRequest.self, from: Data(line.utf8))
         switch request?.op {
         case "acquire":
+            if request?.pool == true && leaving {
+                return responder.finish(ServeResponse(error: "this Mac is leaving the pool", busy: true).line)
+            }
             let reasons = slots.compactMap { slot in slot.emptyReason.map { "slot \(slot.number) is empty: \($0)" } }
             if reasons.count == slots.count {
                 return responder.finish(ServeResponse(error: reasons.joined(separator: "; ")).line)
@@ -412,7 +423,7 @@ final class WarmPool {
             if request?.wait == false && !(waiting.isEmpty && freeSlot != nil) {
                 return responder.finish(ServeResponse(error: "no warm VM is free on this Mac", busy: true).line)
             }
-            waiting.append((responder, allow))
+            waiting.append((responder, allow, request?.pool == true))
             handOut()
         case "release":
             release(request?.vm, responder)
@@ -438,6 +449,10 @@ final class WarmPool {
             hide(request?.vm, responder)
         case "view":
             view(request?.vm, watch: request?.watch == true, responder)
+        case "join":
+            join(request, responder)
+        case "leave":
+            leave(force: request?.force == true, responder)
         default:
             responder.finish(ServeResponse(error: "unknown request: \(line.prefix(200))").line)
         }
@@ -453,7 +468,7 @@ final class WarmPool {
     private func handOut() {
         guard !waiting.isEmpty, let slot = freeSlot,
               let warmAddress = slot.warmAddress, let current = slot.current, let vm = slot.vm else { return }
-        let (responder, allow) = waiting.removeFirst()
+        let (responder, allow, pool) = waiting.removeFirst()
         // An acquire stopped while it waited gets nothing: the VM stays warm for the next.
         if responder.clientHungUp {
             return handOut()
@@ -471,6 +486,7 @@ final class WarmPool {
             }
         }
         slot.assigned = true
+        slot.heldByPool = pool
         print("Slot \(slot.number) assigned: '\(current.name)' at \(warmAddress)"
             + (allow.isEmpty ? "" : ", allowing \(allow.joined(separator: ", "))"))
         // What the VM is, for a client on another Mac, which can't read its config.
@@ -807,6 +823,7 @@ final class WarmPool {
     private func replaceCurrent(of slot: Slot) {
         slot.warmAddress = nil
         slot.assigned = false
+        slot.heldByPool = false
         Task {
             await discardCurrent(of: slot)
             await keepFilling(slot)
@@ -844,8 +861,72 @@ final class WarmPool {
         }
     }
 
+    /// Links this Mac to the control plane at the request's URL without a restart, joining it
+    /// first with the request's token; with no token, this Mac must have joined it before.
+    private func join(_ request: ServeRequest?, _ responder: Responder) {
+        guard let text = request?.url else {
+            return responder.finish(ServeResponse(error: "join needs the control plane's URL").line)
+        }
+        Task {
+            do {
+                let url = try ControlEnrollment.url(text)
+                if let control {
+                    guard control.url.absoluteString == url.absoluteString else {
+                        throw PaddockError("this Mac is in the pool at \(control.url.absoluteString): paddock leave first")
+                    }
+                    return responder.finish(ServeResponse(output: "This Mac is already in the pool at \(url.absoluteString)").line)
+                }
+                let identity = try await ControlEnrollment.identity(control: url, join: request?.token, home: home)
+                guard controlClient == nil else { throw PaddockError("this Mac joined another pool meanwhile") }
+                link(to: identity)
+                responder.finish(ServeResponse(output: "This Mac is joining the pool at \(url.absoluteString) as \(identity.id)").line)
+            } catch {
+                responder.finish(ServeResponse(error: error.localizedDescription).line)
+            }
+        }
+    }
+
+    /// Closes this Mac's link to its control plane; serve goes on here alone, and can join again
+    /// without a token. While the pool holds VMs here it refuses, unless `force`, which wipes them
+    /// first and waits for the link's next report, so the control plane forgets them at once.
+    private func leave(force: Bool, _ responder: Responder) {
+        guard let client = controlClient, let control else {
+            return responder.finish(ServeResponse(error: "this Mac isn't in a pool").line)
+        }
+        guard !leaving else {
+            return responder.finish(ServeResponse(error: "this Mac is already leaving the pool").line)
+        }
+        let held = slots.filter { $0.assigned && $0.heldByPool }
+        if !held.isEmpty && !force {
+            let names = held.compactMap { $0.current?.name }.joined(separator: ", ")
+            return responder.finish(ServeResponse(error: "the pool holds \(names) here: leave once it's released, "
+                + "or with --force, which wipes \(held.count == 1 ? "it" : "them")").line)
+        }
+        leaving = true
+        Task {
+            for slot in held {
+                print("Slot \(slot.number): leaving the pool, so wiping '\(slot.current?.name ?? "")'")
+                slot.warmAddress = nil
+                slot.assigned = false
+                slot.heldByPool = false
+                await discardCurrent(of: slot)
+                Task { await keepFilling(slot) }
+            }
+            // The link reports the slots within a second of a change, and the control plane
+            // forgets the hand-outs of VMs a report no longer names.
+            if !held.isEmpty { try? await Task.sleep(for: .seconds(2)) }
+            client.stop()
+            controlClient = nil
+            self.control = nil
+            leaving = false
+            print("Left the pool at \(control.url.absoluteString); serve goes on here alone")
+            responder.finish(ServeResponse(output: "This Mac left the pool at \(control.url.absoluteString)"
+                + (held.isEmpty ? "" : ", and wiped the \(held.count) VM\(held.count == 1 ? "" : "s") it held here")).line)
+        }
+    }
+
     private func answerWaiting(with error: String) {
-        for (responder, _) in waiting {
+        for (responder, _, _) in waiting {
             responder.finish(ServeResponse(error: error).line)
         }
         waiting.removeAll()
