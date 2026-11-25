@@ -18,7 +18,7 @@ and its VM (see [Files](#files)).
 
 | Tool | What it does |
 | --- | --- |
-| `acquire` | Takes a warm VM from `serve`, or from the pool on a Mac logged in to a control plane, waiting while the slots fill. `image` picks the golden image in a pool that serves more than one, as `paddock acquire --image` does. `allow` lists the names it may reach on the userspace network. |
+| `acquire` | Takes a warm VM from `serve`, or from the pool on a Mac logged in to a control plane, waiting while the slots fill. `image` picks the golden image in a pool that serves more than one, as `paddock acquire --image` does. `allow` lists the names it may reach on the userspace network. A VM no tool uses for an hour goes back, as with `paddock acquire`; the next call for it fails saying so, and the agent acquires another. |
 | `screenshot` | The VM's screen as a PNG. |
 | `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
 | `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). `scroll` moves 1 to 1,000 lines, 5 by default. |
