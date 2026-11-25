@@ -7,7 +7,7 @@ struct Paddock: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "paddock",
         abstract: "Sandbox VMs of macOS, Linux and Windows on Apple silicon: build, run, clone, benchmark and serve them.",
-        version: "0.1.0",
+        version: "0.2.0",
         subcommands: [Install.self, Run.self, Clone.self, Bench.self, Serve.self, Acquire.self, Exec.self, RunTask.self, Screenshot.self, AXTreeCommand.self, Click.self, TypeText.self, Key.self, Scroll.self, Release.self, Show.self, Hide.self, View.self, MCPCommand.self, Init.self, Build.self, GrantCommand.self, Login.self, Logout.self, Hosts.self, Top.self, Askpass.self]
     )
 
