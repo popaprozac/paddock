@@ -843,6 +843,9 @@ final class WarmPool {
             lapses.append((current.name, why))
             if lapses.count > 100 { lapses.removeFirst() }
             print("Slot \(slot.number): \(why)" + (offering ? "; restoring a fresh clone" : ""))
+            if slot.heldByPool {
+                controlClient?.tellLapsed(current.name, why: why)
+            }
             replaceCurrent(of: slot)
         }
     }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -278,9 +279,10 @@ func TestAcquireGoesToAWarmHostAndTheVMIsTheClientsAlone(t *testing.T) {
 	var forwarded struct {
 		Op    string   `json:"op"`
 		Allow []string `json:"allow"`
+		Idle  float64  `json:"idle"`
 	}
 	if json.Unmarshal([]byte(host.all()[0]), &forwarded); forwarded.Op != "acquire" ||
-		strings.Join(forwarded.Allow, " ") != "github.com *.example.org" {
+		strings.Join(forwarded.Allow, " ") != "github.com *.example.org" || forwarded.Idle != 5400 {
 		t.Fatalf("the host got %v", host.all())
 	}
 	if h := c.srv.state.handout("golden-slot1-abc"); h == nil || h.Client != alice || h.Host != host.id {
@@ -866,5 +868,106 @@ func TestAPutsFileGoesUpAndAGetsComesBack(t *testing.T) {
 		if strings.Contains(line, "/Users/someone") || strings.Contains(line, `"file"`) {
 			t.Fatalf("a client's path reached the host: %s", line)
 		}
+	}
+}
+
+func TestAnAcquireCarriesItsIdleTimeUpToThePoolsMost(t *testing.T) {
+	forwardedIdle := func(host *fakeHost) []float64 {
+		var idle []float64
+		for _, line := range host.all() {
+			var request struct {
+				Op   string  `json:"op"`
+				Idle float64 `json:"idle"`
+			}
+			if json.Unmarshal([]byte(line), &request); request.Op == "acquire" {
+				idle = append(idle, request.Idle)
+			}
+		}
+		return idle
+	}
+	c := newTestControl(t)
+	c.srv.maxIdle = 2 * time.Hour
+	host := c.startFakeHost(t, "golden", 2)
+	c.waitUntilOnline(t, "golden")
+	_, conn := c.newClient(t)
+	for i, asked := range []string{`"idle":10800`, `"idle":0`, `"idle":"4h"`, `"idle":90.5`} {
+		got := ask(t, conn, message{ID: fmt.Sprint("refused", i), Op: "acquire", Serve: `{"op":"acquire",` + asked + `}`})
+		if last := got[len(got)-1]; last.Error == "" {
+			t.Fatalf("an acquire with %s: %+v", asked, got)
+		}
+	}
+	if got := ask(t, conn, message{ID: "1", Op: "acquire", Serve: `{"op":"acquire","idle":10800}`}); !strings.Contains(got[0].Error, "at most 2h") {
+		t.Fatalf("an acquire over the pool's most says %+v", got)
+	}
+	ask(t, conn, message{ID: "2", Op: "acquire", Serve: `{"op":"acquire","idle":5400}`})
+	ask(t, conn, message{ID: "3", Op: "acquire"})
+	if idle := forwardedIdle(host); fmt.Sprint(idle) != "[5400 3600]" {
+		t.Fatalf("the Mac was asked for idle times %v; want the one asked for, then serve's default", idle)
+	}
+
+	// A pool whose most is under serve's default sends its most instead.
+	c = newTestControl(t)
+	c.srv.maxIdle = 30 * time.Minute
+	host = c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	_, conn = c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	if idle := forwardedIdle(host); fmt.Sprint(idle) != "[1800]" {
+		t.Fatalf("the Mac was asked for idle times %v; want the pool's most", idle)
+	}
+}
+
+func TestAVMItsMacWipedForGoingUnusedSaysSoToItsHolder(t *testing.T) {
+	c := newTestControl(t)
+	host := c.startFakeHost(t, "golden", 1)
+	c.waitUntilOnline(t, "golden")
+	client, conn := c.newClient(t)
+	_, otherConn := c.newClient(t)
+	ask(t, conn, message{ID: "1", Op: "acquire"})
+	ask(t, conn, message{ID: "2", Op: "renew", Serve: `{"op":"renew","vm":"golden-slot1-abc"}`})
+	if !host.sawRequest("renew") {
+		t.Fatal("renew didn't reach the Mac")
+	}
+
+	// Another Mac can't make the pool forget this one's hand-outs.
+	other := c.startFakeHost(t, "other", 1)
+	why := "'golden-slot1-abc' lapsed after 1h unused, and was wiped"
+	ctx := context.Background()
+	wsjson.Write(ctx, other.conn, message{Type: "lapsed", VM: "golden-slot1-abc", Error: why})
+	other.report(2) // read after the lapse, on the same link
+	eventually(t, "the other Mac's report", func() bool {
+		c.srv.mu.Lock()
+		l := c.srv.links[other.id]
+		c.srv.mu.Unlock()
+		if l == nil {
+			return false
+		}
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.slots) == 2
+	})
+	if c.srv.state.handout("golden-slot1-abc") == nil {
+		t.Fatal("another Mac's lapse forgot this one's hand-out")
+	}
+
+	wsjson.Write(ctx, host.conn, message{Type: "lapsed", VM: "golden-slot1-abc", Error: why})
+	released := `"event":"released","host":"` + host.id + `","client":"` + client + `","vm":"golden-slot1-abc","reason":"` + why + `"`
+	eventually(t, "the lapse to be audited", func() bool {
+		audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+		return strings.Contains(string(audited), released)
+	})
+	if c.srv.state.handout("golden-slot1-abc") != nil {
+		t.Fatal("the lapsed VM is still handed out")
+	}
+	audited, _ := os.ReadFile(filepath.Join(c.dir, "audit.log"))
+	if n := strings.Count(string(audited), `"event":"released"`); n != 1 {
+		t.Fatalf("%d released events, so the other Mac's lapse counted:\n%s", n, audited)
+	}
+	exec := `{"op":"exec","vm":"golden-slot1-abc","command":"uname"}`
+	if got := ask(t, conn, message{ID: "3", Op: "exec", Serve: exec}); got[0].Error != why {
+		t.Fatalf("the holder's next request says %+v", got)
+	}
+	if got := ask(t, otherConn, message{ID: "4", Op: "exec", Serve: exec}); !strings.Contains(got[0].Error, "isn't a VM you acquired") {
+		t.Fatalf("another client hears %+v", got)
 	}
 }

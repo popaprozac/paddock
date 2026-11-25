@@ -89,6 +89,7 @@ final class ControlClient {
     private let onRequest: @MainActor (String, Responder) -> Void
     private var task: Task<Void, Never>?
     private var socket: URLSessionWebSocketTask?
+    private var linked: URLSessionWebSocketTask?  // the socket, once the control plane welcomed this Mac
 
     /// The removed Mac's link is closed by the control plane, which then refuses it.
     private struct Removed: Error {}
@@ -170,7 +171,10 @@ final class ControlClient {
         let socket = session.webSocketTask(with: url)
         socket.maximumMessageSize = 1 << 20
         self.socket = socket
-        defer { self.socket = nil }
+        defer {
+            self.socket = nil
+            linked = nil
+        }
 
         let end = LinkEnd()
         trust.onTaskEnd { end.finish($0) }
@@ -181,7 +185,7 @@ final class ControlClient {
         }
         let work = Task {
             do {
-                try await self.serveLink(on: socket, linked: { watchdog.cancel(); onLinked() })
+                try await self.serveLink(on: socket, linked: { watchdog.cancel(); self.linked = socket; onLinked() })
                 end.finish(PaddockError("the link closed"))
             } catch {
                 end.finish(error)
@@ -479,6 +483,17 @@ final class ControlClient {
         @unknown default: throw PaddockError("the control plane sent something unexpected")
         }
         return try JSONDecoder().decode(ControlLink.Message.self, from: data)
+    }
+
+    /// Tells the control plane why this Mac wiped a VM it handed out through the pool, so its
+    /// holder hears why. While the link is down it says nothing, and the control plane forgets the
+    /// VM's hand-out once the Mac's next report leaves the VM out.
+    func tellLapsed(_ vm: String, why: String) {
+        guard let linked else { return }
+        var message = ControlLink.Message(type: "lapsed")
+        message.vm = vm
+        message.error = why
+        Task { try? await send(message, on: linked) }
     }
 
     private func send(_ message: ControlLink.Message, on socket: URLSessionWebSocketTask) async throws {

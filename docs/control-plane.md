@@ -23,7 +23,7 @@ paddock acquire                             # a warm VM from any Mac in the pool
 
 | Command | What it does |
 | --- | --- |
-| `paddock-control run [-listen addr] [-name name] [-state folder]` | Runs the control plane on HTTPS, port 7443 on every address by default, and prints the URLs hosts can use. `-listen` picks one address and port; `-name` adds a name or address the machine is reached by that it can't find itself, such as a MagicDNS name or a load balancer's, and repeats. |
+| `paddock-control run [-listen addr] [-name name] [-max-idle 24h] [-state folder]` | Runs the control plane on HTTPS, port 7443 on every address by default, and prints the URLs hosts can use. `-listen` picks one address and port; `-name` adds a name or address the machine is reached by that it can't find itself, such as a MagicDNS name or a load balancer's, and repeats. `-max-idle` is the longest an acquire's `--idle` may ask for, 24h by default, as a Go duration such as `8h` or `90m`; an acquire asking for more is refused, and one asking for nothing gets `serve`'s hour, or `-max-idle` if that's shorter. |
 | `paddock-control join-token [-ttl 1h]` | Makes a token one Mac can join with, for an hour by default and 24 hours at most, and prints the `serve` command to run on that Mac. |
 | `paddock-control hosts [-json]` | Lists every Mac that joined: online or not, its image, its slots (warm, assigned, preparing or empty), macOS and paddock versions; with `-json`, also its address, cores, memory and free disk, what it and each VM use now, and the client holding each VM. It marks a Mac stale when it's offline and never linked, or hasn't linked for over 7 days, as a re-provisioned or retired Mac leaves behind, and prints the `remove-host` command; it removes nothing itself. |
 | `paddock-control remove-host <ID or name>` | Removes a Mac: its link closes at once, the VMs it handed out are no longer anyone's, and it can't link again unless it joins with a new token. |
@@ -47,8 +47,8 @@ a laptop can use the LAN name at home and the MagicDNS name away.
 
 Logged in, `acquire` picks the online Mac serving the image with the most free warm slots; with
 none free, it waits its turn, first come first served, and says so. `--image` names the golden
-image when the pool serves more than one. `exec`, `task`, `screenshot`, `axtree`, the input
-commands, `view`, `release` and `paddock mcp` then reach that VM through the control plane,
+image when the pool serves more than one. `exec`, `task`, `cp`, `screenshot`, `axtree`, the input
+commands, `view`, `renew`, `release` and `paddock mcp` then reach that VM through the control plane,
 whichever Mac it runs on. Screenshots and task bundles travel in pieces of 256 KB; a bundle can be
 up to 1 GB. If a client leaves before its bundle is all up, or sends more than 1 GB, the control
 plane tells the Mac to drop what it has so far. A view runs both ways for as long as its window is
@@ -93,7 +93,7 @@ apart.
   admin socket, which only the control plane's user can open. Until a link has signed, its messages
   can be 4 KB at most, and one address can have 16 links waiting to sign.
 - **The VMs, never the Mac.** Down a Mac's link the control plane sends only `serve`'s VM requests
-  (acquire, release, exec, axtree, input, screenshot, task, put and get), which `serve` checks as
+  (acquire, release, renew, exec, axtree, input, screenshot, task, put, get and view), which `serve` checks as
   it checks its own socket's: only VMs it handed out. The Mac refuses a request that names a file,
   and picks its own temporary files for screenshots, bundles and copied files; a copy carries the
   file's bytes, never a path on either Mac.
@@ -101,7 +101,9 @@ apart.
   a restart keeps it. Only that client can use or release the VM; anyone else's request for it is
   refused. A hand-out ends when its client releases the VM or is removed or logs out, when the
   VM's Mac is removed, or when the Mac reports its slots without it, as after its `serve` stops or
-  restarts. The control plane
+  restarts. It also ends when the VM goes unused for its idle time (see `acquire --idle`): its
+  Mac's `serve`, which sees every request for it, wipes it and tells the control plane, and the
+  client's next request for it says the VM lapsed. The control plane
   keeps a release its Mac didn't answer, as one sent while the Mac was offline, and sends it again
   when the Mac next reports the VM.
 - **Removal is immediate.** `remove-host` deletes the Mac's key and closes its link; its next link
@@ -111,7 +113,8 @@ apart.
   last linked (one enrolled before the control plane kept that counts as never linked until it
   links again), the hashes of unused tokens and which client holds each VM, until the VM's Mac
   stops reporting it; `audit.log`, a JSON line for each token made, Mac or client enrolled, refused
-  or removed, link opened, refused or closed, VM handed out, released or refused, and request,
+  or removed, link opened, refused or closed, VM handed out, released (with why, such as that it
+  lapsed) or refused, and request,
   with its client, VM and operation, with no secrets in it; and `admin.sock`. It records at most 10
   refused enrollments and links a minute, so a caller trying again and again can't fill the disk.
 - **Everyone logged in sees the pool.** Every client sees every Mac, its slots, what each Mac and

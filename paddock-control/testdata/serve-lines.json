@@ -1,7 +1,7 @@
 {
-  "acquire": {"op": "acquire", "allow": ["github.com", "*.example.org"], "wait": false},
+  "acquire": {"op": "acquire", "allow": ["github.com", "*.example.org"], "wait": false, "idle": 5400},
   "release": {"op": "release", "vm": "golden-slot1-d07d90-a903d8"},
-  "acquired": {"vm": "golden-slot1-d07d90-a903d8", "ip": "192.168.64.2", "os": "linux", "host": "studio"},
+  "acquired": {"vm": "golden-slot1-d07d90-a903d8", "ip": "192.168.64.2", "os": "linux", "host": "studio", "idle": 5400},
   "busy": {"error": "no warm VM is free on this Mac", "busy": true},
   "refused": {"error": "unexpected"}
 }

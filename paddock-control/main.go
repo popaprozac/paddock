@@ -109,7 +109,11 @@ func run(args []string) error {
 		names = append(names, name)
 		return nil
 	})
+	maxIdle := flags.Duration("max-idle", defaultMaxIdle, "the longest a VM handed out may go unused before it goes back, which acquire's --idle may ask for")
 	flags.Parse(args)
+	if *maxIdle < time.Second {
+		return fmt.Errorf("-max-idle is a second or more, such as 8h")
+	}
 
 	if err := openStateDir(*dir); err != nil {
 		return err
@@ -128,6 +132,7 @@ func run(args []string) error {
 	}
 	defer audit.close()
 	srv := newServer(st, authority, audit)
+	srv.maxIdle = *maxIdle
 
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
