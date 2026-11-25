@@ -43,7 +43,7 @@ const (
 // message is every message on a host's or client's link, as one JSON object; which fields it has
 // depends on its type.
 type message struct {
-	Type      string    `json:"type"`                // challenge, auth, welcome, hello, capacity, usage, request, upload, cancel, response
+	Type      string    `json:"type"`                // challenge, auth, welcome, hello, capacity, usage, lapsed, request, upload, cancel, response
 	Nonce     []byte    `json:"nonce,omitempty"`     // challenge: 32 random bytes
 	Host      string    `json:"host,omitempty"`      // a host's auth and welcome: its ID
 	Client    string    `json:"client,omitempty"`    // a client's auth and welcome: its ID
@@ -57,6 +57,7 @@ type message struct {
 	DiskFree  uint64    `json:"diskFree,omitempty"`  // capacity: free space for VMs, in bytes
 	Slots     []slot    `json:"slots,omitempty"`     // capacity and usage: every slot on the host
 	Usage     *macUsage `json:"usage,omitempty"`     // usage: what the host uses now, sent every 2 s
+	VM        string    `json:"vm,omitempty"`        // lapsed: the VM the host wiped, with why in Error
 
 	ID      string       `json:"id,omitempty"`      // request and response: pairs them on one link
 	Serve   string       `json:"serve,omitempty"`   // request to a host: one of serve's request lines
@@ -131,11 +132,14 @@ type server struct {
 	pending     map[string]int // links not yet authenticated, by remote address
 	stopping    bool           // closeAll has run
 	refusals    []time.Time    // refusals recorded in the last refusalWindow
+	lapses      []lapse        // the last VMs their Macs wiped for going unused, oldest first
+
+	maxIdle time.Duration // the longest an acquire may let its VM go unused
 }
 
 func newServer(st *state, authority *authority, audit *auditLog) *server {
 	return &server{state: st, authority: authority, audit: audit, now: time.Now, silence: hostSilence, links: map[string]*link{},
-		clientLinks: map[string]map[*clientLink]bool{}, reserved: map[string]int{}, pending: map[string]int{}}
+		clientLinks: map[string]map[*clientLink]bool{}, reserved: map[string]int{}, pending: map[string]int{}, maxIdle: defaultMaxIdle}
 }
 
 func (s *server) routes() http.Handler {
@@ -343,6 +347,8 @@ func (s *server) link(w http.ResponseWriter, r *http.Request) {
 		case "capacity":
 			s.forgetMissing(host, m.Slots)
 			s.poolChanged()
+		case "lapsed":
+			s.forgetLapsed(host, m.VM, m.Error)
 		case "hello":
 			s.poolChanged()
 		}

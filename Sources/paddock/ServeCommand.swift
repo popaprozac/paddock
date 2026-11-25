@@ -79,6 +79,10 @@ final class Slot {
     var warmAddress: String? { didSet { noteState() } }  // set once the current VM's agent answers
     var assigned = false { didSet { noteState() } }      // the current VM has been handed out
     var heldByPool = false  // handed out through the control plane, not on this Mac
+    private(set) var lease = WarmPool.defaultLease  // seconds the VM handed out may go unused before it lapses
+    private var lastUse = ContinuousClock.now
+    private var running: [Running] = []  // requests for the VM handed out, which keep it in use until they end
+    private struct Running { weak var responder: Responder? }
     var emptyReason: String? { didSet { noteState() } }  // why the slot holds no VM, after a refill failed
     private(set) var stateSince = ContinuousClock.now
     private var lastState = "preparing"
@@ -101,6 +105,30 @@ final class Slot {
         stateSince = .now
     }
 
+    /// Starts the lease of the VM just handed out in answer to `responder`.
+    func startLease(_ seconds: Int, with responder: Responder) {
+        lease = seconds
+        running = []
+        use(by: responder)
+    }
+
+    /// Counts a request for the VM handed out as use, for as long as it runs.
+    func use(by responder: Responder) {
+        lastUse = .now
+        running.removeAll { $0.responder?.isFinished ?? true }
+        running.append(Running(responder: responder))
+    }
+
+    /// Whether the VM handed out has lapsed: for longer than its lease, no request for it ran and
+    /// it wasn't on this Mac's screen, where a person uses it without sending any.
+    func lapsed(at now: ContinuousClock.Instant) -> Bool {
+        running.removeAll { $0.responder?.isFinished ?? true }
+        if !running.isEmpty || vm?.isShown == true {
+            lastUse = now
+        }
+        return assigned && now - lastUse > .seconds(lease)
+    }
+
     /// The VM this slot handed out as `name`, if it did.
     func handedOut(_ name: String?) -> (vm: HeadlessVM, bundle: VMBundle)? {
         guard assigned, let vm, let current, name == current.name else { return nil }
@@ -118,7 +146,7 @@ final class WarmPool {
 
     private let home = PaddockHome.fromEnvironment()
     private let slots: [Slot]
-    private var waiting: [(responder: Responder, allow: [String], pool: Bool)] = []  // acquires that came in before a VM was warm
+    private var waiting: [(responder: Responder, allow: [String], pool: Bool, lease: Int)] = []  // acquires that came in before a VM was warm
     private var server: LineServer?
     private var interrupts: [any DispatchSourceSignal] = []
     private var awake: (any NSObjectProtocol)?
@@ -140,6 +168,8 @@ final class WarmPool {
     private var offering = true
     private var leaving = false  // between paddock leave and the link closing
     private static let notOffering = "this Mac isn't offering VMs: paddock offer on"
+    nonisolated static let defaultLease = 3600  // seconds a VM handed out may go unused
+    private var lapses: [(vm: String, why: String)] = []  // the last VMs that lapsed, for their holders' next requests
 
     private let image: String
     private let sampler = UsageSampler()
@@ -229,6 +259,7 @@ final class WarmPool {
                                                       reason: "paddock serve keeps its slots' VMs running")
         deleteLeftoverSlots(of: name)
         sampleUsage()
+        watchLeases()
         if let control {
             link(to: control)
         }
@@ -427,6 +458,10 @@ final class WarmPool {
             if reasons.count == slots.count {
                 return responder.finish(ServeResponse(error: reasons.joined(separator: "; ")).line)
             }
+            let lease = request?.idle ?? Self.defaultLease
+            guard lease > 0 else {
+                return responder.finish(ServeResponse(error: "idle is a time of a second or more, such as 30m or 4h").line)
+            }
             let allow = request?.allow ?? []
             if !allow.isEmpty && !userspaceNetwork {
                 return responder.finish(ServeResponse(error: "--allow needs 'paddock serve --userspace'; the NAT network has no allowlist").line)
@@ -437,10 +472,14 @@ final class WarmPool {
             if request?.wait == false && !(waiting.isEmpty && freeSlot != nil) {
                 return responder.finish(ServeResponse(error: "no warm VM is free on this Mac", busy: true).line)
             }
-            waiting.append((responder, allow, request?.pool == true))
+            waiting.append((responder, allow, request?.pool == true, lease))
             handOut()
         case "release":
             release(request?.vm, responder)
+        case "renew":
+            if let (slot, _, current) = use(request?.vm, for: responder) {
+                responder.finish(ServeResponse(vm: current.name, idle: slot.lease).line)
+            }
         case "exec":
             exec(request?.command, in: request?.vm, responder)
         case "task":
@@ -484,7 +523,7 @@ final class WarmPool {
     private func handOut() {
         guard !waiting.isEmpty, let slot = freeSlot,
               let warmAddress = slot.warmAddress, let current = slot.current, let vm = slot.vm else { return }
-        let (responder, allow, pool) = waiting.removeFirst()
+        let (responder, allow, pool, lease) = waiting.removeFirst()
         // An acquire stopped while it waited gets nothing: the VM stays warm for the next.
         if responder.clientHungUp {
             return handOut()
@@ -503,20 +542,20 @@ final class WarmPool {
         }
         slot.assigned = true
         slot.heldByPool = pool
+        slot.startLease(lease, with: responder)
         print("Slot \(slot.number) assigned: '\(current.name)' at \(warmAddress)"
-            + (allow.isEmpty ? "" : ", allowing \(allow.joined(separator: ", "))"))
+            + (allow.isEmpty ? "" : ", allowing \(allow.joined(separator: ", "))")
+            + ", until it goes \(DurationFormat.lease(lease)) unused")
         // What the VM is, for a client on another Mac, which can't read its config.
         let config = vm.config
         responder.finish(ServeResponse(
             vm: current.name, ip: warmAddress, os: config.kind?.rawValue ?? "macos", screen: config.hasScreen,
-            width: config.display.widthInPixels, height: config.display.heightInPixels).line)
+            width: config.display.widthInPixels, height: config.display.heightInPixels, idle: lease).line)
     }
 
     /// Runs a command in a VM this serve handed out, streaming its output to the caller.
     private func exec(_ command: String?, in name: String?, _ responder: Responder) {
-        guard let (slot, vm, current) = handedOut(name) else {
-            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(name, for: responder) else { return }
         guard let command, !command.isEmpty else {
             return responder.finish(ServeResponse(error: "exec needs a command").line)
         }
@@ -533,9 +572,7 @@ final class WarmPool {
 
     /// Runs a task on a git bundle in a VM this serve handed out; see `HeadlessVM.runTask`.
     private func task(_ request: ServeRequest?, _ responder: Responder) {
-        guard let request, let (slot, vm, current) = handedOut(request.vm) else {
-            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(request?.vm, for: responder), let request else { return }
         guard let command = request.command, !command.isEmpty,
               let bundle = request.bundle, bundle.hasPrefix("/"), let result = request.result, result.hasPrefix("/") else {
             return responder.finish(ServeResponse(error: "task needs a command and absolute bundle and result paths").line)
@@ -555,9 +592,7 @@ final class WarmPool {
 
     /// Copies a file on this Mac into a VM this serve handed out (see HeadlessVM.copyIn).
     private func put(_ request: ServeRequest?, _ responder: Responder) {
-        guard let request, let (slot, vm, current) = handedOut(request.vm) else {
-            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(request?.vm, for: responder), let request else { return }
         guard let file = request.file, file.hasPrefix("/"), let name = request.name else {
             return responder.finish(ServeResponse(error: "put needs an absolute file path and the file's name").line)
         }
@@ -574,9 +609,7 @@ final class WarmPool {
 
     /// Copies a file out of a VM this serve handed out, to `result` on this Mac.
     private func get(_ request: ServeRequest?, _ responder: Responder) {
-        guard let request, let (slot, vm, current) = handedOut(request.vm) else {
-            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(request?.vm, for: responder), let request else { return }
         guard let path = request.path, !path.isEmpty, let result = request.result, result.hasPrefix("/") else {
             return responder.finish(ServeResponse(error: "get needs a path in the VM and an absolute result path").line)
         }
@@ -593,9 +626,7 @@ final class WarmPool {
 
     /// Streams the accessibility tree of the focused app in a VM this serve handed out.
     private func accessibilityTree(of name: String?, _ responder: Responder) {
-        guard let (slot, vm, current) = handedOut(name) else {
-            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(name, for: responder) else { return }
         print("Slot \(slot.number): reading the accessibility tree of '\(current.name)'")
         Task {
             do {
@@ -611,9 +642,7 @@ final class WarmPool {
     /// its virtual pointer and keyboard. Answers once the input is sent, before the guest has acted
     /// on it.
     private func input(_ request: ServeRequest?, _ responder: Responder) {
-        guard let request, let (_, vm, current) = handedOut(request.vm) else {
-            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (_, vm, current) = use(request?.vm, for: responder), let request else { return }
         Task {
             do {
                 guard let action = request.input else { throw PaddockError("input needs an action") }
@@ -669,9 +698,7 @@ final class WarmPool {
 
     /// Saves the screen of a VM this serve handed out as a PNG at the request's result path.
     private func screenshot(_ request: ServeRequest?, _ responder: Responder) {
-        guard let request, let (slot, vm, current) = handedOut(request.vm) else {
-            return responder.finish(ServeResponse(error: "'\(request?.vm ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(request?.vm, for: responder), let request else { return }
         guard let path = request.result, path.hasPrefix("/") else {
             return responder.finish(ServeResponse(error: "screenshot needs an absolute path to save the PNG at").line)
         }
@@ -689,22 +716,17 @@ final class WarmPool {
     }
 
     private func release(_ name: String?, _ responder: Responder) {
-        guard let (slot, _, current) = handedOut(name) else {
-            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, _, current) = use(name, for: responder) else { return }
         responder.finish(ServeResponse(vm: current.name).line)
         print("Slot \(slot.number) released: '\(current.name)'; wiping it"
             + (offering ? " and restoring a fresh clone" : ", and the slot stays empty while this Mac doesn't offer VMs"))
         replaceCurrent(of: slot)
     }
 
-    /// The slot that handed out the VM named `name`, with that VM, if one did.
     /// Puts a VM this serve handed out on this Mac's screen for a person. Screenshots, the
     /// accessibility tree and commands go on; input from agents and the CLI waits for the hand-back.
     private func show(_ name: String?, _ responder: Responder) {
-        guard let (slot, vm, current) = handedOut(name) else {
-            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(name, for: responder) else { return }
         guard !vm.isViewed else {
             return responder.finish(ServeResponse(error: "a person is driving '\(current.name)' with paddock view; it goes on "
                 + "screen here once they close the view").line)
@@ -724,9 +746,7 @@ final class WarmPool {
     }
 
     private func hide(_ name: String?, _ responder: Responder) {
-        guard let (slot, vm, current) = handedOut(name) else {
-            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(name, for: responder) else { return }
         handBack(slot, vm, current)
         responder.finish(ServeResponse(vm: current.name).line)
     }
@@ -736,9 +756,7 @@ final class WarmPool {
     /// accessibility tree and commands go on; input from agents and the CLI waits for the view to close.
     /// A watch takes no input, so agents keep driving, and goes alongside a show or a view.
     private func view(_ name: String?, watch: Bool, _ responder: Responder) {
-        guard let (slot, vm, current) = handedOut(name) else {
-            return responder.finish(ServeResponse(error: "'\(name ?? "")' is not a VM this serve has handed out").line)
-        }
+        guard let (slot, vm, current) = use(name, for: responder) else { return }
         if watch {
             guard vm.watchers < Self.maxWatchers else {
                 return responder.finish(ServeResponse(error: "\(Self.maxWatchers) people are already watching '\(current.name)'").line)
@@ -786,11 +804,50 @@ final class WarmPool {
         print("Slot \(slot.number): '\(current.name)' is off screen again; input from agents goes through")
     }
 
+    /// The slot that handed out the VM named `name`, with that VM, if one did.
     private func handedOut(_ name: String?) -> (Slot, HeadlessVM, VMBundle)? {
         for slot in slots {
             if let (vm, bundle) = slot.handedOut(name) { return (slot, vm, bundle) }
         }
         return nil
+    }
+
+    /// As `handedOut`, for a request that uses the VM: it counts as use until it ends. If no slot
+    /// handed the VM out, it answers why, saying so if the VM lapsed.
+    private func use(_ name: String?, for responder: Responder) -> (Slot, HeadlessVM, VMBundle)? {
+        guard let found = handedOut(name) else {
+            let why = lapses.last { $0.vm == name }?.why ?? "'\(name ?? "")' is not a VM this serve has handed out"
+            responder.finish(ServeResponse(error: why).line)
+            return nil
+        }
+        found.0.use(by: responder)
+        return found
+    }
+
+    /// Every 10 s, wipes the VMs handed out that went unused for longer than their lease, whoever
+    /// holds them: a holder that died, or one that lost the acquire's answer, never releases them.
+    private func watchLeases() {
+        Task { [weak self] in
+            while let pool = self, !pool.stopping {
+                pool.takeBackLapsed()
+                try? await Task.sleep(for: .seconds(10))
+            }
+        }
+    }
+
+    private func takeBackLapsed() {
+        let now = ContinuousClock.now
+        for slot in slots where slot.lapsed(at: now) {
+            guard let current = slot.current else { continue }
+            let why = "'\(current.name)' lapsed after \(DurationFormat.lease(slot.lease)) unused, and was wiped"
+            lapses.append((current.name, why))
+            if lapses.count > 100 { lapses.removeFirst() }
+            print("Slot \(slot.number): \(why)" + (offering ? "; restoring a fresh clone" : ""))
+            if slot.heldByPool {
+                controlClient?.tellLapsed(current.name, why: why)
+            }
+            replaceCurrent(of: slot)
+        }
     }
 
     /// Waits for the guest agent to answer over vsock and for the guest's network, and, if the
@@ -976,7 +1033,7 @@ final class WarmPool {
     }
 
     private func answerWaiting(with error: String) {
-        for (responder, _, _) in waiting {
+        for (responder, _, _, _) in waiting {
             responder.finish(ServeResponse(error: error).line)
         }
         waiting.removeAll()

@@ -61,7 +61,7 @@ public enum ControlLink {
     /// What a Mac takes from the control plane over its link: serve's VM operations, naming no file
     /// on the Mac. A request from the link that named one could reach any file serve's user can,
     /// so the files a screenshot or a task needs are ones the Mac picks itself.
-    public static let remoteOperations: Set<String> = ["acquire", "release", "exec", "axtree", "input", "screenshot", "task", "put", "get", "view"]
+    public static let remoteOperations: Set<String> = ["acquire", "release", "renew", "exec", "axtree", "input", "screenshot", "task", "put", "get", "view"]
 
     /// Operations whose client keeps sending while they answer, such as a view's input: its
     /// uploads go to the running handler, and its answers go out at once.
@@ -94,7 +94,7 @@ public enum ControlLink {
 
     /// Every message on the link, as one JSON object, with the Go side's field names.
     public struct Message: Codable, Equatable, Sendable {
-        public var type: String  // challenge, auth, welcome, hello, capacity, usage, request, upload, cancel, response
+        public var type: String  // challenge, auth, welcome, hello, capacity, usage, lapsed, request, upload, cancel, response
         public var nonce: Data?
         public var host: String?
         public var signature: Data?
@@ -118,6 +118,7 @@ public enum ControlLink {
         public var note: String?    // response: news for whoever waits, such as no free VM
         public var usage: MacUsage? // usage: what the Mac uses now, every 2 s; slots then carry their usage
         public var waiting: Int?    // response to hosts: acquires waiting for a warm VM
+        public var vm: String?      // lapsed: the VM this Mac wiped, with why in error
 
         public init(type: String, nonce: Data? = nil, host: String? = nil, signature: Data? = nil, name: String? = nil,
                     version: String? = nil, macos: String? = nil, image: String? = nil, cpus: Int? = nil,

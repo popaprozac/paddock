@@ -171,7 +171,11 @@ actor AgentSession {
 
     private func acquire(allow: [String]?, image: String?) async throws -> [Tool.Content] {
         if let vm = held?.vm {
-            throw PaddockError("this session already holds '\(vm)'; release it first")
+            // One that lapsed, or went with a serve that restarted, isn't held any more.
+            guard (try? await blocking { try ServeClient.send(ServeRequest(op: "renew", vm: vm)) }) == nil else {
+                throw PaddockError("this session already holds '\(vm)'; release it first")
+            }
+            held = nil
         }
         guard !acquiring else { throw PaddockError("acquire is already waiting for a VM") }
         acquiring = true
@@ -352,7 +356,8 @@ actor AgentSession {
             Take a fresh VM: macOS, Linux or Windows. Call this first; a session holds one VM at a \
             time. In a pool that serves several golden images, image picks one. With a paddock \
             serve on its userspace network, the VM reaches only the host names in allow, and \
-            nothing without it.
+            nothing without it. A VM no tool uses for an hour goes back, and later calls for it \
+            fail saying so; acquire again then.
             """,
              inputSchema: schema([
                  "image": ["type": "string",

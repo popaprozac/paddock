@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -14,7 +15,22 @@ import (
 
 // relayedOperations is what a client may ask of a VM it acquired, through the pool: serve's VM
 // operations, task's bundles carried as data both ways, and a view's input and frames.
-var relayedOperations = map[string]bool{"release": true, "exec": true, "axtree": true, "input": true, "screenshot": true, "task": true, "put": true, "get": true, "view": true}
+var relayedOperations = map[string]bool{"release": true, "renew": true, "exec": true, "axtree": true, "input": true, "screenshot": true, "task": true, "put": true, "get": true, "view": true}
+
+// serveIdle is how long serve lets a VM go unused when an acquire doesn't say
+// (WarmPool.defaultLease); the pool forwards it when its own maximum is shorter.
+const serveIdle = time.Hour
+
+// defaultMaxIdle is the longest a pool lets a VM go unused, unless run's -max-idle says otherwise.
+const defaultMaxIdle = 24 * time.Hour
+
+// maxLapses is how many lapsed VMs the control plane keeps the reason for, for their holders.
+const maxLapses = 200
+
+// lapse is a VM its Mac wiped because nobody used it for its lease.
+type lapse struct {
+	vm, client, why string
+}
 
 // maxTransfer is the most one request may send to a host, such as a task's bundle, so one can't
 // fill a Mac's disk.
@@ -224,9 +240,10 @@ func (s *server) relayAcquire(ctx context.Context, client string, l *clientLink,
 		_ = l.write(ctx, message{Type: "response", ID: request.ID, Error: err.Error(), Done: true})
 	}
 	forward := serveRequest{"op": "acquire"}
+	asked := serveRequest{}
 	if request.Serve != "" {
-		asked, err := parseServe(request.Serve)
-		if err != nil {
+		var err error
+		if asked, err = parseServe(request.Serve); err != nil {
 			fail(err)
 			return
 		}
@@ -234,6 +251,12 @@ func (s *server) relayAcquire(ctx context.Context, client string, l *clientLink,
 			forward["allow"] = allow
 		}
 	}
+	idle, err := s.idleFor(asked["idle"])
+	if err != nil {
+		fail(err)
+		return
+	}
+	forward["idle"] = idle
 	image, err := s.chooseImage(request.Image)
 	if err != nil {
 		fail(err)
@@ -409,6 +432,9 @@ func (s *server) ownedRequest(client string, request message) (serveRequest, *ha
 	}
 	h := s.state.handout(vm)
 	if h == nil || h.Client != client {
+		if why := s.lapsed(client, vm); why != "" {
+			return nil, nil, errors.New(why)
+		}
 		return nil, nil, fmt.Errorf("'%s' isn't a VM you acquired from this pool", vm)
 	}
 	delete(asked, "bundle")
@@ -556,6 +582,69 @@ func (s *server) forgetMissing(host string, slots []slot) {
 	for _, h := range s.state.handoutsWhere(func(h handout) bool { return h.Host == host && reported[h.VM] && h.Releasing != "" }) {
 		go s.releaseOn(h.Client, host, h.VM, h.Releasing) // its answer comes through the read loop that called this
 	}
+}
+
+// forgetLapsed forgets the hand-out of a VM its host wiped because nobody used it for its lease,
+// and keeps why, so its holder's next request says so rather than that the VM isn't theirs.
+func (s *server) forgetLapsed(host, vm, why string) {
+	h := s.state.handout(vm)
+	if h == nil || h.Host != host || why == "" {
+		return
+	}
+	removed, err := s.state.removeHandout(vm)
+	if err != nil {
+		log.Printf("can't save a release: %v", err)
+	}
+	if !removed {
+		return
+	}
+	s.audit.record(auditEvent{Event: "released", Client: h.Client, Host: host, VM: vm, Reason: why})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lapses = append(s.lapses, lapse{vm: vm, client: h.Client, why: why})
+	if len(s.lapses) > maxLapses {
+		s.lapses = s.lapses[1:]
+	}
+}
+
+// lapsed is why the VM the client held lapsed, or "" if it didn't.
+func (s *server) lapsed(client, vm string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.lapses) - 1; i >= 0; i-- {
+		if l := s.lapses[i]; l.vm == vm && l.client == client {
+			return l.why
+		}
+	}
+	return ""
+}
+
+// idleFor is the idle time to forward with an acquire that asked for these seconds, or for none:
+// serve's own default, but never more than this pool allows.
+func (s *server) idleFor(asked any) (int64, error) {
+	if asked == nil {
+		return int64(min(serveIdle, s.maxIdle) / time.Second), nil
+	}
+	seconds, ok := asked.(float64)
+	if !ok || seconds < 1 || seconds != math.Trunc(seconds) {
+		return 0, errors.New("idle is a whole number of seconds")
+	}
+	if seconds > s.maxIdle.Seconds() {
+		return 0, fmt.Errorf("this pool lets a VM go unused for at most %s", shortDuration(s.maxIdle))
+	}
+	return int64(seconds), nil
+}
+
+// shortDuration is d as "24h", "1h30m" or "45s", without Go's trailing zero units.
+func shortDuration(d time.Duration) string {
+	text := d.String()
+	if strings.HasSuffix(text, "m0s") {
+		text = strings.TrimSuffix(text, "0s")
+	}
+	if strings.HasSuffix(text, "h0m") {
+		text = strings.TrimSuffix(text, "0m")
+	}
+	return text
 }
 
 // releaseOn hands a VM back to its host and, once the host answers, forgets its hand-out,
