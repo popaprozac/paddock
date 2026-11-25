@@ -13,6 +13,9 @@ claude mcp add paddock -- ~/code/paddock/.build/out/Products/Release/paddock mcp
 claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/Release/paddock mcp  # from another
 ```
 
+Add `--allow-dir <folder>`, as often as needed, to let the agent copy files between those folders
+and its VM (see [Files](#files)).
+
 | Tool | What it does |
 | --- | --- |
 | `acquire` | Takes a warm VM from `serve`, or from the pool on a Mac logged in to a control plane, waiting while the slots fill. `image` picks the golden image in a pool that serves more than one, as `paddock acquire --image` does. `allow` lists the names it may reach on the userspace network. |
@@ -20,6 +23,8 @@ claude mcp add paddock -- ssh you@studio.local code/paddock/.build/out/Products/
 | `accessibility_tree` | The focused app's accessibility tree as JSON, as `paddock axtree` prints it but on one line. |
 | `click`, `type_text`, `press_keys`, `scroll` | Input, as with the commands of the same names (see [Input](#input)). `scroll` moves 1 to 1,000 lines, 5 by default. |
 | `run_command` | Runs a command as `paddock exec` does and returns its output and exit status. Output past 20,000 characters is cut to its last lines. After `timeout` seconds, 120 by default and at most 3,600, it returns what the command printed so far, and the command goes on running in the VM. |
+| `write_file_in_vm`, `read_file_from_vm` | Writes text to a file in the VM, or reads one, up to 1 MiB, with the text in the call itself. Paths in the VM are as `paddock cp` takes them. |
+| `copy_into_vm`, `copy_out_of_vm` | Copies a file between this Mac and the VM, as `paddock cp` does, but only in a folder the agent is allowed. Listed only when there is one (see [Files](#files)). |
 | `release` | Hands the VM back to `serve`, which wipes it. A VM that's already gone, as after `serve` restarted, fails to release, but the session lets go of it all the same and can acquire another. |
 
 A Linux VM without a desktop has no screen: `acquire` says so, `run_command` works in it, and the
@@ -140,6 +145,16 @@ In testing, through the control plane on home Wi-Fi, a full-screen animation ran
 second on 2.2 to 2.6 Mbit/s with no freezes. Over a hotspot with round trips of 0.2 to 1 s, typing
 stayed usable, but motion froze and caught up about twice a second: that's the link, which a
 different transport didn't fix in testing.
+
+## Files
+
+`write_file_in_vm` and `read_file_from_vm` carry the file in the tool call, so `paddock mcp`
+reads and writes no file of the agent's choosing on this Mac. For larger or binary files,
+`copy_into_vm` and `copy_out_of_vm` take a path on this Mac, but only inside a folder the agent
+is allowed: one named with `paddock mcp --allow-dir`, or a root its client offers, asked for at
+each copy. A path counts only once every symlink in it is resolved, so a link in an allowed folder
+can't lead outside it. With no such folder, the two tools aren't listed. A file read from a VM
+comes from a machine the agent controls, and is no more trustworthy than the agent.
 
 ## Input
 
