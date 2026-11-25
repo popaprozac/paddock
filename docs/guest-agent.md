@@ -44,14 +44,23 @@ logs in to the guest, where the accessibility API can see apps. It listens only 
 
 | Request | Answer |
 | --- | --- |
-| `{"op":"health"}` | `{"version":"0.2.2"}` |
+| `{"op":"health"}` | `{"version":"0.2.3"}` |
 | `{"op":"axtree"}` | `{"output":"..."}` for each line of the focused app's accessibility tree as JSON, then `{"exit":0}` |
 | `{"op":"state"}` | `{"output":"desktop"}` once loginwindow has no window on screen, then `{"exit":0}` |
+| `{"op":"front"}` | `{"output":"Finder, in place of Accessibility"}` when it made Finder the app in front, or else the app in front, then `{"exit":0}` |
 
 After a login, loginwindow covers the screen with a snapshot of the desktop until the Dock reports
 the desktop ready, which took 3 s to over 20 s in testing. Until then screenshots show the
 snapshot, and a click lands on loginwindow, which keeps the keyboard focus afterwards. `state`
 reads only the owners of on-screen windows, which needs no permission.
+
+At some logins macOS lets AccessibilityUIServer, which it starts for an accessibility service and
+which has no window, become the app in front. There it takes the keyboard, and every tree
+describes it, until a click moves it, and a VM's saved state keeps it there. `front` makes Finder
+the app in front when the app there isn't one people use, through the accessibility API, so no
+window opens. `serve` asks for it once the desktop is up, before it saves a slot's state, and logs
+when it had to. A helper before 0.2.3 can't, so about half the slots of an image that has one start
+that way: reinstall the guest agent in it.
 
 Each element of the tree has its role, its subrole, title, value, description and identifier when
 it has them, whether it is enabled and focused, its frame as x, y, width and height in screen
