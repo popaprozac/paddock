@@ -4,7 +4,7 @@ import PaddockCore
 
 /// A request to `paddock serve`, sent as one line of JSON over its socket.
 struct ServeRequest: Codable {
-    var op: String  // "acquire", "release", "exec", "task", "put", "get", "screenshot", "axtree", "input", "status", "show" or "hide"
+    var op: String  // "acquire", "release", "renew", "exec", "task", "put", "get", "screenshot", "axtree", "input", "status", "show" or "hide"
     var vm: String?
     var command: String?
     var bundle: String?  // task: absolute path of the git bundle to work on
@@ -21,6 +21,7 @@ struct ServeRequest: Codable {
     var force: Bool?   // leave: hand back the VMs the pool holds here, rather than refuse
     var offering: Bool?  // offer: whether this Mac hands out VMs
     var pool: Bool?    // acquire: set by this Mac's link to the control plane, so leave knows the pool's VMs
+    var idle: Int?     // acquire: seconds the VM may go unused before it lapses; an hour if nil
 }
 
 /// One piece of input for a VM, sent with the "input" request. Coordinates are the guest's screen
@@ -52,6 +53,7 @@ struct ServeResponse: Codable {
     var host: String?    // acquire through the pool: the name of the Mac the VM runs on
     var busy: Bool?      // acquire that doesn't wait: no warm VM was free
     var status: MacStatus?  // status: this Mac's usage and its slots', for paddock top
+    var idle: Int?       // acquire and renew: seconds the VM may go unused before it lapses
 
     var line: String {
         (try? JSONEncoder().encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
@@ -114,7 +116,9 @@ struct Acquire: ParsableCommand {
             Hand it back with 'paddock release <vm>'. With \
             'serve --userspace', the VM reaches only the names given with --allow, and nothing \
             without it. Logged in to a control plane, it takes a warm VM from any Mac in the pool \
-            serving the image, waiting its turn if none is free; --local takes this Mac's.
+            serving the image, waiting its turn if none is free; --local takes this Mac's. A VM \
+            nobody uses for an hour, or --idle, goes back: any request for it counts as use, and a \
+            command still running keeps it; 'paddock renew' counts too.
             """)
 
     @Option(help: "Names the VM may reach, comma-separated, as host.example or *.example (any name under example). Needs 'serve --userspace'.")
@@ -123,15 +127,25 @@ struct Acquire: ParsableCommand {
     @Option(help: "In the pool: the golden image the VM is a clone of, when the pool serves more than one.")
     var image: String?
 
-    @Flag(help: "Print serve's answer as one line of JSON: vm, ip, os, screen, width and height, and from the pool host.")
+    @Option(help: "How long the VM may go unused before it goes back, such as 90s, 30m, 4h or 2d. Default 1h.")
+    var idle: String?
+
+    @Flag(help: "Print serve's answer as one line of JSON: vm, ip, os, screen, width, height and idle, and from the pool host.")
     var json = false
 
     @OptionGroup var target: Target
 
+    func validate() throws {
+        if let idle, DurationFormat.seconds(in: idle) == nil {
+            throw ValidationError("--idle is a number and s, m, h or d, such as 30m or 4h")
+        }
+    }
+
     func run() throws {
         let names = allow?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let started = ContinuousClock.now
-        let response = try ServeClient.send(ServeRequest(op: "acquire", allow: names), image: image, local: target.local)
+        let request = ServeRequest(op: "acquire", allow: names, idle: idle.flatMap(DurationFormat.seconds(in:)))
+        let response = try ServeClient.send(request, image: image, local: target.local)
         if json {
             print(response.line)
             return
@@ -139,7 +153,8 @@ struct Acquire: ParsableCommand {
         let waited = ContinuousClock.now - started
         // A VM in the pool has its address on its own Mac's private network, no use from here.
         let place = response.host.map { "on \($0)" } ?? "at \(response.ip ?? "?")"
-        print("Assigned '\(response.vm ?? "?")' \(place) in \(DurationFormat.short(waited))")
+        print("Assigned '\(response.vm ?? "?")' \(place) in \(DurationFormat.short(waited))"
+            + (response.idle.map { "; it goes back after \(DurationFormat.lease($0)) unused" } ?? ""))
     }
 }
 
@@ -323,6 +338,30 @@ struct Release: ParsableCommand {
     func run() throws {
         _ = try ServeClient.send(ServeRequest(op: "release", vm: vm), local: target.local)
         print("Released '\(vm)'; serve is restoring a fresh clone")
+    }
+}
+
+struct Renew: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Count as use of a VM that paddock acquire handed out, so it doesn't go back while you wait.",
+        discussion: """
+            A VM goes back once nobody uses it for its idle time, an hour unless acquire's --idle \
+            said otherwise. Any request for it counts as use; renew is for a holder that has none \
+            to send for a while.
+            """)
+
+    @Argument(help: "VM that 'paddock acquire' printed.")
+    var vm: String
+
+    @OptionGroup var target: Target
+
+    func validate() throws {
+        try BundleName.validate(vm)
+    }
+
+    func run() throws {
+        let response = try ServeClient.send(ServeRequest(op: "renew", vm: vm), local: target.local)
+        print("Renewed '\(vm)': it goes back after \(DurationFormat.lease(response.idle ?? WarmPool.defaultLease)) unused")
     }
 }
 

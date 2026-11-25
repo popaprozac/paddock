@@ -107,6 +107,11 @@ public final class Responder: @unchecked Sendable {
         self.fd = fd
     }
 
+    /// Whether `finish` has run: the request is over.
+    public var isFinished: Bool {
+        finished.withLock { $0 }
+    }
+
     /// Sends one line. Does nothing once finished.
     public func send(_ line: String) {
         send(lines: [line])
