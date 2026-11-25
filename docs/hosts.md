@@ -127,8 +127,10 @@ LaunchAgent starts `serve`.
   and keeps a laptop on battery awake while it runs.
 - **In a pool:** a Mac that serves the pool takes requests from anyone in it, wherever the Mac
   is. To keep a laptop's VMs to its own user away from its desk, run `serve` there without
-  `--control`. Its user can still take the laptop's VMs with `acquire --local` and the pool's
-  with `acquire`.
+  `--control`, or `paddock leave` before taking it along and `paddock join` back at the desk,
+  without restarting `serve`. Its user can still take the laptop's VMs with `acquire --local`
+  and the pool's with `acquire`. `paddock offer off` stops handing out VMs altogether and
+  frees their memory, say on battery; `offer on` brings them back.
 
 ### A dedicated Mac, FileVault off
 

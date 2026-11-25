@@ -11,6 +11,7 @@ paddock-control run                         # on the Mac or server that runs it
 paddock-control join-token                  # there: a one-use token for the next Mac
 paddock serve golden --control https://studio.local:7443 --join <token>   # on that Mac, once
 paddock serve golden --control https://studio.local:7443                  # on that Mac, after
+paddock join https://studio.local:7443 --token <token>                    # or, with serve already running
 paddock-control login-token                 # back where it runs: a one-use token for a person
 paddock login https://studio.local:7443 --token <token>                   # on their Mac
 paddock hosts                               # there: every Mac and its slots
@@ -31,6 +32,9 @@ paddock acquire                             # a warm VM from any Mac in the pool
 | `paddock-control remove-client <ID or name>` | Removes a client: its links close at once, the VMs it holds are released, and it can't connect again unless it logs in with a new token. |
 | `paddock login <url> --token <token>` | On a person's Mac: logs in to the control plane, so this Mac's VM commands use the pool. Logging in again replaces the login. Before it uses the token, it checks it can save the login in `$PADDOCK_HOME/client`, as `serve --join` does for `host`; if it can't, it stops without contacting the control plane, so the token still works. |
 | `paddock logout` | The control plane forgets this client and releases its VMs, and this Mac forgets the login. |
+| `paddock join <url> [--token <token>]` | On a Mac running `serve`: links it to the control plane's pool without a restart, as `serve --control` does at startup. The first time it needs a join token; after that this Mac joins again without one. It lasts until `paddock leave` or `serve` stops: a `serve` started again links only with `--control`. |
+| `paddock leave [--force]` | Closes this Mac's link to its pool; `serve` goes on serving here alone. While the pool holds VMs on this Mac it refuses and names them; `--force` wipes them first, and the control plane forgets them as soon as the Mac's next report says they're gone. |
+| `paddock offer on\|off` | Starts or stops this Mac's `serve` handing out VMs, here and to its pool. Off, warm VMs nobody holds stop, and VMs in use run until they're released; the slots keep their saved state, so `on` fills them again in seconds. An acquire meanwhile is refused here, and the pool offers it to another Mac. |
 | `paddock hosts [--json]` | Lists the pool's Macs, as `paddock-control hosts` does, stale marks included, from any logged-in Mac. |
 | `paddock top [--json]` | Shows every Mac in the pool and each slot's VM, who holds it and what it uses, redrawn every 2 s (see [paddock top](commands.md#watching-with-paddock-top)). |
 

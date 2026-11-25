@@ -36,8 +36,8 @@ enum ControlEnrollment {
             return joined
         }
         guard let saved = try ControlIdentity.load(.host, from: folder) else {
-            throw PaddockError("this Mac hasn't joined \(url.absoluteString) yet: add --join with a token from "
-                + "'paddock-control join-token' there")
+            throw PaddockError("this Mac hasn't joined \(url.absoluteString) yet: join it with a token from "
+                + "'paddock-control join-token' there (serve --join, or paddock join --token)")
         }
         // The same control plane by another name, such as its MagicDNS name away from the LAN, is
         // fine: the link trusts only the CA saved at joining, so another control plane fails there.
@@ -268,6 +268,7 @@ final class ControlClient {
                 // The control plane keeps the pool's one queue, so this Mac answers at once: a
                 // warm VM, or busy, and the control plane tries another Mac or waits.
                 fields["wait"] = false
+                fields["pool"] = true
                 try run(fields, id: id, on: socket, sendBack: nil, required: false, cleanup: [])
             case "screenshot":
                 let file = Self.temporaryFile("paddock-screen", "png")
